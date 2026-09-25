@@ -1,0 +1,7 @@
+services:
+  backend:
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+  frontend:
+    restart: unless-stopped

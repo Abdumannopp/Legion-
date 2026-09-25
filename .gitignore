@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+!.env.local.example
+node_modules/
+server/data/
+server/.env
+server/dist/
+.next/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.db
+
+# Test mode database (npm run try)
+.legion-testdb/

@@ -1,0 +1,99 @@
+# Legion — self-hosted deployment.
+#
+# Do not run `docker compose up` directly the first time; run ./install.sh,
+# which generates the secrets this file expects. Values with no default here
+# are deliberate: Legion must never start with a guessable secret.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-legion}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./install.sh to generate secrets}
+      POSTGRES_DB: ${POSTGRES_DB:-legion}
+    volumes:
+      - legion-pgdata:/var/lib/postgresql/data
+    # The backend waits on this: without it, the API starts first, fails to
+    # connect, and restarts in a loop until Postgres happens to be ready.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-legion} -d ${POSTGRES_DB:-legion}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    # Not published: only the backend needs it. Exposing 5432 on a server with
+    # a public IP is how databases end up on the internet by accident.
+
+  redis:
+    image: redis:7-alpine
+    # Rate-limit counters and realtime fan-out only — nothing here needs to
+    # survive a restart, and persistence would add disk I/O to every request.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build: ./server
+    environment:
+      DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-self-hosted}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-legion}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-legion}
+      REDIS_URL: redis://redis:6379
+      # No default. config.ts refuses to start on the shipped placeholder.
+      JWT_SECRET: ${JWT_SECRET:?run ./install.sh to generate secrets}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      SECURITY_EVENT_WEBHOOK_SECRET: ${SECURITY_EVENT_WEBHOOK_SECRET:-}
+      AI_PROVIDER: ${AI_PROVIDER:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-Legion <no-reply@legion.local>}
+      ALERT_EMAIL_MIN_SEVERITY: ${ALERT_EMAIL_MIN_SEVERITY:-high}
+      # A self-hosted install is single-tenant in practice; no demo workspace.
+      SEED_DEMO_DATA: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Baked in at build time — NEXT_PUBLIC_* values run in the browser, so
+        # changing this needs a rebuild (./install.sh does that for you).
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        # Your organisation's name and contact address, shown on the privacy
+        # and terms pages. Same build-time rule applies: change them in .env
+        # and re-run ./install.sh so the pages are rebuilt.
+        NEXT_PUBLIC_OPERATOR_NAME: ${NEXT_PUBLIC_OPERATOR_NAME:-}
+        NEXT_PUBLIC_SUPPORT_EMAIL: ${NEXT_PUBLIC_SUPPORT_EMAIL:-}
+    depends_on:
+      backend:
+        condition: service_started
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+
+volumes:
+  legion-pgdata:

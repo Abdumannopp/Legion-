@@ -1,0 +1,27 @@
+{
+  "name": "legion-node-platform",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "server"
+  ],
+  "scripts": {
+    "dev": "concurrently -n API,WEB -c magenta,cyan \"npm run dev -w server\" \"npm run dev -w frontend\"",
+    "build": "npm run build -w server && npm run build -w frontend",
+    "start": "concurrently -n API,WEB -c magenta,cyan \"npm run start -w server\" \"npm run start -w frontend\"",
+    "check": "npm run check -w server && npm run lint -w frontend",
+    "test": "npm run test -w server",
+    "setup": "npm run setup -w server",
+    "try": "node scripts/try-local.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "optionalDependencies": {
+    "embedded-postgres": "^18.4.0-beta.17"
+  }
+}

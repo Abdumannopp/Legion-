@@ -1,0 +1,163 @@
+====================================================================
+  DRAFT — NOT YET VALID. DO NOT GIVE THIS FILE TO A CUSTOMER AS-IS.
+====================================================================
+
+  This is a starting point written by a software assistant, not by a
+  lawyer. Before Legion is sold or given to anyone outside your own
+  organisation, two things must happen:
+
+    1. Every [BRACKETED] field below must be filled in with real
+       values — you cannot license software as an entity that does
+       not exist yet.
+    2. A lawyer qualified in [JURISDICTION] must review the whole
+       document. Limitation-of-liability and warranty-disclaimer
+       clauses are exactly the clauses courts refuse to enforce when
+       they are worded wrongly, and this is security software: the
+       clauses that matter most are the ones about what happens when
+       a breach is not detected.
+
+  Delete this banner once both are done.
+
+====================================================================
+
+
+LEGION SOFTWARE LICENCE AGREEMENT
+
+Version 1.0.0
+Copyright (c) [YEAR] [LEGAL ENTITY NAME], [COUNTRY OF REGISTRATION],
+company number [REGISTRATION NUMBER]. All rights reserved.
+
+This Agreement is between [LEGAL ENTITY NAME] ("Licensor") and the
+organisation that installs or uses the Software ("Licensee"). By
+installing, copying, or using the Software, Licensee accepts this
+Agreement. If Licensee does not accept it, Licensee must not install
+or use the Software.
+
+1. DEFINITIONS
+
+   "Software" means the Legion platform, including its source code,
+   compiled artefacts, database schema, configuration scripts, and
+   accompanying documentation, in each case as supplied by Licensor.
+
+   "Installation" means one running deployment of the Software,
+   operated by Licensee on infrastructure that Licensee controls.
+
+   "Licensee Data" means all security events, alerts, logs, account
+   records, and other content that Licensee or its users put into an
+   Installation.
+
+2. GRANT OF LICENCE
+
+   Subject to Licensee's compliance with this Agreement and to payment
+   of any fees agreed in writing, Licensor grants Licensee a
+   non-exclusive, non-transferable, non-sublicensable licence to
+   install and run [NUMBER] Installation(s) of the Software for
+   Licensee's own internal business purposes, for the term set out in
+   clause 8.
+
+   Licensee may make copies of the Software solely for backup and
+   disaster-recovery purposes.
+
+3. RESTRICTIONS
+
+   Except to the extent that applicable law expressly permits it
+   notwithstanding this clause, Licensee must not:
+
+   (a) distribute, sell, rent, lease, sublicense, or otherwise make
+       the Software available to any third party;
+
+   (b) operate the Software as a hosted or managed service for any
+       third party, or otherwise allow anyone outside Licensee's
+       organisation to use an Installation;
+
+   (c) reverse-engineer, decompile, or disassemble the Software, or
+       use it to develop a competing product;
+
+   (d) remove, obscure, or alter any copyright, trademark, or licence
+       notice contained in the Software.
+
+4. OWNERSHIP
+
+   The Software is licensed, not sold. Licensor retains all right,
+   title, and interest in and to the Software and all intellectual
+   property rights in it. No rights are granted to Licensee other
+   than those expressly stated in this Agreement.
+
+5. LICENSEE DATA
+
+   Licensee Data belongs to Licensee. The Software runs entirely on
+   infrastructure Licensee controls, and Licensor has no access to
+   Licensee Data and no ability to obtain it, unless Licensee
+   voluntarily supplies it — for example by attaching it to a support
+   request.
+
+   Licensee is solely responsible for the security, lawfulness,
+   retention, and backup of Licensee Data, including compliance with
+   any data-protection law that applies to Licensee.
+
+6. THIRD-PARTY COMPONENTS
+
+   The Software incorporates open-source components, each licensed by
+   its own authors under its own terms. Nothing in this Agreement
+   limits any right Licensee has under those terms. The components and
+   their licences are listed in the NOTICE file supplied with the
+   Software.
+
+7. NO WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT
+   WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+   TO THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+   PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+
+   IN PARTICULAR, LICENSOR DOES NOT WARRANT THAT THE SOFTWARE WILL
+   DETECT, PREVENT, OR CORRECTLY CLASSIFY ANY PARTICULAR SECURITY
+   THREAT. THE SOFTWARE IS A TOOL THAT ASSISTS TRAINED PERSONNEL; IT
+   IS NOT A SUBSTITUTE FOR THEM, AND ITS AUTOMATED ANALYSIS MAY BE
+   INCOMPLETE OR WRONG. LICENSEE REMAINS RESPONSIBLE FOR ITS OWN
+   SECURITY.
+
+8. TERM AND TERMINATION
+
+   This Agreement starts when Licensee first installs the Software and
+   continues for [TERM], unless terminated earlier.
+
+   Licensor may terminate this Agreement if Licensee materially
+   breaches it and does not remedy the breach within thirty (30) days
+   of written notice.
+
+   On termination Licensee must stop using the Software and delete all
+   copies of it. Licensee Data is unaffected: it stays on Licensee's
+   own systems, and clauses 4, 5, 7, 9, and 10 survive termination.
+
+9. LIMITATION OF LIABILITY
+
+   TO THE MAXIMUM EXTENT PERMITTED BY LAW, LICENSOR WILL NOT BE LIABLE
+   FOR ANY INDIRECT, INCIDENTAL, SPECIAL, OR CONSEQUENTIAL DAMAGES, OR
+   FOR ANY LOSS OF PROFITS, REVENUE, DATA, OR GOODWILL, ARISING OUT OF
+   OR RELATING TO THE SOFTWARE, WHETHER IN CONTRACT, TORT, OR
+   OTHERWISE, EVEN IF LICENSOR HAS BEEN ADVISED OF THE POSSIBILITY OF
+   SUCH DAMAGES.
+
+   LICENSOR'S TOTAL AGGREGATE LIABILITY UNDER THIS AGREEMENT WILL NOT
+   EXCEED THE AMOUNT PAID BY LICENSEE TO LICENSOR IN THE TWELVE (12)
+   MONTHS PRECEDING THE EVENT GIVING RISE TO THE CLAIM.
+
+   Nothing in this Agreement excludes or limits liability that cannot
+   lawfully be excluded or limited, including liability for death or
+   personal injury caused by negligence, or for fraud.
+
+10. GOVERNING LAW
+
+   This Agreement is governed by the laws of [JURISDICTION], without
+   regard to its conflict-of-law rules. The courts of [JURISDICTION]
+   have exclusive jurisdiction over any dispute arising out of it.
+
+11. ENTIRE AGREEMENT
+
+   This Agreement is the entire agreement between the parties about
+   the Software and supersedes all prior discussions. Any amendment
+   must be in writing and signed by both parties. If any provision is
+   held unenforceable, the remainder stays in force.
+
+Contact: [SUPPORT EMAIL ADDRESS]
