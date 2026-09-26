@@ -8,6 +8,9 @@ import { PolicyStore } from "./firewall/policy.js";
 import { agentMessageRouter, firewallAdminRouter } from "./firewall/routes.js";
 import type { ActionRequest, Advisor, FirewallContext, FirewallDecision } from "./firewall/types.js";
 import { createPrincipalResolver, DEFAULT_AI_USER_AGENTS, FailureSampler } from "./principal.js";
+import { PromptInjectionGuard } from "./prompt-guard/guard.js";
+import { contentInspectRouter, promptGuardAdminRouter } from "./prompt-guard/routes.js";
+import { Router } from "express";
 import { agentRouter } from "./routes/agent.js";
 import { auditRouter, managementRouter } from "./routes/management.js";
 import { migrate } from "./schema.js";
@@ -27,6 +30,11 @@ export { AgentFirewall, FirewallBlockedError } from "./firewall/engine.js";
 export { DEFAULT_POLICY, PROTECTED_TABLES, policySchema } from "./firewall/policy.js";
 export { hashToolDefinition } from "./firewall/scan.js";
 export { evaluateRules } from "./firewall/rules.js";
+export { PromptInjectionGuard, RecordedAssembly, type IngestContext, type IngestResult } from "./prompt-guard/guard.js";
+export { PromptAssembly, SYSTEM_PROMPTS, reviewProposedAction, type SystemPromptId, type PromptMessage, type ProposedAction, type ProposalReview } from "./prompt-guard/assembly.js";
+export { classifyContent } from "./prompt-guard/detectors.js";
+export type * from "./prompt-guard/types.js";
+export { CONTENT_SOURCES, THRESHOLDS } from "./prompt-guard/types.js";
 
 export interface AgentIdentityOptions {
   pool: Pool;
@@ -59,6 +67,7 @@ export interface AgentIdentityOptions {
  *   app.use("/service-accounts", identity.serviceAccounts);
  *   app.use("/audit/principal-events", identity.auditApi);
  *   app.use("/firewall", identity.firewallApi);   // people: policy, decisions, delegations
+ *   app.use("/prompt-guard", identity.promptGuardApi); // people: injection events, acknowledge
  *   app.get("/agent/v1/alerts", identity.guards.requirePermission("alerts:read"), handler);
  */
 export function createAgentIdentity(opts: AgentIdentityOptions) {
@@ -68,6 +77,7 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
   const policies = new PolicyStore(opts.pool);
   const decisions = new DecisionLog(opts.pool);
   const delegations = new DelegationStore(opts.pool);
+  const contentGuard = new PromptInjectionGuard(opts.pool, log);
   const firewall = new AgentFirewall({
     pool: opts.pool,
     store,
@@ -78,12 +88,16 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
     advisors: opts.firewallAdvisors,
     onDecision: opts.onFirewallDecision,
     dnsLookup: opts.dnsLookup,
+    contentGuard,
     log,
   });
   const guards = createGuards(audit, log, firewall);
   const agentBasePath = opts.agentBasePath ?? "/agent/v1";
   const sampler = new FailureSampler();
-  const deps = { store, audit, host: opts.host, guards, sampler, log, firewall, policies, decisions, delegations };
+  const deps = { store, audit, host: opts.host, guards, sampler, log, firewall, policies, decisions, delegations, contentGuard };
+  const agentExtras = Router();
+  agentExtras.use(agentMessageRouter(deps));
+  agentExtras.use(contentInspectRouter(deps));
 
   // Safety net: a machine request that completed without a firewall decision
   // means a route was added without a guard. It is recorded as a failure so
@@ -119,14 +133,17 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
         onMachineRequestFinished: flagUnguarded,
       },
     }),
-    agentApi: agentRouter({ ...deps, extra: agentMessageRouter(deps) }),
+    agentApi: agentRouter({ ...deps, extra: agentExtras }),
     agents: managementRouter("ai_agent", deps),
     serviceAccounts: managementRouter("service_account", deps),
     auditApi: auditRouter(deps),
     firewallApi: firewallAdminRouter(deps),
+    promptGuardApi: promptGuardAdminRouter(deps),
     guards,
     audit,
     firewall,
+    /** Classify, record and wrap external content before any model reads it. */
+    contentGuard,
     /** Call periodically (e.g. hourly) to drop long-expired token rows. */
     purgeExpiredTokens: () => store.purgeExpiredTokens(),
   };

@@ -205,6 +205,57 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   expires_at           timestamptz NOT NULL
 );
 CREATE INDEX IF NOT EXISTS agent_messages_inbox ON agent_messages (tenant_id, to_identity, created_at DESC);
+
+-- ---- Prompt-injection guard -------------------------------------------------
+
+-- Suspicious or malicious external content, attributed to the principal it
+-- reached. Evidence: append-only and hash-chained per tenant. Raw content is
+-- NOT stored — only a digest, its length and a short redacted preview.
+CREATE TABLE IF NOT EXISTS content_ingestion_log (
+  seq             bigserial PRIMARY KEY,
+  chain_key       text NOT NULL,
+  event_id        uuid NOT NULL UNIQUE,
+  occurred_at     timestamptz NOT NULL,
+  tenant_id       text NOT NULL,
+  principal_type  text NOT NULL,
+  principal_id    text NOT NULL,
+  principal_name  text NOT NULL,
+  source          text NOT NULL,
+  source_id       text,
+  field_hint      text,
+  verdict         text NOT NULL CHECK (verdict IN ('clean', 'suspicious', 'malicious')),
+  risk_score      integer NOT NULL,
+  findings        jsonb NOT NULL,
+  content_digest  text NOT NULL,
+  content_length  integer NOT NULL,
+  content_preview text NOT NULL,
+  request_id      text,
+  prev_hash       text NOT NULL,
+  hash            text NOT NULL UNIQUE
+);
+CREATE INDEX IF NOT EXISTS content_ingestion_chain ON content_ingestion_log (chain_key, seq);
+CREATE INDEX IF NOT EXISTS content_ingestion_principal ON content_ingestion_log (tenant_id, principal_id, seq DESC);
+CREATE INDEX IF NOT EXISTS content_ingestion_verdict ON content_ingestion_log (tenant_id, verdict, seq DESC);
+DROP TRIGGER IF EXISTS content_ingestion_no_update ON content_ingestion_log;
+CREATE TRIGGER content_ingestion_no_update
+  BEFORE UPDATE OR DELETE ON content_ingestion_log
+  FOR EACH ROW EXECUTE FUNCTION principal_audit_log_append_only();
+DROP TRIGGER IF EXISTS content_ingestion_no_truncate ON content_ingestion_log;
+CREATE TRIGGER content_ingestion_no_truncate
+  BEFORE TRUNCATE ON content_ingestion_log
+  FOR EACH STATEMENT EXECUTE FUNCTION principal_audit_log_append_only();
+
+-- A person reviewed a principal's flagged content up to this point. A
+-- cursor, not evidence: the flagged events themselves are never changed.
+CREATE TABLE IF NOT EXISTS content_risk_acknowledgements (
+  tenant_id                text NOT NULL,
+  principal_id             text NOT NULL,
+  acknowledged_through_seq bigint NOT NULL,
+  acknowledged_by          text NOT NULL,
+  acknowledged_at          timestamptz NOT NULL DEFAULT now(),
+  reason                   text NOT NULL,
+  PRIMARY KEY (tenant_id, principal_id)
+);
 `;
 
 /** Constant advisory-lock key, so concurrently starting instances migrate one at a time. */

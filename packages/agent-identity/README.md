@@ -4,9 +4,10 @@ Gives every AI agent (and every non-AI machine) in Legion its own identity,
 owner, permissions and audit trail, so every action it takes is traceable to
 it, and so an AI agent is never served as an anonymous API client. Every
 agent action then passes a central, deterministic **agent firewall** before it
-runs ([below](#agent-firewall)).
+runs ([below](#agent-firewall)), and all external content that reaches a model
+passes the [prompt-injection guard](#prompt-injection-protection).
 
-> **Status.** Complete and tested as a standalone module (173 tests, most against
+> **Status.** Complete and tested as a standalone module (286 tests, many against
 > real PostgreSQL 16). **Not yet wired into Legion's server**: `server/` was not in
 > the repository when this was written. Wiring is the ~15 lines in
 > [Integration](#integration); nothing in the existing human login needs to
@@ -213,6 +214,125 @@ and `GET /firewall/decisions/verify`.
   private or metadata IPs, protected tables, and `/` as a file root.
 - Policies are cached for 5 seconds per instance.
 
+## Prompt-injection protection
+
+**Principle:** external content is data, never instructions. Detection helps,
+but the protection doesn't depend on it:
+- **Separation:** undetected injected text still arrives as wrapped data.
+- **Action gating:** undetected injected text still can't trigger a sensitive
+  action on its own.
+
+### Four separate parts (`PromptAssembly`)
+
+| Part | Where it comes from | How it is placed |
+|---|---|---|
+| 1. System instructions | `SYSTEM_PROMPTS` in code only | Chosen by key. The compiler rejects runtime text (`test/compile-guards.ts`), so external content can never become a system instruction |
+| 2. User intent | The signed-in person or authenticated agent | `USER REQUEST` section. Also classified, since injection-like intent usually means external text was pasted in as a request |
+| 3. Trusted application data | Values Legion produced (ids, counts, times) | `TRUSTED APPLICATION DATA`, JSON-encoded, so a value can't start a new section |
+| 4. Untrusted external content | Emails, web pages, security alerts, PDFs, documents, tickets, GitHub issues, API responses, user-generated content, other agents' messages, model output | Classified, sanitised, and wrapped between markers carrying a random per-prompt boundary. Content can't know that boundary in advance, so it can't close its own block; if it contains the boundary anyway, the forgery is removed and flagged |
+
+**The system message always states the separation rules. There is no method
+that moves content from part 4 into parts 1–3.**
+
+### Detection: layered, not keyword filtering (`classifyContent`)
+
+1. **Normalisation before analysis** undoes these tricks:
+   - zero-width characters
+   - invisible Unicode tag characters (ASCII smuggling); the hidden text is
+     decoded and analysed
+   - bidi overrides
+   - Cyrillic and Greek lookalike letters
+   - fullwidth and mathematical letters (NFKC)
+   - letter-spacing and leetspeak
+
+   The tests show a naive keyword filter missing each of these cases while
+   the guard catches them.
+2. **Structural signals that need no words at all:**
+   - smuggled or invisible characters
+   - words mixing alphabets
+   - chat-template tokens and role labels
+   - attempts to close the wrapper
+   - a field whose content doesn't match its declared shape (a hostname
+     containing sentences)
+   - text hidden from people in HTML
+   - base64, hex or percent-encoded blobs that *decode* to directives
+   - image and link URLs that carry data out
+3. **Statistical:** how much of the text instructs its reader. A description
+   describes; an injection instructs. This signal contributes to the score
+   but never decides alone, so ordinary runbooks stay clean.
+4. **Directive patterns:**
+   - overriding instructions, new personas, fake authority
+   - addressing "the AI reading this"
+   - hiding actions from people
+   - asking for the prompt
+   - SOC-specific attacks: closing or downgrading alerts, disabling
+     monitoring, granting privileges, exfiltrating data
+
+**Scoring:** the strongest finding per category is summed, capped at 100.
+Several independent weak signals add up; repeating one phrase doesn't.
+≥ 25 is **suspicious**, ≥ 60 **malicious**. The result is deterministic.
+
+### When suspicious content is detected
+
+| Requirement | What happens |
+|---|---|
+| **Record the event** | `content_ingestion_log`, against the principal the content reached. Append-only and hash-chained. Stores a digest, length, a 300-character redacted preview and the findings, never the raw content. If a flagged event can't be recorded, the caller gets an error instead of passing the content on |
+| **Increase risk** | Suspicious: +10 to +25 on the agent's firewall risk score for `suspiciousWindowSeconds` (default 1 h). Malicious: +40 until reviewed |
+| **Prevent unsafe actions** | Unreviewed malicious content puts the agent in **quarantine**. The hard firewall rule `content.quarantine` blocks everything that changes state (tier-2 permissions, file writes, database writes), acts outside Legion (egress, external tools), touches confidential data, or messages another agent. Reads continue, flagged WARN. The quarantine doesn't expire, so an attacker can't just wait it out |
+| **Require stronger authorization** | Only an **administrator** can lift a quarantine (`POST /prompt-guard/acknowledge`), and must state what they reviewed (at least 10 characters, written to the audit trail). A later malicious event re-imposes the quarantine |
+
+**Between agents:**
+- A message whose payload is malicious is blocked (`a2a.injection_payload`),
+  and the *sender* is quarantined, since an agent emitting injections is
+  probably compromised.
+- A suspicious payload is delivered, marked `trust: "untrusted"` with its
+  classification, and recorded once against the recipient.
+
+**Legion's own AI:** `reviewProposedAction(assembly, proposal)` means a
+model's suggestion made after reading external content never auto-executes if
+it is sensitive:
+- `block` after malicious content
+- `confirm` (a person must approve) after any external content
+- `allow` only for read-only proposals or when no external content was
+  involved
+
+### API
+
+| Endpoint | Who | Purpose |
+|---|---|---|
+| `POST /agent/v1/content/inspect` | agents | Submit external content the agent read. Returns verdict, findings, sanitised text and a ready-to-use wrapped envelope; flagged content counts against that agent |
+| `GET /prompt-guard/events` | admin, analyst | Flagged events (filter: `verdict`, `principalId`, `source`) |
+| `GET /prompt-guard/status/:principalId` | admin, analyst | Quarantined? Unreviewed counts |
+| `POST /prompt-guard/acknowledge` | admin | Lift a quarantine, with a reason |
+| `GET /prompt-guard/events/verify` | admin | Verify the hash chain |
+
+### Retrofitting Oracle and Copilot (`server/src/ai.ts`)
+
+Today these features fence alert data and rely on the system prompt's
+wording (CHANGELOG-AUDIT §3). Replace the prompt building with:
+
+```ts
+const a = identity.contentGuard.createAssembly({ tenantId, principal: req.principal }, "oracle.explain_alert");
+a.setUserIntent("Explain this alert");
+a.addTrustedData("alert", { id: alert.id, severity: alert.severity, created_at: alert.created_at, mitre: alert.mitre });
+a.addUntrustedContent("security_alert", alert.title, { sourceId: alert.id, fieldHint: "short_text" });
+a.addUntrustedContent("security_alert", alert.summary, { sourceId: alert.id });
+a.addUntrustedContent("security_alert", alert.full_log, { sourceId: alert.id });
+a.addUntrustedContent("security_alert", alert.target, { sourceId: alert.id, fieldHint: "identifier" });
+a.addUntrustedContent("security_alert", alert.source_ip, { sourceId: alert.id, fieldHint: "identifier" });
+await a.settle();                               // refuses if a flagged item could not be recorded
+const messages = a.toMessages();                // send these to OpenRouter / Groq
+// show a.verdict in the UI; never auto-apply anything the model proposes:
+// reviewProposedAction(a, proposal).decision === "allow" before acting.
+```
+
+**Everything that came from Wazuh is part 4:** title, summary, `full_log`,
+hostnames, IPs, user names. Only values Legion computed are part 3. Treat
+the model's answer as `model_output` if it is fed back into a later prompt.
+When an agent is served alert content through `/agent/v1/…`, call
+`identity.contentGuard.ingest({ tenantId, principal: agent }, "security_alert", text)`
+so the risk follows the content to the agent that received it.
+
 ## Integration
 
 Legion's server already has everything this needs (Express 5, `pg`,
@@ -247,6 +367,7 @@ Legion's server already has everything this needs (Express 5, `pg`,
    app.use("/service-accounts", identity.serviceAccounts);
    app.use("/audit/principal-events", identity.auditApi);
    app.use("/firewall", identity.firewallApi);
+   app.use("/prompt-guard", identity.promptGuardApi);
    setInterval(() => identity.purgeExpiredTokens().catch(() => {}), 3_600_000).unref();
    ```
 4. Expose agent actions as **new** routes under `/agent/v1/…` that call the
@@ -311,6 +432,27 @@ requests from self-declared AI user agents without an identity get 401, and
 - **Outbound HTTPS on the allowed path hasn't been exercised against a live
   server** (no internet in the test environment). The blocking paths are
   tested.
+- **Prompt-injection detection can be evaded.** The patterns and statistics
+  are English-centric; paraphrased or foreign-language injections, and
+  injections split across several fields, can score clean. That's why
+  separation and action gating don't depend on detection.
+- **The guard can't make a model obey the separation.** It gives the model
+  clean, labelled input and stops the dangerous *consequences* (quarantine,
+  proposal gating), but a model may still be swayed in what it *says*. Show
+  analysts the verdict next to AI answers.
+- **Planted content can quarantine an agent.** An attacker who gets
+  malicious text into logs an agent reads can stop its sensitive actions
+  until an admin reviews it. That's the conservative trade-off: a stopped
+  agent over a hijacked one.
+- **People's activity is recorded, not gated.** Content reaching a person's
+  Copilot session is recorded against that person, but people are not
+  gated by the agent firewall, so it doesn't block their actions.
+- **PDFs and documents are classified as extracted text only.** Text hidden
+  by PDF styling (white-on-white, off-page) can't be detected from the
+  text; the separation still applies.
+- **If the injection history can't be read, decisions fail open with a
+  visible WARN** (`content.risk_unavailable`) instead of blocking every
+  agent.
 
 ## Development
 

@@ -49,7 +49,8 @@ export interface TestApp {
 
 export async function resetDb(pool: pg.Pool) {
   await pool.query(`
-    DROP TABLE IF EXISTS agent_messages, agent_delegations, firewall_decisions, firewall_policies,
+    DROP TABLE IF EXISTS content_ingestion_log, content_risk_acknowledgements,
+      agent_messages, agent_delegations, firewall_decisions, firewall_policies,
       principal_audit_log, machine_tokens, machine_credentials, machine_identities CASCADE;
     DROP FUNCTION IF EXISTS principal_audit_log_append_only() CASCADE;
   `);
@@ -79,6 +80,7 @@ export async function makeApp(opts: { pool?: pg.Pool; logs?: string[] } = {}): P
   app.use("/service-accounts", identity.serviceAccounts);
   app.use("/audit/principal-events", identity.auditApi);
   app.use("/firewall", identity.firewallApi);
+  app.use("/prompt-guard", identity.promptGuardApi);
 
   // Stand-ins for existing human routes: they keep their own auth and see
   // exactly what they saw before (plus req.principal, which they ignore).

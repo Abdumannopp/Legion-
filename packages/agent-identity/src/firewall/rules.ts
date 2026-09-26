@@ -4,6 +4,7 @@ import type { HumanRole, MachinePrincipal } from "../types.js";
 import { classifyUrl } from "./destinations.js";
 import { PROTECTED_TABLES, type FirewallPolicy } from "./policy.js";
 import { byteSize, findSecrets, findUrls } from "./scan.js";
+import type { ContentRiskSummary, Verdict } from "../prompt-guard/types.js";
 import { SENSITIVITY_ORDER, type ActionRequest, type RiskFactor, type RuleHit, type Sensitivity } from "./types.js";
 
 /** Facts the engine looked up before evaluation. The rules never do I/O. */
@@ -24,6 +25,13 @@ export interface RuleInputs {
   viaMessage?: { id: string; fromAgentId: string; permission: Permission; senderActive: boolean };
   chain: string[];
   actionsLastMinute: number;
+  /**
+   * Flagged external content that reached this agent and no person has
+   * reviewed yet, or "unavailable" if it could not be looked up.
+   */
+  contentRisk?: ContentRiskSummary | "unavailable";
+  /** Agent-to-agent: how the message payload classifies as external content. */
+  payloadClassification?: { verdict: Verdict; riskScore: number; findingIds: string[] };
 }
 
 export interface RuleOutput {
@@ -58,6 +66,7 @@ export function evaluateRules(input: RuleInputs): RuleOutput {
   let destination: string | null = null;
   let sensitivity = maxSensitivity("internal", req.sensitivity, req.resource ? policy.resources[req.resource.type] : undefined);
   let externalEffect = false;
+  let changesState = false;
 
   // ---- Surface-specific checks --------------------------------------------
   const checkArgs = (spec: { allowedArgs?: string[]; maxArgBytes: number; sideEffects: string }, args: Record<string, unknown>, label: string) => {
@@ -97,7 +106,10 @@ export function evaluateRules(input: RuleInputs): RuleOutput {
       });
       if (!root) hard("file.outside_roots", "Path is outside every directory this organisation opened to agents.");
       else if (req.mode === "write" && root.access !== "readwrite") hard("file.read_only_root", "This directory is read-only for agents.");
-      if (req.mode === "write") add("file write", 10);
+      if (req.mode === "write") {
+        add("file write", 10);
+        changesState = true;
+      }
       break;
     }
 
@@ -120,6 +132,7 @@ export function evaluateRules(input: RuleInputs): RuleOutput {
       if (!Number.isInteger(req.rowLimit) || req.rowLimit < 1) hard("db.row_limit_missing", "A positive row limit is required.");
       else if (req.rowLimit > policy.database.maxRows) soft("db.row_limit", `Row limit ${req.rowLimit} exceeds ${policy.database.maxRows}.`);
       add(`db ${req.operation}`, req.operation === "delete" ? 20 : req.operation === "select" ? 0 : 10);
+      if (req.operation !== "select") changesState = true;
       break;
     }
 
@@ -224,6 +237,39 @@ export function evaluateRules(input: RuleInputs): RuleOutput {
     const scoped = req.surface === "agent_message" ? req.requestedPermission : permission;
     if (scoped !== m.permission) hard("a2a.message_scope", `The message only asked for ${m.permission}.`);
     add("acting on another agent's request", 10);
+  }
+
+  // ---- Prompt injection -------------------------------------------------------
+  // Malicious external content reached this agent and nobody has reviewed
+  // it: the agent may be acting on an attacker's instructions. Reading stays
+  // possible (with higher risk); anything that changes state, acts outside
+  // Legion, touches confidential data or messages other agents is blocked
+  // until a person acknowledges the event.
+  const tier = permission ? PERMISSION_TIERS[permission] : 0;
+  const unsafe =
+    tier >= 2 || changesState || externalEffect || req.surface === "agent_message" ||
+    sensitivity === "confidential" || sensitivity === "restricted";
+  const cr = input.contentRisk;
+  if (cr === "unavailable") {
+    warn("content.risk_unavailable", "Could not check for recent prompt-injection events.");
+  } else if (cr && cr.unacknowledgedMalicious > 0) {
+    add("unreviewed malicious external content", 40);
+    if (unsafe) {
+      hard("content.quarantine",
+        `${cr.unacknowledgedMalicious} malicious external content event(s) reached this agent and have not been reviewed. ` +
+        "An administrator must review and acknowledge them before it can take sensitive actions.");
+    }
+  } else if (cr && cr.unacknowledgedSuspicious > 0) {
+    add("recent suspicious external content", Math.min(25, 10 + 5 * (cr.unacknowledgedSuspicious - 1)));
+  }
+
+  const pc = input.payloadClassification;
+  if (req.surface === "agent_message" && pc) {
+    if (pc.verdict === "malicious") {
+      hard("a2a.injection_payload", `The message carries a prompt-injection payload (${pc.findingIds.join(", ")}); it would spread to the recipient.`);
+    } else if (pc.verdict === "suspicious") {
+      add("suspicious message payload", 15);
+    }
   }
 
   // ---- Risk score -----------------------------------------------------------

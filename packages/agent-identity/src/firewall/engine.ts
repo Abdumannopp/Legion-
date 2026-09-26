@@ -16,6 +16,7 @@ import { DecisionLog } from "./log.js";
 import type { PolicyStore, VersionedPolicy } from "./policy.js";
 import { evaluateRules, scoreOf, type RuleInputs } from "./rules.js";
 import { hashToolDefinition } from "./scan.js";
+import type { PromptInjectionGuard } from "../prompt-guard/guard.js";
 import type {
   ActionRequest,
   Advisor,
@@ -47,6 +48,8 @@ export interface FirewallOptions {
   onDecision?: (ctx: FirewallContext, req: ActionRequest, d: FirewallDecision) => void | Promise<void>;
   /** DNS resolver used by guardedRequest; every address it returns is checked. */
   dnsLookup?: (host: string) => Promise<{ address: string; family: number }[]>;
+  /** Supplies prompt-injection history per agent, and classifies agent-to-agent payloads. */
+  contentGuard?: PromptInjectionGuard;
   log: (msg: string, err?: unknown) => void;
 }
 
@@ -109,6 +112,8 @@ export class AgentFirewall {
         viaMessage: ctx.viaMessage ? await this.resolveViaMessage(p, ctx.viaMessage) : undefined,
         chain: ctx.chain ?? [],
         actionsLastMinute: this.velocity.record(p.id),
+        contentRisk: await this.contentRisk(p, policy.promptInjection.suspiciousWindowSeconds),
+        payloadClassification: req.surface === "agent_message" ? this.classifyPayload(req.payload) : undefined,
       };
     } catch (err) {
       this.o.log("firewall could not look up facts; blocking", err);
@@ -207,6 +212,27 @@ export class AgentFirewall {
       wouldBlock: false,
       hits: [...(base?.hits ?? []), { id, effect: "BLOCK", hard: true, reason }],
     };
+  }
+
+  /**
+   * An optional enrichment: if the lookup fails, the decision is still made
+   * on every other rule and carries a visible WARN, rather than taking every
+   * agent offline because of this one signal.
+   */
+  private async contentRisk(p: MachinePrincipal, windowSeconds: number): Promise<RuleInputs["contentRisk"]> {
+    if (!this.o.contentGuard) return undefined;
+    try {
+      return await this.o.contentGuard.summary(p.tenantId, p.id, windowSeconds);
+    } catch (err) {
+      this.o.log("prompt-injection history unavailable", err);
+      return "unavailable";
+    }
+  }
+
+  private classifyPayload(payload: unknown): RuleInputs["payloadClassification"] {
+    if (!this.o.contentGuard || payload === undefined || payload === null) return undefined;
+    const c = this.o.contentGuard.classify({ source: "agent_message", content: typeof payload === "string" ? payload : JSON.stringify(payload) });
+    return { verdict: c.verdict, riskScore: c.riskScore, findingIds: c.findings.map((f) => f.id) };
   }
 
   private async resolveDelegation(ctx: FirewallContext, req: ActionRequest): Promise<RuleInputs["delegation"]> {
@@ -471,13 +497,42 @@ export class AgentFirewall {
       requestedPermission: msg.requestedPermission,
       payload: msg.payload,
     }, extraHits);
+    // An agent emitting injection-like payloads may itself be compromised:
+    // record it against the sender, whether or not the message went out.
+    if (this.o.contentGuard && msg.payload !== undefined && msg.payload !== null) {
+      const content = typeof msg.payload === "string" ? msg.payload : JSON.stringify(msg.payload);
+      await this.o.contentGuard.ingest(
+        { tenantId: ctx.principal.tenantId, principal: ctx.principal, requestId: ctx.requestId },
+        "agent_message", content, { sourceId: `to:${msg.toAgentId}` },
+      );
+    }
     if (d.decision === "BLOCK") return { decision: d, messageId: null };
     const res = await this.o.pool.query(
       `INSERT INTO agent_messages (tenant_id, from_identity, to_identity, requested_permission, payload, chain, decision_id, expires_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7, now() + interval '1 hour') RETURNING id`,
       [ctx.principal.tenantId, ctx.principal.id, msg.toAgentId, msg.requestedPermission, JSON.stringify(msg.payload ?? null), ctx.chain ?? [], d.decisionId],
     );
-    return { decision: d, messageId: res.rows[0].id };
+    const messageId: string = res.rows[0].id;
+    // A flagged payload that was still delivered (suspicious, or monitor
+    // mode) is external content reaching the recipient: record it against
+    // the recipient once, at delivery — not on every inbox read.
+    if (this.o.contentGuard && msg.payload !== undefined && msg.payload !== null) {
+      const content = typeof msg.payload === "string" ? msg.payload : JSON.stringify(msg.payload);
+      const c = this.o.contentGuard.classify({ source: "agent_message", content });
+      if (c.verdict !== "clean") {
+        const r = await this.o.store.get(ctx.principal.tenantId, "ai_agent", msg.toAgentId);
+        if (r) {
+          const recipient: MachinePrincipal = {
+            type: "ai_agent", id: r.id, tenantId: r.tenantId, displayName: r.name, ownerUserId: r.ownerUserId,
+            permissions: [], riskLevel: r.riskLevel, credentialId: "", tokenId: "",
+          };
+          await this.o.contentGuard.recordIfFlagged(
+            { tenantId: r.tenantId, principal: recipient, requestId: ctx.requestId }, "agent_message", content, { sourceId: messageId }, c,
+          );
+        }
+      }
+    }
+    return { decision: d, messageId };
   }
 
   async inbox(p: MachinePrincipal) {
@@ -487,16 +542,26 @@ export class AgentFirewall {
         ORDER BY created_at DESC LIMIT 100`,
       [p.tenantId, p.id],
     );
-    return res.rows.map((r) => ({
-      id: r.id,
-      fromAgentId: r.from_identity,
-      requestedPermission: r.requested_permission,
-      payload: r.payload,
-      chain: r.chain,
-      decisionId: r.decision_id,
-      createdAt: new Date(r.created_at).toISOString(),
-      expiresAt: new Date(r.expires_at).toISOString(),
-    }));
+    const out = [];
+    for (const r of res.rows) {
+      const content = typeof r.payload === "string" ? r.payload : JSON.stringify(r.payload);
+      // Another agent's words are external content to this one: marked
+      // untrusted, with their classification (recorded once, at delivery).
+      const c = this.o.contentGuard?.classify({ source: "agent_message", content });
+      out.push({
+        id: r.id,
+        fromAgentId: r.from_identity,
+        requestedPermission: r.requested_permission,
+        payload: r.payload,
+        trust: "untrusted" as const,
+        contentRisk: c ? { verdict: c.verdict, riskScore: c.riskScore, findings: c.findings.map((f) => f.id) } : null,
+        chain: r.chain,
+        decisionId: r.decision_id,
+        createdAt: new Date(r.created_at).toISOString(),
+        expiresAt: new Date(r.expires_at).toISOString(),
+      });
+    }
+    return out;
   }
 
   private async mustAllow(ctx: FirewallContext, req: ActionRequest): Promise<FirewallDecision> {

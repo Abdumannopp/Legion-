@@ -103,6 +103,12 @@ export const policySchema = z.strictObject({
         .default([]),
     })
     .default({ maxDepth: 2, allow: [] }),
+  promptInjection: z
+    .strictObject({
+      /** How long suspicious (not malicious) content keeps raising an agent's risk. Malicious content counts until reviewed. */
+      suspiciousWindowSeconds: z.number().int().min(60).max(7 * 86_400).default(3_600),
+    })
+    .default({ suspiciousWindowSeconds: 3_600 }),
 });
 
 export type FirewallPolicy = z.infer<typeof policySchema>;
