@@ -334,7 +334,7 @@ describe("agent-to-agent communication", () => {
 
     const other = await agentWithToken(t, "bob");
     const cross = await request(t.app).post("/agent/v1/messages").set(bearer(a.token)).send({ toAgentId: other.agent.id, requestedPermission: "alerts:read" });
-    expect(cross.body.error.rules).toContain("a2a.recipient_unknown");
+    expect(cross.body.error.rules).toContain("a2a.cross_tenant");
 
     const secret = await request(t.app).post("/agent/v1/messages").set(bearer(a.token))
       .send({ toAgentId: b.agent.id, requestedPermission: "alerts:read", payload: { creds: a.secret } });

@@ -17,9 +17,37 @@ export interface FirewallContext {
   /** Agents already in this request's chain, oldest first. Set by Legion from a relayed message, never from a header. */
   chain?: string[];
   /** The relayed agent message this action answers (x-legion-message-id), verified to be addressed to this agent. */
-  viaMessage?: { id: string; fromAgentId: string; permission: Permission; chain: string[] };
+  viaMessage?: RelayedMessage;
   requestId?: string;
   ip?: string;
+}
+
+/**
+ * Whose authority an agent-to-agent request runs under. Set by Legion when
+ * the request is sent and carried unchanged down the chain; never supplied
+ * by an agent.
+ *  - agent: the originating agent's own grants (answerable to its owner);
+ *  - delegation: a person's delegation grant to the originating agent,
+ *    which that person marked as re-delegable.
+ */
+export type Authority =
+  | { kind: "agent"; agentId: string; ownerUserId: string }
+  | { kind: "delegation"; userId: string; grantId: string; agentId: string };
+
+/** A relayed request, as Legion stored it. */
+export interface RelayedMessage {
+  id: string;
+  fromAgentId: string;
+  permission: Permission;
+  /** Agents before the sender, oldest first. */
+  chain: string[];
+  /** The root request's id: one interaction, however far it is forwarded. */
+  interactionId: string;
+  hop: number;
+  authority: Authority;
+  /** The one resource the request is about, if it named one. */
+  resource: { type: string; id: string } | null;
+  expiresAt: string;
 }
 
 export interface ResourceTarget {
@@ -85,6 +113,10 @@ export interface AgentMessageRequest extends Base {
   toAgentId: string;
   /** The permission the recipient will exercise because of this message. */
   requestedPermission: Permission;
+  /** Optional: the one resource the recipient may act on under this request. */
+  requestResource?: { type: string; id: string };
+  /** The tenant the sender says the recipient is in. Must be the sender's own. */
+  claimedTenantId?: string;
   payload?: unknown;
 }
 

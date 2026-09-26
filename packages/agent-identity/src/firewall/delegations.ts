@@ -7,6 +7,8 @@ export interface Delegation {
   agentId: string;
   userId: string;
   permissions: Permission[];
+  /** The person allowed the agent to pass this authority on to other agents. */
+  redelegable: boolean;
   createdAt: string;
   expiresAt: string;
   revokedAt: string | null;
@@ -20,6 +22,7 @@ const toDelegation = (r: any): Delegation => ({
   agentId: r.identity_id,
   userId: r.user_id,
   permissions: r.permissions,
+  redelegable: r.redelegable === true,
   createdAt: new Date(r.created_at).toISOString(),
   expiresAt: new Date(r.expires_at).toISOString(),
   revokedAt: r.revoked_at ? new Date(r.revoked_at).toISOString() : null,
@@ -31,11 +34,11 @@ export const MAX_DELEGATION_DAYS = 7;
 export class DelegationStore {
   constructor(private readonly pool: Pool) {}
 
-  async create(c: PoolClient, d: { tenantId: string; agentId: string; userId: string; permissions: Permission[]; expiresAt: string }) {
+  async create(c: PoolClient, d: { tenantId: string; agentId: string; userId: string; permissions: Permission[]; expiresAt: string; redelegable?: boolean }) {
     const res = await c.query(
-      `INSERT INTO agent_delegations (tenant_id, identity_id, user_id, permissions, expires_at)
-       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [d.tenantId, d.agentId, d.userId, d.permissions, d.expiresAt],
+      `INSERT INTO agent_delegations (tenant_id, identity_id, user_id, permissions, expires_at, redelegable)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [d.tenantId, d.agentId, d.userId, d.permissions, d.expiresAt, d.redelegable ?? false],
     );
     return toDelegation(res.rows[0]);
   }
@@ -49,6 +52,15 @@ export class DelegationStore {
       [tenantId, agentId, userId],
     );
     return res.rows.map(toDelegation);
+  }
+
+  /** One grant, if it is still in force (unexpired, unrevoked). */
+  async activeById(tenantId: string, id: string): Promise<Delegation | null> {
+    const res = await this.pool.query(
+      "SELECT * FROM agent_delegations WHERE tenant_id = $1 AND id = $2 AND revoked_at IS NULL AND expires_at > now()",
+      [tenantId, id],
+    );
+    return res.rows[0] ? toDelegation(res.rows[0]) : null;
   }
 
   async list(tenantId: string, f: { agentId?: string; userId?: string }): Promise<Delegation[]> {

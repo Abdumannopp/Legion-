@@ -10,9 +10,11 @@ tool call goes through the [tool gateway](#tool-security), and each agent's
 behaviour is compared with its own normal role at runtime
 ([behaviour monitoring](#runtime-behaviour-monitoring)). Administrators can
 stop a compromised agent at once with the
-[emergency kill switch](#emergency-kill-switch).
+[emergency kill switch](#emergency-kill-switch). Agents asking other agents
+for work pass [agent-to-agent controls](#agent-to-agent-security), recorded
+in an auditable [Agent Trust Graph](#agent-trust-graph).
 
-> **Status.** Complete and tested as a standalone module (498 tests, many against
+> **Status.** Complete and tested as a standalone module (534 tests, many against
 > real PostgreSQL 16). **Not yet wired into Legion's server**: `server/` was not in
 > the repository when this was written. Wiring is the ~15 lines in
 > [Integration](#integration); nothing in the existing human login needs to
@@ -597,6 +599,142 @@ Repeating the switch is harmless: with nothing left to withdraw, it records
 nothing. Escalating from suspected to confirmed revokes what remains.
 Concurrent activations record exactly one event.
 
+## Agent-to-agent security
+
+An agent asks another agent for work with `POST /agent/v1/messages`. The
+recipient reads it from `GET /agent/v1/messages`, and acts on it by citing
+it with `x-legion-message-id`. Legion relays and checks every step.
+
+### Every request identifies
+
+| | Set by | Where it shows |
+|---|---|---|
+| **Source agent** | the sender's token (never the body) | receipt, inbox, log |
+| **Destination agent** | `toAgentId`, resolved within the sender's tenant | receipt, inbox, log |
+| **Tenant** | the sender's identity; a `tenantId` claim other than its own is refused | receipt, inbox, log |
+| **Requested action** | `requestedPermission` (+ optional `resource: {type, id}`) | receipt, inbox, log |
+| **Delegated authority** | Legion (below) | receipt, inbox, log, every decision |
+
+Authority is one of:
+
+- `{kind: "agent", agentId, ownerUserId}`: the originating agent's own
+  grants, answerable to its owner.
+- `{kind: "delegation", userId, grantId, agentId}`: a person's grant to the
+  originating agent.
+
+It is fixed when the root request is sent and **travels unchanged down the
+chain**. No agent can swap it, top it up, or add a person to it.
+
+### What is prevented
+
+| Threat | Control | Rule |
+|---|---|---|
+| **Cross-tenant communication** | Recipients are resolved in the sender's tenant only. An agent of another organisation is recorded as a cross-tenant attempt, and the sender learns nothing about it. Message ids of other tenants are unknown. | `a2a.cross_tenant` |
+| **Unauthorized delegation** | The pair must be in the policy allowlist (`agentMessages.allow`). Passing a *person's* authority on needs a grant the person marked `redelegable: true`, and only for what they granted. Recipients act under that grant, re-checked at every action, so revoking it voids the request downstream. | `a2a.not_allowlisted`, `a2a.redelegation_not_allowed`, `delegation.not_granted`, `delegation.invalid` |
+| **Privilege escalation** | The sender must hold what it asks for. The recipient can do only what was asked, only on the named resource, and only under the request's authority. | `a2a.laundering`, `a2a.message_scope`, `a2a.resource_scope`, `a2a.authority_mismatch` |
+| **Unlimited chaining** | Depth (`maxDepth`, default 2, max 4), fan-out per request (`maxFanOut`, 3) and requests per interaction (`maxMessagesPerInteraction`, 10) are limited. There are no cycles or self-messages. A forward never outlives what it forwards. Every agent upstream must still be active; the kill switch withdraws everything downstream of a stopped agent. | `a2a.depth`, `a2a.fan_out`, `a2a.interaction_budget`, `a2a.cycle`, `a2a.chain_member_inactive` |
+| **Hidden tool delegation** | See below. | `a2a.hidden_tool_request`, `a2a.hidden_tool_text`, `a2a.hidden_tool_delegation` |
+
+### Hidden tool delegation
+
+Hidden tool delegation means getting another agent to use a tool without
+that tool ever appearing in what the firewall checked. It is caught in two
+places:
+
+1. **In the request.** The payload is searched for tool calls: Legion's own
+   call format, LLM `tool_calls` / `function_call` / `{name, arguments}`,
+   MCP `tools/call`, command and SQL objects, and calls serialised as JSON
+   strings.
+   - A structured call that needs a different permission than the request
+     asks for is refused (hard).
+   - Tool instructions in prose (command lines, SQL, "execute the script",
+     "send … to https://…") are refused too. Set
+     `agentMessages.hiddenToolText: "warn"` to allow them with a warning.
+   - A tool call asked for openly, with `requestedPermission:
+     "tool.slack:write"` and the call as payload, is a normal request.
+2. **After the request.** Once an agent has *read* a request, its tool
+   calls, MCP calls and egress for `influenceWindowSeconds` (default 900)
+   are compared with the request's text. A call whose specific target (a
+   channel, host, table, path, command or argument) is named in the request
+   must cite the request.
+   - If uncited and needing a different permission than the request asked
+     for, it is refused and recorded as `hidden_delegation_blocked`.
+   - If uncited but the permission matches, it carries a warning
+     (`a2a.uncited_request`).
+
+### Interaction chain (`agent_interactions`)
+
+Every step is appended to a hash-chained, append-only log with all five
+facts, the agent chain, and the firewall decision. The steps are:
+
+- a request sent or refused;
+- a request read;
+- an action taken on a request, or refused;
+- a hidden delegation stopped.
+
+If a step can't be recorded, the step doesn't happen. Every firewall
+decision also carries `agent_chain` and `via_message_id`.
+
+`GET /a2a/interactions/:id` returns the whole investigation for one
+interaction:
+
+- the originating agent and authority;
+- the tree of requests and forwards;
+- every step;
+- every firewall decision taken on those requests.
+
+## Agent Trust Graph
+
+`GET /a2a/graph?days=30` shows who may ask whom, for what, on whose
+authority, and what actually happened.
+
+- **Nodes:** agents (status, risk, behaviour level, permissions) and people
+  (their delegation grants).
+- **Edges:** each agent-to-agent pair, with:
+  - what the policy declares;
+  - what the interaction log shows (sent, refused, read, acted, hidden
+    delegation stopped, permissions used, first and last seen);
+  - which violations were refused.
+- **Edge trust:**
+  - `trusted`: declared and used cleanly;
+  - `declared_unused`;
+  - `broken`: an agent stopped, or the recipient lacks the permission, so
+    remove the entry;
+  - `undeclared`;
+  - `violating`: someone tried to exceed authority over it;
+  - `delegated`: a person's grant.
+- **Per agent:**
+  - `reach`: agents it can reach within `maxDepth`;
+  - `canRequest`: what it can get others to do, which is never more than it
+    holds.
+- **Findings, worst first:**
+  - authority violations and cross-tenant attempts;
+  - hidden delegation;
+  - undeclared traffic;
+  - dead allowlist entries;
+  - re-delegable grants;
+  - HIGH_RISK/CRITICAL agents that still have reach;
+  - tampered evidence.
+
+**Why it can be audited:**
+
+- The observed half comes only from the hash-chained interaction log. Its
+  integrity is verified on every build and reported in
+  `evidence.interactionLog`; a broken chain becomes the top finding.
+- The graph carries `graphHash`, the SHA-256 of its canonical JSON, which
+  anyone can recompute.
+- `POST /a2a/graph/snapshots` freezes the graph in its own hash-chained
+  table, so what the graph showed on a given day can be proven later. It is
+  admin-only and audited.
+
+| Endpoint | Who |
+|---|---|
+| `GET /a2a/graph` | admin, analyst |
+| `POST /a2a/graph/snapshots { note? }`, `GET /a2a/graph/snapshots/verify` | admin |
+| `GET /a2a/graph/snapshots`, `/graph/snapshots/:id` (re-hashed: `intact`) | admin, analyst |
+| `GET /a2a/interactions[?agentId=]`, `/interactions/:id` | admin, analyst |
+| `GET /a2a/events[?agentId=&kind=]`, `/events/verify` | admin, analyst / admin |
+
 ## Integration
 
 Legion's server already has everything this needs (Express 5, `pg`,
@@ -638,6 +776,7 @@ Legion's server already has everything this needs (Express 5, `pg`,
    app.use("/tools", identity.toolsApi);
    app.use("/behavior", identity.behaviorApi);
    app.use("/kill-switch", identity.killSwitchApi);
+   app.use("/a2a", identity.a2aApi);
    setInterval(() => identity.purgeExpiredTokens().catch(() => {}), 3_600_000).unref();
    setInterval(() => identity.killSwitch.deliverPending().catch(() => {}), 60_000).unref();
    ```
@@ -758,6 +897,26 @@ requests from self-declared AI user agents without an identity get 401, and
   once.
 - **Notices depend on the host's `notifyAdmins`.** Without it, notices are
   only logged and listed.
+- **Hidden-delegation detection is deterministic, not complete.**
+  - Prose detection looks for command lines, SQL and explicit tool
+    instructions; a paraphrase ("the usual cleanup") passes.
+  - Correlation needs the call's specific target to appear in the request.
+    A target that is encoded, or only referred to ("the channel we
+    discussed"), is not matched.
+  - The underlying protection still holds: whatever the recipient does
+    uncited runs on its own permissions and is fully checked and logged.
+- **Correlation can hold legitimate work.** An agent that read a request
+  naming a host is held for 15 minutes from using a different permission on
+  that host uncited. Cite the request, or tune `influenceWindowSeconds`.
+- **By default, a tier-2 external action on another agent's request is held
+  by the risk score.** A Slack post scores 60, and acting on a request adds
+  10, which reaches `blockAt` 70. That is deliberate. Raise `blockAt` to
+  allow such delegation.
+- **The fan-out and interaction limits are checked, then written.** Two
+  forwards at the same instant can exceed a limit by one each.
+- **The trust graph re-verifies the whole interaction log on each build.**
+  At very large volumes, snapshot periodically rather than building on
+  every page view.
 
 ## Development
 

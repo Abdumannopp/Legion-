@@ -87,6 +87,8 @@ export function firewallAdminRouter(d: Deps): Router {
     agentId: z.string().regex(UUID),
     permissions: z.array(permission).min(1).max(20),
     expiresAt: z.iso.datetime({ offset: true }),
+    /** Let the agent pass this authority to other agents (within the same permissions). Default false. */
+    redelegable: z.boolean().default(false),
   });
   router.post("/delegations", anyone, async (req, res) => {
     const parsed = delegationBody.safeParse(req.body ?? {});
@@ -105,10 +107,10 @@ export function firewallAdminRouter(d: Deps): Router {
     const overAgent = permissions.filter((p) => !agent.permissions.includes(p));
     if (overAgent.length) return sendError(res, 400, "exceeds_agent", `The agent does not hold: ${overAgent.join(", ")}.`);
     const grant = await d.store.tx(async (c) => {
-      const g = await d.delegations.create(c, { tenantId: user.tenantId, agentId: agent.id, userId: user.id, permissions, expiresAt: b.expiresAt });
+      const g = await d.delegations.create(c, { tenantId: user.tenantId, agentId: agent.id, userId: user.id, permissions, expiresAt: b.expiresAt, redelegable: b.redelegable });
       await d.audit.record({
         ...ctxOf(req), action: "delegation.created", outcome: "success", resourceType: "ai_agent", resourceId: agent.id,
-        details: { delegationId: g.id, permissions, expiresAt: g.expiresAt },
+        details: { delegationId: g.id, permissions, expiresAt: g.expiresAt, redelegable: g.redelegable },
       }, c);
       return g;
     });
@@ -149,6 +151,10 @@ export function agentMessageRouter(d: Deps): Router {
   const body = z.strictObject({
     toAgentId: z.string().max(64),
     requestedPermission: permission,
+    /** Optional: the one resource the recipient may act on under this request. */
+    resource: z.strictObject({ type: z.string().regex(/^[a-z][a-z0-9_:-]{0,63}$/), id: z.string().min(1).max(200) }).optional(),
+    /** Optional: the tenant the sender believes the recipient is in. Anything but its own is refused. */
+    tenantId: z.string().max(200).optional(),
     payload: z.unknown().optional(),
   });
 
@@ -156,7 +162,7 @@ export function agentMessageRouter(d: Deps): Router {
     const parsed = body.safeParse(req.body ?? {});
     if (!parsed.success) return sendError(res, 400, "invalid_request", parsed.error.issues[0]?.message ?? "invalid");
     const { ctx, extraHits } = await d.firewall.contextFromRequest(req);
-    const { decision, messageId } = await d.firewall.sendMessage(ctx, parsed.data as { toAgentId: string; requestedPermission: Permission; payload: unknown }, extraHits);
+    const { decision, messageId, request } = await d.firewall.sendMessage(ctx, parsed.data as Parameters<AgentFirewall["sendMessage"]>[1], extraHits);
     req.firewallDecision = decision;
     res.setHeader("x-legion-firewall", decision.decision.toLowerCase());
     res.setHeader("x-legion-decision-id", decision.decisionId);
@@ -170,7 +176,7 @@ export function agentMessageRouter(d: Deps): Router {
         },
       });
     }
-    res.status(201).json({ messageId, decision: decision.decision, decisionId: decision.decisionId });
+    res.status(201).json({ messageId, decision: decision.decision, decisionId: decision.decisionId, request });
   });
 
   router.get("/messages", d.guards.requireMachine(["ai_agent"]), d.guards.traced("agents:read_inbox"), async (req, res) => {

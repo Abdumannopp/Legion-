@@ -7,7 +7,8 @@ import { byteSize, findSecrets, findUrls } from "./scan.js";
 import type { ContentRiskSummary, Verdict } from "../prompt-guard/types.js";
 import type { BehaviorState } from "../behavior/monitor.js";
 import { destinationKey } from "../behavior/keys.js";
-import { SENSITIVITY_ORDER, type ActionRequest, type RiskFactor, type RuleHit, type Sensitivity } from "./types.js";
+import type { HiddenDelegationMatch, PayloadToolFinding } from "../a2a/hidden.js";
+import { SENSITIVITY_ORDER, type ActionRequest, type Authority, type RiskFactor, type RuleHit, type Sensitivity } from "./types.js";
 
 /** Facts the engine looked up before evaluation. The rules never do I/O. */
 export interface RuleInputs {
@@ -17,14 +18,43 @@ export interface RuleInputs {
   delegation:
     | { state: "none" }
     | { state: "invalid"; userId: string; reason: string }
-    | { state: "valid"; userId: string; grantId: string; userRole: HumanRole; permissions: Permission[] };
+    | {
+        state: "valid"; userId: string; grantId: string; userRole: HumanRole; permissions: Permission[];
+        /** The person allowed this grant to be passed on to other agents. */
+        redelegable: boolean;
+        /** Carried in on a relayed request (another agent's grant), not this agent's own. */
+        inherited: boolean;
+      };
   /** Agent-to-agent: the addressed agent, as found in this tenant. */
   recipient?:
     | { state: "missing" }
+    | { state: "foreign_tenant" }
     | { state: "blocked"; reason: string }
     | { state: "ok"; id: string; effectivePermissions: Permission[] };
   /** A message this action claims to act on (x-legion-message-id), already verified to be addressed here. */
-  viaMessage?: { id: string; fromAgentId: string; permission: Permission; senderActive: boolean };
+  viaMessage?: {
+    id: string;
+    fromAgentId: string;
+    permission: Permission;
+    senderActive: boolean;
+    /** Earlier agents in the chain that can no longer act. */
+    chainInactive?: string[];
+    /** The one resource the request was about, if any. */
+    resource?: { type: string; id: string } | null;
+    /** The action names a person other than the one whose authority the request carries. */
+    authorityMismatch?: boolean;
+  };
+  /** Agent-to-agent sends: facts about the interaction this request would join. */
+  a2a?: {
+    /** Requests already sent in this interaction. */
+    interactionMessages: number;
+    /** Agents the relayed request was already forwarded to. */
+    fanOut: number;
+    /** Tool invocations found in the payload that the requested permission does not cover. */
+    payloadTools: PayloadToolFinding[];
+  };
+  /** Uncited tool use that matches a request the agent recently read. */
+  hiddenDelegation?: HiddenDelegationMatch[];
   chain: string[];
   actionsLastMinute: number;
   /**
@@ -193,7 +223,11 @@ export function evaluateRules(input: RuleInputs): RuleOutput {
       if (input.chain.includes(req.toAgentId)) hard("a2a.cycle", "The recipient is already in this chain of agents.");
       if (hops > policy.agentMessages.maxDepth) hard("a2a.depth", `Chain of ${hops} agent hops exceeds ${policy.agentMessages.maxDepth}.`);
       const r = input.recipient;
-      if (!r || r.state === "missing") hard("a2a.recipient_unknown", "No such agent in this organisation.");
+      if (req.claimedTenantId !== undefined && req.claimedTenantId !== p.tenantId) {
+        hard("a2a.cross_tenant", "Agents can only talk to agents in their own organisation.");
+      }
+      if (r?.state === "foreign_tenant") hard("a2a.cross_tenant", "Agents can only talk to agents in their own organisation.");
+      else if (!r || r.state === "missing") hard("a2a.recipient_unknown", "No such agent in this organisation.");
       else if (r.state === "blocked") hard("a2a.recipient_unavailable", `Recipient cannot act: ${r.reason}.`);
       else if (!r.effectivePermissions.includes(req.requestedPermission)) {
         hard("a2a.recipient_lacks_permission", `The recipient does not hold ${req.requestedPermission}.`);
@@ -209,6 +243,28 @@ export function evaluateRules(input: RuleInputs): RuleOutput {
       const secrets = findSecrets(req.payload);
       if (secrets.length) hard("a2a.secret_in_payload", `The message contains credentials (${secrets.join(", ")}).`);
       if (byteSize(req.payload) > 16_384) hard("a2a.payload_too_large", "Messages are limited to 16 KB.");
+
+      // Chaining: bounded in breadth as well as depth.
+      const ia = input.a2a;
+      if (ia && ia.interactionMessages >= policy.agentMessages.maxMessagesPerInteraction) {
+        hard("a2a.interaction_budget", `This interaction already produced ${ia.interactionMessages} requests (limit ${policy.agentMessages.maxMessagesPerInteraction}).`);
+      }
+      if (ia && input.viaMessage && ia.fanOut >= policy.agentMessages.maxFanOut) {
+        hard("a2a.fan_out", `This request was already passed to ${ia.fanOut} agents (limit ${policy.agentMessages.maxFanOut}).`);
+      }
+      // A request about one resource stays about that resource when passed on.
+      const via = input.viaMessage;
+      if (via?.resource && (req.requestResource?.type !== via.resource.type || req.requestResource?.id !== via.resource.id)) {
+        hard("a2a.resource_scope", `The request being passed on is limited to ${via.resource.type} ${via.resource.id}.`);
+      }
+      // Hidden tool delegation, in the request itself.
+      for (const f of ia?.payloadTools ?? []) {
+        const why = `The request asks for ${req.requestedPermission} but carries ${f.detail}.`;
+        if (f.form === "structured") hard("a2a.hidden_tool_request", why);
+        else if (policy.agentMessages.hiddenToolText === "block") soft("a2a.hidden_tool_text", why);
+        else warn("a2a.hidden_tool_text", why);
+      }
+      if (ia?.payloadTools.length) add("tool instructions in a request", 20);
       add("agent-to-agent hop", 5 * hops);
       const tier = PERMISSION_TIERS[req.requestedPermission];
       add(`requested permission tier ${tier}`, tier * 10);
@@ -235,21 +291,51 @@ export function evaluateRules(input: RuleInputs): RuleOutput {
   if (sensitivity === "restricted") hard("sensitivity.restricted", "Restricted data is never available to machine identities.");
 
   const d = input.delegation;
+  // Sending a request passes authority on: the person must have granted what
+  // the request asks for, exactly as if the agent did it itself.
+  const delegated = req.surface === "agent_message" ? req.requestedPermission : permission;
   if (d.state === "invalid") hard("delegation.invalid", `Cannot act for ${d.userId}: ${d.reason}.`);
   if (d.state === "valid") {
     add("acting for a person", 5);
-    if (permission && !d.permissions.includes(permission)) hard("delegation.not_granted", `${d.userId} did not delegate ${permission}.`);
-    else if (permission && !roleAllows(d.userRole, permission)) hard("delegation.exceeds_user", `${d.userId}'s role does not allow ${permission}.`);
+    if (delegated && !d.permissions.includes(delegated)) hard("delegation.not_granted", `${d.userId} did not delegate ${delegated}.`);
+    else if (delegated && !roleAllows(d.userRole, delegated)) hard("delegation.exceeds_user", `${d.userId}'s role does not allow ${delegated}.`);
+    if (req.surface === "agent_message" && !d.inherited && !d.redelegable) {
+      hard("a2a.redelegation_not_allowed", `${d.userId} delegated to this agent only; passing their authority to another agent needs a re-delegable grant.`);
+    }
   }
 
   const m = input.viaMessage;
   if (m) {
     if (!m.senderActive) hard("a2a.sender_inactive", "The agent that sent this request can no longer act.");
+    if (m.chainInactive?.length) hard("a2a.chain_member_inactive", `An earlier agent in this chain can no longer act (${m.chainInactive.join(", ")}).`);
+    if (m.authorityMismatch) {
+      hard("a2a.authority_mismatch", "A relayed request carries its own authority; it cannot be exchanged for, or combined with, another person's.");
+    }
+    // A request about one resource authorizes nothing else.
+    if (m.resource && req.surface !== "agent_message" && (req.resource?.type !== m.resource.type || req.resource?.id !== m.resource.id)) {
+      hard("a2a.resource_scope", `The request only covers ${m.resource.type} ${m.resource.id}.`);
+    }
     // Acting on a message: the action must be what the message asked for.
     // Forwarding it to another agent: the forward must ask for the same thing.
     const scoped = req.surface === "agent_message" ? req.requestedPermission : permission;
     if (scoped !== m.permission) hard("a2a.message_scope", `The message only asked for ${m.permission}.`);
     add("acting on another agent's request", 10);
+  }
+
+  // ---- Hidden tool delegation, after the request ------------------------------
+  // The agent read another agent's request and now uses a tool on exactly
+  // what that request named — without citing it, so the request's narrower
+  // authority would not apply. The agent must cite the request (and stay
+  // within it) or not act on it.
+  for (const h of input.hiddenDelegation ?? []) {
+    if (h.permission !== permission) {
+      hard("a2a.hidden_tool_delegation",
+        `This call matches "${h.matched}" in a request from agent ${h.fromAgentId} (message ${h.messageId}) that only asked for ${h.permission}. ` +
+        "Tool use on another agent's request must cite it (x-legion-message-id) and stay within it.");
+    } else {
+      // A visible warning only: the request did ask for this permission.
+      warn("a2a.uncited_request", `This call matches a request from agent ${h.fromAgentId} (message ${h.messageId}); cite it with x-legion-message-id.`);
+    }
   }
 
   // ---- Prompt injection -------------------------------------------------------

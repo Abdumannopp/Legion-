@@ -14,6 +14,10 @@ export const PROTECTED_TABLES = new Set([
   "users", "tenants", "refresh_tokens", "mfa_used_counters", "sessions",
   "machine_identities", "machine_credentials", "machine_tokens", "agent_delegations",
   "principal_audit_log", "firewall_decisions", "firewall_policies", "audit_log",
+  // Everything else this module keeps: evidence, tickets, messages, state.
+  "agent_messages", "content_ingestion_log", "content_risk_acknowledgements", "tool_call_audit", "tool_call_tickets",
+  "agent_behavior_profiles", "agent_behavior_state", "agent_behavior_events", "security_events", "security_notifications",
+  "agent_interactions", "agent_trust_graph_snapshots",
 ]);
 
 const permission = z.enum(ALL_PERMISSIONS as unknown as [Permission, ...Permission[]]);
@@ -93,7 +97,20 @@ export const policySchema = z.strictObject({
     .default({ servers: {} }),
   agentMessages: z
     .strictObject({
+      /** Agents a request may pass through (A→B is 1 hop, A→B→C is 2). */
       maxDepth: z.number().int().min(1).max(4).default(2),
+      /** Requests one interaction (a root request and everything forwarded from it) may produce. */
+      maxMessagesPerInteraction: z.number().int().min(1).max(100).default(10),
+      /** Agents one received request may be forwarded to. */
+      maxFanOut: z.number().int().min(1).max(20).default(3),
+      /**
+       * After an agent reads a request, how long its tool calls that match the
+       * request's content but do not cite it are treated as hidden delegation.
+       * 0 disables the correlation.
+       */
+      influenceWindowSeconds: z.number().int().min(0).max(86_400).default(900),
+      /** Tool instructions hidden in a request's text: block, or allow with a warning. */
+      hiddenToolText: z.enum(["block", "warn"]).default("block"),
       allow: z
         .array(z.strictObject({
           from: z.uuid(),
@@ -103,7 +120,7 @@ export const policySchema = z.strictObject({
         .max(500)
         .default([]),
     })
-    .default({ maxDepth: 2, allow: [] }),
+    .default({ maxDepth: 2, maxMessagesPerInteraction: 10, maxFanOut: 3, influenceWindowSeconds: 900, hiddenToolText: "block", allow: [] }),
   /** Tool gateway (src/tools). Everything closed until opened here. */
   toolSecurity: z
     .strictObject({

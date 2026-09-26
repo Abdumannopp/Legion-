@@ -49,7 +49,7 @@ export interface TestApp {
 
 export async function resetDb(pool: pg.Pool) {
   await pool.query(`
-    DROP TABLE IF EXISTS security_events, security_notifications,
+    DROP TABLE IF EXISTS agent_interactions, agent_trust_graph_snapshots, security_events, security_notifications,
       agent_behavior_profiles, agent_behavior_state, agent_behavior_events,
       tool_call_audit, tool_call_tickets, content_ingestion_log, content_risk_acknowledgements,
       agent_messages, agent_delegations, firewall_decisions, firewall_policies,
@@ -87,6 +87,7 @@ export async function makeApp(opts: { pool?: pg.Pool; logs?: string[]; extra?: P
   app.use("/tools", identity.toolsApi);
   app.use("/behavior", identity.behaviorApi);
   app.use("/kill-switch", identity.killSwitchApi);
+  app.use("/a2a", identity.a2aApi);
 
   // Stand-ins for existing human routes: they keep their own auth and see
   // exactly what they saw before (plus req.principal, which they ignore).

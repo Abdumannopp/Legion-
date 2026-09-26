@@ -228,7 +228,9 @@ export class IdentityStore {
       "UPDATE tool_call_tickets SET revoked_at = now() WHERE identity_id = $1 AND revoked_at IS NULL AND consumed_at IS NULL AND expires_at > now()",
     );
     out.messages = await n(
-      "UPDATE agent_messages SET withdrawn_at = now(), expires_at = now() WHERE from_identity = $1 AND withdrawn_at IS NULL AND expires_at > now()",
+      // Its own requests, and everything forwarded downstream of it.
+      `UPDATE agent_messages SET withdrawn_at = now(), expires_at = now()
+        WHERE (from_identity = $1 OR $1::text = ANY(chain)) AND withdrawn_at IS NULL AND expires_at > now()`,
     );
     if (opts.revokeCredentials) {
       out.credentials = await n("UPDATE machine_credentials SET revoked_at = now() WHERE identity_id = $1 AND revoked_at IS NULL");

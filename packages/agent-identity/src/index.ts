@@ -16,6 +16,9 @@ import { BehaviorMonitor, type BehaviorChange } from "./behavior/monitor.js";
 import { behaviorAdminRouter } from "./behavior/routes.js";
 import { KillSwitch, type AdminNotice, type SecurityEventRow } from "./killswitch/service.js";
 import { killSwitchRouter } from "./killswitch/routes.js";
+import { InteractionLog } from "./a2a/log.js";
+import { TrustGraphService } from "./a2a/graph.js";
+import { a2aAdminRouter } from "./a2a/routes.js";
 import { Router } from "express";
 import { agentRouter } from "./routes/agent.js";
 import { auditRouter, managementRouter } from "./routes/management.js";
@@ -51,6 +54,10 @@ export { assess, isAttackIndicator, isUnsafeAction } from "./behavior/assess.js"
 export { destinationKey, ATTACK_INDICATORS } from "./behavior/keys.js";
 export { KillSwitch, severityOf, type AdminNotice, type Compromise, type KillSwitchResult, type NotificationStatus, type SecurityEventKind, type SecurityEventRow, type Severity } from "./killswitch/service.js";
 export { ToolAbortedError } from "./tools/gateway.js";
+export { InteractionLog, type InteractionKind, type InteractionRow } from "./a2a/log.js";
+export { TrustGraphService, VIOLATION_RULES, hashGraph, type TrustGraph, type GraphNode, type GraphEdge, type GraphFinding, type EdgeTrust } from "./a2a/graph.js";
+export { findToolRequests, matchRecentRequests, targetTokens } from "./a2a/hidden.js";
+export type { SentRequest } from "./firewall/engine.js";
 export type { CutOff } from "./store.js";
 export { levelOf, LEVEL_THRESHOLDS, LEVEL_ORDER, type BehaviorLevel, type Assessment, type BehaviorProfile, type Signal } from "./behavior/types.js";
 
@@ -103,6 +110,7 @@ export interface AgentIdentityOptions {
  *   app.use("/tools", identity.toolsApi);        // people: tool audit log
  *   app.use("/behavior", identity.behaviorApi);  // people: agent behaviour, review
  *   app.use("/kill-switch", identity.killSwitchApi); // admins: emergency stop, security events
+ *   app.use("/a2a", identity.a2aApi);            // people: agent trust graph, interaction chains
  *   app.get("/agent/v1/alerts", identity.guards.requirePermission("alerts:read"), handler);
  */
 export function createAgentIdentity(opts: AgentIdentityOptions) {
@@ -113,6 +121,7 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
   const decisions = new DecisionLog(opts.pool);
   const delegations = new DelegationStore(opts.pool);
   const contentGuard = new PromptInjectionGuard(opts.pool, log);
+  const interactions = new InteractionLog(opts.pool);
   const firewall = new AgentFirewall({
     pool: opts.pool,
     store,
@@ -124,6 +133,7 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
     onDecision: opts.onFirewallDecision,
     dnsLookup: opts.dnsLookup,
     contentGuard,
+    interactions,
     log,
   });
   const guards = createGuards(audit, log, firewall);
@@ -140,9 +150,10 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
     const r = await killSwitch.activate({ tenantId, identityIds: [identityId], reason, compromise: "suspected", actor, kind: "agent_auto_suspended" });
     return r.affected.length > 0;
   });
+  const trustGraph = new TrustGraphService({ pool: opts.pool, policies, interactions });
   const agentBasePath = opts.agentBasePath ?? "/agent/v1";
   const sampler = new FailureSampler();
-  const deps = { store, audit, host: opts.host, guards, sampler, log, firewall, policies, decisions, delegations, contentGuard, tools, behavior, killSwitch };
+  const deps = { store, audit, host: opts.host, guards, sampler, log, firewall, policies, decisions, delegations, contentGuard, tools, behavior, killSwitch, interactions, trustGraph };
   const agentExtras = Router();
   agentExtras.use(agentMessageRouter(deps));
   agentExtras.use(contentInspectRouter(deps));
@@ -191,6 +202,7 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
     toolsApi: toolAdminRouter(deps),
     behaviorApi: behaviorAdminRouter(deps),
     killSwitchApi: killSwitchRouter(deps),
+    a2aApi: a2aAdminRouter(deps),
     guards,
     audit,
     firewall,
@@ -202,6 +214,10 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
     behavior,
     /** Emergency stop for agents. Run killSwitch.deliverPending() every minute to retry admin notices. */
     killSwitch,
+    /** Agent-to-agent interaction chain (append-only, hash-chained). */
+    interactions,
+    /** The Agent Trust Graph: build, snapshot, trace interactions. */
+    trustGraph,
     /** Call periodically (e.g. hourly) to drop long-expired token and tool-ticket rows. */
     purgeExpiredTokens: async () => (await store.purgeExpiredTokens()) + (await tools.purgeExpiredTickets()),
   };

@@ -437,6 +437,90 @@ CREATE TABLE IF NOT EXISTS security_notifications (
 );
 CREATE INDEX IF NOT EXISTS security_notifications_due ON security_notifications (next_attempt_at) WHERE status IN ('pending', 'failed');
 CREATE INDEX IF NOT EXISTS security_notifications_tenant ON security_notifications (tenant_id, created_at DESC);
+
+-- ---- Agent-to-agent trust ----------------------------------------------------------
+
+-- Every relayed request carries its interaction (the root request's id), its
+-- parent, its hop, the authority it runs under, and optionally the one
+-- resource it is about.
+ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS interaction_id uuid;
+ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS parent_message_id uuid;
+ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS hop integer NOT NULL DEFAULT 1;
+ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS authority jsonb;
+ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS resource_type text;
+ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS resource_id text;
+ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS read_at timestamptz;
+CREATE INDEX IF NOT EXISTS agent_messages_interaction ON agent_messages (interaction_id);
+CREATE INDEX IF NOT EXISTS agent_messages_parent ON agent_messages (parent_message_id);
+CREATE INDEX IF NOT EXISTS agent_messages_read ON agent_messages (tenant_id, to_identity, read_at DESC) WHERE read_at IS NOT NULL;
+
+-- A person may allow an agent to pass their authority on to other agents.
+ALTER TABLE agent_delegations ADD COLUMN IF NOT EXISTS redelegable boolean NOT NULL DEFAULT false;
+
+-- The interaction chain, for investigation: every request sent or refused,
+-- read, acted on or refused, and every hidden delegation stopped.
+-- Append-only and hash-chained per tenant.
+CREATE TABLE IF NOT EXISTS agent_interactions (
+  seq                bigserial PRIMARY KEY,
+  chain_key          text NOT NULL,
+  event_id           uuid NOT NULL UNIQUE,
+  occurred_at        timestamptz NOT NULL,
+  tenant_id          text NOT NULL,
+  kind               text NOT NULL CHECK (kind IN ('request_sent', 'request_blocked', 'request_read', 'acted', 'act_blocked', 'hidden_delegation_blocked')),
+  interaction_id     uuid,
+  message_id         uuid,
+  parent_message_id  uuid,
+  hop                integer NOT NULL,
+  source_agent       text NOT NULL,
+  destination_agent  text NOT NULL,
+  actor_id           text NOT NULL,
+  action             text NOT NULL,
+  requested_permission text,
+  resource           text,
+  authority          jsonb NOT NULL,
+  agent_chain        text[] NOT NULL,
+  decision           text NOT NULL,
+  decision_id        uuid,
+  rule_ids           text[] NOT NULL,
+  prev_hash          text NOT NULL,
+  hash               text NOT NULL UNIQUE
+);
+CREATE INDEX IF NOT EXISTS agent_interactions_chain ON agent_interactions (chain_key, seq);
+CREATE INDEX IF NOT EXISTS agent_interactions_interaction ON agent_interactions (tenant_id, interaction_id, seq);
+CREATE INDEX IF NOT EXISTS agent_interactions_edges ON agent_interactions (tenant_id, source_agent, destination_agent);
+DROP TRIGGER IF EXISTS agent_interactions_no_update ON agent_interactions;
+CREATE TRIGGER agent_interactions_no_update
+  BEFORE UPDATE OR DELETE ON agent_interactions
+  FOR EACH ROW EXECUTE FUNCTION principal_audit_log_append_only();
+DROP TRIGGER IF EXISTS agent_interactions_no_truncate ON agent_interactions;
+CREATE TRIGGER agent_interactions_no_truncate
+  BEFORE TRUNCATE ON agent_interactions
+  FOR EACH STATEMENT EXECUTE FUNCTION principal_audit_log_append_only();
+
+-- Point-in-time copies of the trust graph with their hash, so what the graph
+-- showed on a given day can be proven later. Append-only, hash-chained.
+CREATE TABLE IF NOT EXISTS agent_trust_graph_snapshots (
+  seq          bigserial PRIMARY KEY,
+  chain_key    text NOT NULL,
+  snapshot_id  uuid NOT NULL UNIQUE,
+  occurred_at  timestamptz NOT NULL,
+  tenant_id    text NOT NULL,
+  taken_by     text NOT NULL,
+  note         text,
+  graph_hash   text NOT NULL,
+  graph        jsonb NOT NULL,
+  prev_hash    text NOT NULL,
+  hash         text NOT NULL UNIQUE
+);
+CREATE INDEX IF NOT EXISTS agent_trust_graph_snapshots_chain ON agent_trust_graph_snapshots (chain_key, seq);
+DROP TRIGGER IF EXISTS agent_trust_graph_snapshots_no_update ON agent_trust_graph_snapshots;
+CREATE TRIGGER agent_trust_graph_snapshots_no_update
+  BEFORE UPDATE OR DELETE ON agent_trust_graph_snapshots
+  FOR EACH ROW EXECUTE FUNCTION principal_audit_log_append_only();
+DROP TRIGGER IF EXISTS agent_trust_graph_snapshots_no_truncate ON agent_trust_graph_snapshots;
+CREATE TRIGGER agent_trust_graph_snapshots_no_truncate
+  BEFORE TRUNCATE ON agent_trust_graph_snapshots
+  FOR EACH STATEMENT EXECUTE FUNCTION principal_audit_log_append_only();
 `;
 
 /** Constant advisory-lock key, so concurrently starting instances migrate one at a time. */

@@ -18,12 +18,17 @@ import { evaluateRules, scoreOf, type RuleInputs } from "./rules.js";
 import { hashToolDefinition } from "./scan.js";
 import type { PromptInjectionGuard } from "../prompt-guard/guard.js";
 import type { BehaviorMonitor } from "../behavior/monitor.js";
+import { findToolRequests, matchRecentRequests, type HiddenDelegationMatch } from "../a2a/hidden.js";
+import type { InteractionLog, InteractionRow } from "../a2a/log.js";
+import { analyzeToolCall } from "../tools/analyzers.js";
 import type {
   ActionRequest,
   Advisor,
+  Authority,
   Decision,
   FirewallContext,
   FirewallDecision,
+  RelayedMessage,
   RuleHit,
   Sensitivity,
 } from "./types.js";
@@ -53,8 +58,48 @@ export interface FirewallOptions {
   contentGuard?: PromptInjectionGuard;
   /** Runtime behaviour classification per agent. Set after construction (setBehaviorMonitor). */
   behavior?: BehaviorMonitor;
+  /** The agent-to-agent interaction chain. Without it, interactions are not recorded. */
+  interactions?: InteractionLog;
   log: (msg: string, err?: unknown) => void;
 }
+
+/** What a sent request is, as the sender and every later reader see it. */
+export interface SentRequest {
+  messageId: string;
+  interactionId: string;
+  parentMessageId: string | null;
+  hop: number;
+  sourceAgent: string;
+  destinationAgent: string;
+  tenantId: string;
+  requestedAction: { permission: Permission; resource: { type: string; id: string } | null };
+  authority: Authority;
+  chain: string[];
+  expiresAt: string;
+}
+
+const RELAYED_COLUMNS = `id, from_identity, to_identity, requested_permission, chain, interaction_id, parent_message_id, hop, authority,
+  resource_type, resource_id, expires_at`;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function relayedFromRow(r: any, permission: Permission): RelayedMessage {
+  return {
+    id: r.id,
+    fromAgentId: r.from_identity,
+    permission,
+    chain: r.chain ?? [],
+    interactionId: r.interaction_id ?? r.id,
+    hop: r.hop ?? 1,
+    // Rows written before authority was recorded ran on the sender's own grants.
+    authority: r.authority ?? { kind: "agent", agentId: r.from_identity, ownerUserId: "" },
+    resource: r.resource_type ? { type: r.resource_type, id: r.resource_id ?? "" } : null,
+    expiresAt: new Date(r.expires_at).toISOString(),
+  };
+}
+
+const HIDDEN_DELEGATION_SURFACES = new Set(["tool_call", "mcp_tool", "tool", "egress"]);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const resourceLabel = (r: { type: string; id?: string } | null | undefined) => (r ? `${r.type}:${r.id ?? ""}` : null);
 
 export interface EgressResponse {
   status: number;
@@ -112,7 +157,9 @@ export class AgentFirewall {
         policy,
         delegation: await this.resolveDelegation(ctx, req),
         recipient: req.surface === "agent_message" ? await this.resolveRecipient(p, req.toAgentId) : undefined,
-        viaMessage: ctx.viaMessage ? await this.resolveViaMessage(p, ctx.viaMessage) : undefined,
+        viaMessage: ctx.viaMessage ? await this.resolveViaMessage(p, ctx) : undefined,
+        a2a: req.surface === "agent_message" ? await this.resolveA2a(ctx, req, policy) : undefined,
+        hiddenDelegation: await this.hiddenDelegation(ctx, req, policy.agentMessages.influenceWindowSeconds),
         chain: ctx.chain ?? [],
         actionsLastMinute: this.velocity.record(p.id),
         contentRisk: await this.contentRisk(p, policy.promptInjection.suspiciousWindowSeconds),
@@ -180,10 +227,45 @@ export class AgentFirewall {
       return this.failClosed(decisionId, req, "firewall.log_unavailable", "The decision could not be recorded.", d);
     }
 
+    // Acting on another agent's request (or refusing hidden delegation) is
+    // part of the interaction chain. If it cannot be recorded, it does not happen.
+    if (this.o.interactions && req.surface !== "agent_message" && (ctx.viaMessage || inputs.hiddenDelegation?.length)) {
+      try {
+        await this.recordAction(ctx, req, d, inputs.hiddenDelegation ?? []);
+      } catch (err) {
+        this.o.log("agent interaction could not be recorded; blocking", err);
+        if (d.decision !== "BLOCK") return this.failClosed(decisionId, req, "a2a.log_unavailable", "The agent interaction could not be recorded.", d);
+      }
+    }
+
     if (d.decision !== "ALLOW" && this.o.onDecision) {
       Promise.resolve(this.o.onDecision(ctx, req, d)).catch((err) => this.o.log("onDecision hook failed", err));
     }
     return d;
+  }
+
+  private async recordAction(ctx: FirewallContext, req: ActionRequest, d: FirewallDecision, hidden: HiddenDelegationMatch[]) {
+    const p = ctx.principal;
+    const ruleIds = d.hits.map((h) => h.id);
+    const via = ctx.viaMessage;
+    if (via) {
+      await this.o.interactions!.record({
+        tenantId: p.tenantId, kind: d.decision === "BLOCK" ? "act_blocked" : "acted", interactionId: via.interactionId,
+        messageId: via.id, parentMessageId: null, hop: via.hop, sourceAgent: via.fromAgentId, destinationAgent: p.id, actorId: p.id,
+        action: req.action, requestedPermission: via.permission, resource: resourceLabel(req.resource),
+        authority: via.authority, agentChain: ctx.chain ?? [], decision: d.decision, decisionId: d.decisionId, ruleIds,
+      });
+    }
+    if (ruleIds.includes("a2a.hidden_tool_delegation")) {
+      for (const h of hidden.filter((x) => x.permission !== req.permission)) {
+        await this.o.interactions!.record({
+          tenantId: p.tenantId, kind: "hidden_delegation_blocked", interactionId: h.interactionId, messageId: h.messageId,
+          parentMessageId: null, hop: h.hop, sourceAgent: h.fromAgentId, destinationAgent: p.id, actorId: p.id,
+          action: req.action, requestedPermission: h.permission, resource: resourceLabel(req.resource) ?? `matched:${h.matched}`,
+          authority: h.authority, agentChain: [h.fromAgentId], decision: d.decision, decisionId: d.decisionId, ruleIds,
+        });
+      }
+    }
   }
 
   private compose(d: FirewallDecision): void {
@@ -272,33 +354,111 @@ export class AgentFirewall {
   }
 
   private async resolveDelegation(ctx: FirewallContext, req: ActionRequest): Promise<RuleInputs["delegation"]> {
+    const p = ctx.principal;
+    // On a relayed request, the authority is the request's: a person's grant
+    // travels with it (checked again now — revoked or expired means void);
+    // the agent cannot swap in its own.
+    const inherited = ctx.viaMessage?.authority;
+    if (inherited?.kind === "delegation") {
+      const user = await this.o.host.getUser(p.tenantId, inherited.userId);
+      if (!user || user.status !== "active" || user.tenantId !== p.tenantId) {
+        return { state: "invalid", userId: inherited.userId, reason: "the person whose authority this request carries is no longer an active user" };
+      }
+      const g = await this.o.delegations.activeById(p.tenantId, inherited.grantId);
+      if (!g) return { state: "invalid", userId: inherited.userId, reason: "the delegation this request carries was revoked or has expired" };
+      if (!g.redelegable) return { state: "invalid", userId: inherited.userId, reason: "the delegation this request carries cannot be passed on" };
+      return { state: "valid", userId: inherited.userId, grantId: g.id, userRole: user.role, permissions: g.permissions, redelegable: true, inherited: true };
+    }
     const userId = ctx.onBehalfOf;
     if (!userId) return { state: "none" };
-    const p = ctx.principal;
     const user = await this.o.host.getUser(p.tenantId, userId);
     if (!user || user.status !== "active" || user.tenantId !== p.tenantId) {
       return { state: "invalid", userId, reason: "not an active user of this organisation" };
     }
     const grants = await this.o.delegations.active(p.tenantId, p.id, userId);
     if (!grants.length) return { state: "invalid", userId, reason: "no active delegation from this person to this agent" };
-    const wanted = req.permission;
-    const grant = grants.find((g) => wanted && g.permissions.includes(wanted)) ?? grants[0]!;
-    return { state: "valid", userId, grantId: grant.id, userRole: user.role, permissions: grant.permissions };
+    const wanted = req.surface === "agent_message" ? req.requestedPermission : req.permission;
+    const covers = grants.filter((g) => wanted && g.permissions.includes(wanted));
+    const grant = (req.surface === "agent_message" ? covers.find((g) => g.redelegable) : undefined) ?? covers[0] ?? grants[0]!;
+    return { state: "valid", userId, grantId: grant.id, userRole: user.role, permissions: grant.permissions, redelegable: grant.redelegable, inherited: false };
   }
 
   private async resolveRecipient(sender: MachinePrincipal, toAgentId: string): Promise<RuleInputs["recipient"]> {
     if (!/^[0-9a-f-]{36}$/i.test(toAgentId)) return { state: "missing" };
     const r = await this.o.store.get(sender.tenantId, "ai_agent", toAgentId);
-    if (!r) return { state: "missing" };
+    if (!r) {
+      // Recorded as what it is — an attempt to reach another organisation —
+      // so investigators see it; the sender learns nothing about that agent.
+      const elsewhere = await this.o.pool.query("SELECT 1 FROM machine_identities WHERE id = $1 AND tenant_id <> $2", [toAgentId, sender.tenantId]);
+      return elsewhere.rowCount ? { state: "foreign_tenant" } : { state: "missing" };
+    }
     const block = await identityBlockReason(r, this.o.host);
     if (block.reason !== null) return { state: "blocked", reason: block.reason };
     return { state: "ok", id: r.id, effectivePermissions: effectivePermissions(r.permissions, block.ownerRole) };
   }
 
-  private async resolveViaMessage(p: MachinePrincipal, m: NonNullable<FirewallContext["viaMessage"]>): Promise<RuleInputs["viaMessage"]> {
+  private async resolveViaMessage(p: MachinePrincipal, ctx: FirewallContext): Promise<RuleInputs["viaMessage"]> {
+    const m = ctx.viaMessage!;
     const sender = await this.o.store.get(p.tenantId, "ai_agent", m.fromAgentId);
     const senderActive = !!sender && (await identityBlockReason(sender, this.o.host)).reason === null;
-    return { id: m.id, fromAgentId: m.fromAgentId, permission: m.permission, senderActive };
+    // Every agent earlier in the chain must still be able to act: stopping
+    // one voids everything downstream of it.
+    const upstream = m.chain.filter((id) => id !== m.fromAgentId);
+    let chainInactive: string[] = [];
+    if (upstream.length) {
+      const ok = upstream.filter((id) => UUID_RE.test(id));
+      const res = ok.length
+        ? await this.o.pool.query(
+            `SELECT id::text FROM machine_identities WHERE tenant_id = $1 AND id = ANY($2::uuid[])
+               AND status = 'active' AND (expires_at IS NULL OR expires_at > now())`,
+            [p.tenantId, ok],
+          )
+        : { rows: [] };
+      const active = new Set(res.rows.map((r: { id: string }) => r.id));
+      chainInactive = upstream.filter((id) => !active.has(id));
+    }
+    const authorityMismatch = ctx.onBehalfOf !== undefined &&
+      (m.authority.kind !== "delegation" || m.authority.userId !== ctx.onBehalfOf);
+    return { id: m.id, fromAgentId: m.fromAgentId, permission: m.permission, senderActive, chainInactive, resource: m.resource, authorityMismatch };
+  }
+
+  private async resolveA2a(ctx: FirewallContext, req: ActionRequest, policy: VersionedPolicy["policy"]): Promise<RuleInputs["a2a"]> {
+    if (req.surface !== "agent_message") return undefined;
+    const via = ctx.viaMessage;
+    let interactionMessages = 0;
+    let fanOut = 0;
+    if (via) {
+      const r = await this.o.pool.query(
+        `SELECT count(*) FILTER (WHERE interaction_id = $2)::int AS total, count(*) FILTER (WHERE parent_message_id = $3)::int AS fan
+           FROM agent_messages WHERE tenant_id = $1 AND (interaction_id = $2 OR parent_message_id = $3)`,
+        [ctx.principal.tenantId, via.interactionId, via.id],
+      );
+      interactionMessages = r.rows[0].total;
+      fanOut = r.rows[0].fan;
+    }
+    const payloadTools = req.payload === undefined || req.payload === null
+      ? []
+      : findToolRequests(req.payload, req.requestedPermission, (call) => analyzeToolCall(call, { principal: ctx.principal, policy }).permission);
+    return { interactionMessages, fanOut, payloadTools };
+  }
+
+  /** Requests this agent read recently whose content names what this call targets. */
+  private async hiddenDelegation(ctx: FirewallContext, req: ActionRequest, windowSeconds: number): Promise<HiddenDelegationMatch[] | undefined> {
+    if (ctx.viaMessage || !windowSeconds || !HIDDEN_DELEGATION_SURFACES.has(req.surface)) return undefined;
+    const res = await this.o.pool.query(
+      `SELECT ${RELAYED_COLUMNS}, payload FROM agent_messages
+        WHERE tenant_id = $1 AND to_identity = $2 AND read_at > now() - make_interval(secs => $3)
+        ORDER BY read_at DESC LIMIT 20`,
+      [ctx.principal.tenantId, ctx.principal.id, windowSeconds],
+    );
+    const recent = res.rows.flatMap((r) => {
+      const permission = asPermission(r.requested_permission);
+      if (!permission) return [];
+      const m = relayedFromRow(r, permission);
+      const text = typeof r.payload === "string" ? r.payload : JSON.stringify(r.payload ?? "");
+      return [{ id: m.id, fromAgentId: m.fromAgentId, permission, text, interactionId: m.interactionId, hop: m.hop, authority: m.authority }];
+    });
+    return matchRecentRequests(req, recent);
   }
 
   /** Evaluate, then run `fn` only if the firewall did not block. */
@@ -506,7 +666,7 @@ export class AgentFirewall {
     if (messageId !== undefined) {
       const m = /^[0-9a-f-]{36}$/i.test(messageId)
         ? (await this.o.pool.query(
-            `SELECT id, from_identity, requested_permission, chain FROM agent_messages
+            `SELECT ${RELAYED_COLUMNS} FROM agent_messages
               WHERE id = $1 AND tenant_id = $2 AND to_identity = $3 AND expires_at > now() AND withdrawn_at IS NULL`,
             [messageId, p.tenantId, p.id],
           )).rows[0]
@@ -515,7 +675,7 @@ export class AgentFirewall {
       if (!m || !permission) {
         extraHits.push({ id: "a2a.message_invalid", effect: "BLOCK", hard: true, reason: "No such unexpired message addressed to this agent." });
       } else {
-        ctx.viaMessage = { id: m.id, fromAgentId: m.from_identity, permission, chain: m.chain };
+        ctx.viaMessage = relayedFromRow(m, permission);
         ctx.chain = [...m.chain, m.from_identity];
       }
     }
@@ -525,15 +685,18 @@ export class AgentFirewall {
   /** Agent-to-agent: evaluate, then store the message for the recipient. */
   async sendMessage(
     ctx: FirewallContext,
-    msg: { toAgentId: string; requestedPermission: Permission; payload: unknown },
+    msg: { toAgentId: string; requestedPermission: Permission; payload: unknown; resource?: { type: string; id: string }; tenantId?: string },
     extraHits: RuleHit[] = [],
-  ): Promise<{ decision: FirewallDecision; messageId: string | null }> {
-    const d = await this.evaluate(ctx, {
+  ): Promise<{ decision: FirewallDecision; messageId: string | null; request: SentRequest | null }> {
+    const p = ctx.principal;
+    let d = await this.evaluate(ctx, {
       surface: "agent_message",
       action: "agents:message",
       permission: null,
       toAgentId: msg.toAgentId,
       requestedPermission: msg.requestedPermission,
+      requestResource: msg.resource,
+      claimedTenantId: msg.tenantId,
       payload: msg.payload,
     }, extraHits);
     // An agent emitting injection-like payloads may itself be compromised:
@@ -541,17 +704,65 @@ export class AgentFirewall {
     if (this.o.contentGuard && msg.payload !== undefined && msg.payload !== null) {
       const content = typeof msg.payload === "string" ? msg.payload : JSON.stringify(msg.payload);
       await this.o.contentGuard.ingest(
-        { tenantId: ctx.principal.tenantId, principal: ctx.principal, requestId: ctx.requestId },
+        { tenantId: p.tenantId, principal: p, requestId: ctx.requestId },
         "agent_message", content, { sourceId: `to:${msg.toAgentId}` },
       );
     }
-    if (d.decision === "BLOCK") return { decision: d, messageId: null };
-    const res = await this.o.pool.query(
-      `INSERT INTO agent_messages (tenant_id, from_identity, to_identity, requested_permission, payload, chain, decision_id, expires_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7, now() + interval '1 hour') RETURNING id`,
-      [ctx.principal.tenantId, ctx.principal.id, msg.toAgentId, msg.requestedPermission, JSON.stringify(msg.payload ?? null), ctx.chain ?? [], d.decisionId],
-    );
-    const messageId: string = res.rows[0].id;
+
+    // Whose authority the request carries: the relayed request's (unchanged
+    // down the chain), a person's re-delegable grant, or the sender's own.
+    const via = ctx.viaMessage;
+    const authority: Authority = via
+      ? via.authority
+      : d.delegation
+        ? { kind: "delegation", userId: d.delegation.userId, grantId: d.delegation.grantId, agentId: p.id }
+        : { kind: "agent", agentId: p.id, ownerUserId: p.ownerUserId };
+    const step = {
+      tenantId: p.tenantId, parentMessageId: via?.id ?? null, hop: (ctx.chain?.length ?? 0) + 1,
+      sourceAgent: p.id, destinationAgent: msg.toAgentId.slice(0, 64), actorId: p.id, action: "agents:message",
+      requestedPermission: msg.requestedPermission, resource: resourceLabel(msg.resource), authority,
+      agentChain: ctx.chain ?? [], decisionId: d.decisionId, ruleIds: d.hits.map((h) => h.id),
+    };
+
+    if (d.decision === "BLOCK") {
+      await this.o.interactions?.record({ ...step, kind: "request_blocked", interactionId: via?.interactionId ?? null, messageId: null, decision: d.decision })
+        .catch((err) => this.o.log("agent interaction write failed for a refused request", err));
+      return { decision: d, messageId: null, request: null };
+    }
+
+    // Stored and recorded together: a request that is not in the
+    // interaction chain is not delivered.
+    const messageId = randomUUID();
+    const interactionId = via?.interactionId ?? messageId;
+    let expiresAt: string;
+    const c = await this.o.pool.connect();
+    try {
+      await c.query("BEGIN");
+      const res = await c.query(
+        `INSERT INTO agent_messages (id, tenant_id, from_identity, to_identity, requested_permission, payload, chain, decision_id, expires_at,
+                                     interaction_id, parent_message_id, hop, authority, resource_type, resource_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8, LEAST(now() + interval '1 hour', COALESCE($9::timestamptz, 'infinity')), $10,$11,$12,$13,$14,$15)
+         RETURNING expires_at`,
+        [messageId, p.tenantId, p.id, msg.toAgentId, msg.requestedPermission, JSON.stringify(msg.payload ?? null), ctx.chain ?? [],
+          d.decisionId, via?.expiresAt ?? null, interactionId, via?.id ?? null, step.hop, JSON.stringify(authority),
+          msg.resource?.type ?? null, msg.resource?.id ?? null],
+      );
+      expiresAt = new Date(res.rows[0].expires_at).toISOString();
+      await this.o.interactions?.record({ ...step, kind: "request_sent", interactionId, messageId, decision: d.decision }, c);
+      await c.query("COMMIT");
+    } catch (err) {
+      await c.query("ROLLBACK").catch(() => {});
+      this.o.log("agent request could not be stored and recorded; not delivered", err);
+      d = this.failClosed(d.decisionId, { surface: "agent_message", action: "agents:message", permission: null, toAgentId: msg.toAgentId, requestedPermission: msg.requestedPermission }, "a2a.log_unavailable", "The request could not be recorded.", d);
+      return { decision: d, messageId: null, request: null };
+    } finally {
+      c.release();
+    }
+    const request: SentRequest = {
+      messageId, interactionId, parentMessageId: via?.id ?? null, hop: step.hop, sourceAgent: p.id, destinationAgent: msg.toAgentId,
+      tenantId: p.tenantId, requestedAction: { permission: msg.requestedPermission, resource: msg.resource ?? null },
+      authority, chain: ctx.chain ?? [], expiresAt,
+    };
     // A flagged payload that was still delivered (suspicious, or monitor
     // mode) is external content reaching the recipient: record it against
     // the recipient once, at delivery — not on every inbox read.
@@ -571,13 +782,40 @@ export class AgentFirewall {
         }
       }
     }
-    return { decision: d, messageId };
+    return { decision: d, messageId, request };
   }
 
   async inbox(p: MachinePrincipal) {
+    // First read of each request is part of the interaction chain: from now
+    // on, uncited tool use matching it is hidden delegation.
+    const c = await this.o.pool.connect();
+    try {
+      await c.query("BEGIN");
+      const fresh = await c.query(
+        `UPDATE agent_messages SET read_at = now()
+          WHERE tenant_id = $1 AND to_identity = $2 AND read_at IS NULL AND expires_at > now() AND withdrawn_at IS NULL
+          RETURNING ${RELAYED_COLUMNS}`,
+        [p.tenantId, p.id],
+      );
+      for (const r of fresh.rows) {
+        const m = relayedFromRow(r, r.requested_permission);
+        await this.o.interactions?.record({
+          tenantId: p.tenantId, kind: "request_read", interactionId: m.interactionId, messageId: m.id, parentMessageId: r.parent_message_id,
+          hop: m.hop, sourceAgent: m.fromAgentId, destinationAgent: p.id, actorId: p.id, action: "agents:read_request",
+          requestedPermission: m.permission, resource: resourceLabel(m.resource), authority: m.authority,
+          agentChain: m.chain, decision: "ALLOW", decisionId: null, ruleIds: [],
+        }, c);
+      }
+      await c.query("COMMIT");
+    } catch (err) {
+      await c.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      c.release();
+    }
     const res = await this.o.pool.query(
-      `SELECT id, from_identity, requested_permission, payload, chain, decision_id, created_at, expires_at
-         FROM agent_messages WHERE tenant_id = $1 AND to_identity = $2 AND expires_at > now() AND withdrawn_at IS NULL
+      `SELECT ${RELAYED_COLUMNS}, payload, decision_id, created_at FROM agent_messages
+        WHERE tenant_id = $1 AND to_identity = $2 AND expires_at > now() AND withdrawn_at IS NULL
         ORDER BY created_at DESC LIMIT 100`,
       [p.tenantId, p.id],
     );
@@ -587,10 +825,19 @@ export class AgentFirewall {
       // Another agent's words are external content to this one: marked
       // untrusted, with their classification (recorded once, at delivery).
       const c = this.o.contentGuard?.classify({ source: "agent_message", content });
+      const m = relayedFromRow(r, r.requested_permission);
       out.push({
         id: r.id,
         fromAgentId: r.from_identity,
         requestedPermission: r.requested_permission,
+        // The five facts every request carries.
+        source: m.fromAgentId,
+        destination: p.id,
+        tenantId: p.tenantId,
+        requestedAction: { permission: m.permission, resource: m.resource },
+        authority: m.authority,
+        interactionId: m.interactionId,
+        hop: m.hop,
         payload: r.payload,
         trust: "untrusted" as const,
         contentRisk: c ? { verdict: c.verdict, riskScore: c.riskScore, findings: c.findings.map((f) => f.id) } : null,
