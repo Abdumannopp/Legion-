@@ -929,3 +929,20 @@ npm run check && npm test && npm run build
 
 Tests use `TEST_DATABASE_URL` (default above) and drop the module's own
 tables before each test. Point them at a dedicated database.
+
+### Security assessment
+
+`assessment/` holds a separate, adversarial test suite: 56 live attack
+scenarios across prompt injection, tool abuse, permissions, secrets,
+tenancy, impersonation, agent-to-agent abuse, behaviour, compromise,
+exfiltration, kill-switch bypass, and traditional human-driven attacks.
+Each scenario records what actually happened rather than asserting an
+expected outcome, so a failure to defend is a finding, not a red test run.
+
+```bash
+npx vitest run --config assessment/vitest.config.ts
+```
+
+Results: `assessment/results.jsonl` (machine-readable, one row per
+scenario). Full write-up with attack path, evidence and recommended fixes:
+`../../AI-AGENT-SECURITY-ASSESSMENT-2026-09.md`.
