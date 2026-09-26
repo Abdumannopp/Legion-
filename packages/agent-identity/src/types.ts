@@ -1,5 +1,6 @@
 import type { Request } from "express";
 import type { Permission } from "./permissions.js";
+import type { FirewallDecision } from "./firewall/types.js";
 
 /**
  * Who is behind a request. Every request is exactly one of these; nothing is
@@ -90,6 +91,8 @@ declare global {
     interface Request {
       principal?: Principal;
       requestId?: string;
+      /** Set once the agent firewall has decided on this request. */
+      firewallDecision?: FirewallDecision;
     }
   }
 }

@@ -22,14 +22,14 @@ describe("every request is exactly one of four principal types", () => {
 
   it("ai_agent: a registered agent with an access token", async () => {
     const { agent, token } = await agentWithToken(t, "alice");
-    const res = await request(t.app).get("/whoami").set(bearer(token));
+    const res = await request(t.app).get("/agent/v1/whoami").set(bearer(token));
     expect(res.body.principal).toMatchObject({ type: "ai_agent", id: agent.id, tenantId: TENANT_A, ownerUserId: "alice" });
   });
 
   it("service_account: a registered non-AI machine", async () => {
     const sa = await request(t.app).post("/service-accounts").set(as("alice")).send({ name: "s" });
     const tok = await request(t.app).post("/agent/v1/token").set(bearer(sa.body.credential.secret));
-    const res = await request(t.app).get("/whoami").set(bearer(tok.body.access_token));
+    const res = await request(t.app).get("/agent/v1/whoami").set(bearer(tok.body.access_token));
     expect(res.body.principal.type).toBe("service_account");
   });
 
@@ -97,7 +97,7 @@ describe("an AI agent is never served as an anonymous client", () => {
 
   it("the same self-declared agent WITH a Legion identity is served, as itself", async () => {
     const { agent, token } = await agentWithToken(t, "alice");
-    const res = await request(t.app).get("/whoami").set(bearer(token)).set("user-agent", "ClaudeBot/1.0");
+    const res = await request(t.app).get("/agent/v1/whoami").set(bearer(token)).set("user-agent", "ClaudeBot/1.0");
     expect(res.status).toBe(200);
     expect(res.body.principal).toMatchObject({ type: "ai_agent", id: agent.id });
   });
@@ -130,8 +130,10 @@ describe("an AI agent is never served as an anonymous client", () => {
     ] as const) {
       const res = await request(t.app)[method](path).set(bearer(token)).send({ name: "x", permissions: ["assets:update"] });
       expect(res.status, `${method} ${path}`).toBe(403);
+      // Stopped before any management code runs: machines are confined to the agent API.
+      expect(res.body.error.code).toBe("outside_agent_api");
     }
-    const rows = await auditRows(t.pool, "action = 'identity.manage' AND outcome = 'denied'");
+    const rows = await auditRows(t.pool, "action = 'auth.outside_agent_api' AND outcome = 'denied'");
     expect(rows.length).toBe(6);
     expect(rows.every((r) => r.principal_type === "ai_agent" && r.principal_id === agent.id)).toBe(true);
   });

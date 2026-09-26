@@ -22,6 +22,8 @@ export function agentRouter(deps: {
   guards: ReturnType<typeof createGuards>;
   sampler: FailureSampler;
   log: (msg: string, err?: unknown) => void;
+  /** Extra agent routes mounted after the built-in ones (agent-to-agent messages). */
+  extra?: Router;
 }): Router {
   const { store, audit, host, guards, sampler, log } = deps;
   const router = Router();
@@ -121,5 +123,6 @@ export function agentRouter(deps: {
     res.status(204).end();
   });
 
+  if (deps.extra) router.use(deps.extra);
   return router;
 }

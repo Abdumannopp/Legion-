@@ -108,6 +108,103 @@ DROP TRIGGER IF EXISTS principal_audit_log_no_truncate ON principal_audit_log;
 CREATE TRIGGER principal_audit_log_no_truncate
   BEFORE TRUNCATE ON principal_audit_log
   FOR EACH STATEMENT EXECUTE FUNCTION principal_audit_log_append_only();
+
+-- ---- Agent firewall ---------------------------------------------------------
+
+-- Every version of every tenant's policy is kept; the highest version applies.
+CREATE TABLE IF NOT EXISTS firewall_policies (
+  tenant_id  text NOT NULL,
+  version    integer NOT NULL CHECK (version > 0),
+  policy     jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  created_by text NOT NULL,
+  PRIMARY KEY (tenant_id, version)
+);
+
+-- One row per firewall decision, written BEFORE the action runs. Append-only,
+-- hash-chained per tenant like principal_audit_log.
+CREATE TABLE IF NOT EXISTS firewall_decisions (
+  seq             bigserial PRIMARY KEY,
+  chain_key       text NOT NULL,
+  decision_id     uuid NOT NULL UNIQUE,
+  occurred_at     timestamptz NOT NULL,
+  tenant_id       text NOT NULL,
+  principal_type  text NOT NULL,
+  principal_id    text NOT NULL,
+  principal_name  text NOT NULL,
+  owner_user_id   text NOT NULL,
+  credential_id   text,
+  token_id        text,
+  delegated_user  text,
+  delegation_id   text,
+  agent_chain     text[] NOT NULL DEFAULT '{}',
+  via_message_id  text,
+  surface         text NOT NULL,
+  action          text NOT NULL,
+  permission      text,
+  resource_type   text,
+  resource_id     text,
+  sensitivity     text NOT NULL,
+  destination     text,
+  decision        text NOT NULL CHECK (decision IN ('ALLOW', 'WARN', 'BLOCK')),
+  would_block     boolean NOT NULL,
+  mode            text NOT NULL,
+  risk_score      integer NOT NULL,
+  risk_factors    jsonb NOT NULL,
+  rule_hits       jsonb NOT NULL,
+  advisor         jsonb NOT NULL,
+  policy_version  integer NOT NULL,
+  input_digest    text NOT NULL,
+  input_preview   jsonb NOT NULL,
+  request_id      text,
+  ip              text,
+  prev_hash       text NOT NULL,
+  hash            text NOT NULL UNIQUE
+);
+CREATE INDEX IF NOT EXISTS firewall_decisions_chain ON firewall_decisions (chain_key, seq);
+CREATE INDEX IF NOT EXISTS firewall_decisions_tenant ON firewall_decisions (tenant_id, seq DESC);
+CREATE INDEX IF NOT EXISTS firewall_decisions_principal ON firewall_decisions (tenant_id, principal_id, seq DESC);
+CREATE INDEX IF NOT EXISTS firewall_decisions_blocked ON firewall_decisions (tenant_id, seq DESC) WHERE decision <> 'ALLOW';
+DROP TRIGGER IF EXISTS firewall_decisions_no_update ON firewall_decisions;
+CREATE TRIGGER firewall_decisions_no_update
+  BEFORE UPDATE OR DELETE ON firewall_decisions
+  FOR EACH ROW EXECUTE FUNCTION principal_audit_log_append_only();
+DROP TRIGGER IF EXISTS firewall_decisions_no_truncate ON firewall_decisions;
+CREATE TRIGGER firewall_decisions_no_truncate
+  BEFORE TRUNCATE ON firewall_decisions
+  FOR EACH STATEMENT EXECUTE FUNCTION principal_audit_log_append_only();
+
+-- A person lets an agent act on their behalf, for a subset of their own
+-- permissions, for a limited time. Granted by that person, never by the agent.
+CREATE TABLE IF NOT EXISTS agent_delegations (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id   text NOT NULL,
+  identity_id uuid NOT NULL REFERENCES machine_identities(id),
+  user_id     text NOT NULL,
+  permissions text[] NOT NULL,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  expires_at  timestamptz NOT NULL,
+  revoked_at  timestamptz,
+  revoked_by  text
+);
+CREATE INDEX IF NOT EXISTS agent_delegations_lookup
+  ON agent_delegations (tenant_id, identity_id, user_id) WHERE revoked_at IS NULL;
+
+-- Agent-to-agent messages relayed by Legion. The recipient's later actions
+-- that cite a message are limited to what it asked for, and carry its chain.
+CREATE TABLE IF NOT EXISTS agent_messages (
+  id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id            text NOT NULL,
+  from_identity        uuid NOT NULL REFERENCES machine_identities(id),
+  to_identity          uuid NOT NULL REFERENCES machine_identities(id),
+  requested_permission text NOT NULL,
+  payload              jsonb NOT NULL,
+  chain                text[] NOT NULL DEFAULT '{}',
+  decision_id          uuid NOT NULL,
+  created_at           timestamptz NOT NULL DEFAULT now(),
+  expires_at           timestamptz NOT NULL
+);
+CREATE INDEX IF NOT EXISTS agent_messages_inbox ON agent_messages (tenant_id, to_identity, created_at DESC);
 `;
 
 /** Constant advisory-lock key, so concurrently starting instances migrate one at a time. */

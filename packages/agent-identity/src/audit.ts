@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
+import { chainHash, GENESIS, GLOBAL_CHAIN, lockChain } from "./chain.js";
 import type { Principal, PrincipalType } from "./types.js";
 
 export type AuditOutcome = "attempt" | "success" | "failure" | "denied";
@@ -39,28 +39,11 @@ export interface AuditRow {
   details: Record<string, unknown>;
 }
 
-const GENESIS = "0".repeat(64);
-const GLOBAL_CHAIN = "__global__";
-
-/** JSON with object keys sorted at every level, so jsonb's reordering cannot change a hash. */
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value && typeof value === "object") {
-    const obj = value as Record<string, unknown>;
-    return `{${Object.keys(obj)
-      .sort()
-      .filter((k) => obj[k] !== undefined)
-      .map((k) => `${JSON.stringify(k)}:${canonical(obj[k])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value ?? null);
+function rowHash(prevHash: string, f: HashedFields): string {
+  return chainHash(prevHash, f);
 }
 
 type HashedFields = Omit<AuditRow, "seq"> & { chainKey: string };
-
-function rowHash(prevHash: string, f: HashedFields): string {
-  return createHash("sha256").update(prevHash).update("\n").update(canonical(f)).digest("hex");
-}
 
 function truncate(value: string | undefined, max: number): string | null {
   if (value === undefined || value === null) return null;
@@ -101,14 +84,7 @@ export class AuditLog {
     };
 
     const write = async (client: PoolClient) => {
-      // One writer per chain at a time keeps the chain linear; different
-      // tenants never wait on each other.
-      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`audit:${fields.chainKey}`]);
-      const last = await client.query<{ hash: string }>(
-        "SELECT hash FROM principal_audit_log WHERE chain_key = $1 ORDER BY seq DESC LIMIT 1",
-        [fields.chainKey],
-      );
-      const prevHash = last.rows[0]?.hash ?? GENESIS;
+      const prevHash = await lockChain(client, "principal_audit_log", fields.chainKey);
       await client.query(
         `INSERT INTO principal_audit_log
           (chain_key, occurred_at, tenant_id, principal_type, principal_id, principal_name, on_behalf_of,

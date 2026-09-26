@@ -21,6 +21,13 @@ export interface PrincipalOptions {
   /** Paths that must answer everyone (health checks, sensor webhooks). */
   exemptPaths: string[];
   aiUserAgents: RegExp | null;
+  /**
+   * Path prefixes machine identities may call. Everything outside is refused,
+   * so an agent can never reach a human route that has no firewall in front.
+   */
+  confineMachinesTo: string[];
+  /** Called when a machine request finishes (used to flag routes that skipped the firewall). */
+  onMachineRequestFinished?: (req: Request, res: Response) => void;
 }
 
 export const anonymous = (): ExternalPrincipal => ({
@@ -192,6 +199,16 @@ export function createPrincipalResolver(deps: {
           : sendError(res, 401, "invalid_token", "Invalid access token.");
       }
       req.principal = result.principal;
+      const inside = options.confineMachinesTo.some((prefix) => req.path === prefix || req.path.startsWith(`${prefix}/`));
+      if (!inside) {
+        await auditFailure(req, result.principal, "auth.outside_agent_api", `machine identities may only call ${options.confineMachinesTo.join(", ")}`);
+        return sendError(res, 403, "outside_agent_api",
+          `Machine identities may only call ${options.confineMachinesTo.join(", ")}. Every action there passes the agent firewall.`);
+      }
+      if (options.onMachineRequestFinished) {
+        const hook = options.onMachineRequestFinished;
+        res.on("finish", () => hook(req, res));
+      }
       return next();
     }
 

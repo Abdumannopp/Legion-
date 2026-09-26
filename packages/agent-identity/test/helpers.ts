@@ -49,7 +49,8 @@ export interface TestApp {
 
 export async function resetDb(pool: pg.Pool) {
   await pool.query(`
-    DROP TABLE IF EXISTS principal_audit_log, machine_tokens, machine_credentials, machine_identities CASCADE;
+    DROP TABLE IF EXISTS agent_messages, agent_delegations, firewall_decisions, firewall_policies,
+      principal_audit_log, machine_tokens, machine_credentials, machine_identities CASCADE;
     DROP FUNCTION IF EXISTS principal_audit_log_append_only() CASCADE;
   `);
 }
@@ -77,6 +78,7 @@ export async function makeApp(opts: { pool?: pg.Pool; logs?: string[] } = {}): P
   app.use("/agents", identity.agents);
   app.use("/service-accounts", identity.serviceAccounts);
   app.use("/audit/principal-events", identity.auditApi);
+  app.use("/firewall", identity.firewallApi);
 
   // Stand-ins for existing human routes: they keep their own auth and see
   // exactly what they saw before (plus req.principal, which they ignore).
@@ -98,6 +100,9 @@ export async function makeApp(opts: { pool?: pg.Pool; logs?: string[] } = {}): P
     resource: (req) => ({ type: "alert", id: String(req.params.id) }),
   }), (_req, res) => { res.json({ ok: true }); });
   app.get("/whoami", (req, res) => { res.json({ principal: req.principal }); });
+  app.get("/agent/v1/whoami", identity.guards.traced("test:whoami"), (req, res) => { res.json({ principal: req.principal }); });
+  // Deliberately missing a guard: the firewall must flag it.
+  app.get("/agent/v1/unguarded", (_req, res) => { res.json({ oops: true }); });
   app.post("/webhooks/wazuh", identity.guards.externalSystem("wazuh-webhook"),
     identity.guards.traced("alert.ingest"), (_req, res) => { res.status(202).json({ ok: true }); });
 

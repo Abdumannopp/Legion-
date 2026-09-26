@@ -35,7 +35,10 @@ describe("every agent action is traceable to its identity", () => {
         on_behalf_of: "anna", credential_id: credentialId, resource_type: "alert", resource_id: "SEC-42",
       });
     }
-    expect(rows[1].details).toEqual({ status: 200 });
+    expect(rows[1].details).toMatchObject({ status: 200, decisionId: expect.stringMatching(/^[0-9a-f-]{36}$/) });
+    // High-risk agent (20) + state-changing permission (20) + internal data (5) = 45 ≥ warnAt 40:
+    // the action runs, but the firewall flags it.
+    expect(res.headers["x-legion-firewall"]).toBe("warn");
   });
 
   it("a denied action is refused and recorded", async () => {
@@ -44,7 +47,8 @@ describe("every agent action is traceable to its identity", () => {
     expect(res.status).toBe(403);
     const rows = await auditRows(t.pool, "action = 'alerts:update_status'");
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ outcome: "denied", reason: "permission_not_granted", principal_id: agent.id });
+    expect(rows[0]).toMatchObject({ outcome: "denied", reason: "firewall: permission.not_granted", principal_id: agent.id });
+    expect(res.body.error).toMatchObject({ code: "firewall_blocked", rules: ["permission.not_granted"] });
   });
 
   it("if the audit trail cannot be written, the action does not run", async () => {
@@ -59,7 +63,7 @@ describe("every agent action is traceable to its identity", () => {
     app.use(identity.principal);
     app.use("/agent/v1", identity.agentApi);
     app.use("/agents", identity.agents);
-    app.post("/act", identity.guards.requirePermission("alerts:read"), (_q, r) => { ran = true; r.json({}); });
+    app.post("/agent/v1/act", identity.guards.requirePermission("alerts:read"), (_q, r) => { ran = true; r.json({}); });
 
     const created = await request(app).post("/agents").set(as("alice")).send({ name: "z", permissions: ["alerts:read"] });
     const tok = await request(app).post("/agent/v1/token").set(bearer(created.body.credential.secret));
@@ -67,7 +71,7 @@ describe("every agent action is traceable to its identity", () => {
     // Simulate the audit table becoming unwritable (disk full, permissions, …).
     await pool.query("ALTER TABLE principal_audit_log ADD CONSTRAINT audit_down CHECK (false) NOT VALID");
     try {
-      const res = await request(app).post("/act").set(bearer(tok.body.access_token));
+      const res = await request(app).post("/agent/v1/act").set(bearer(tok.body.access_token));
       expect(res.status).toBe(503);
       expect(res.body.error.code).toBe("audit_unavailable");
       expect(ran).toBe(false);

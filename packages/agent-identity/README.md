@@ -2,10 +2,12 @@
 
 Gives every AI agent (and every non-AI machine) in Legion its own identity,
 owner, permissions and audit trail, so every action it takes is traceable to
-it, and so an AI agent is never served as an anonymous API client.
+it, and so an AI agent is never served as an anonymous API client. Every
+agent action then passes a central, deterministic **agent firewall** before it
+runs ([below](#agent-firewall)).
 
-> **Status.** Complete and tested as a standalone module (68 tests against real
-> PostgreSQL 16). **Not yet wired into Legion's server**: `server/` was not in
+> **Status.** Complete and tested as a standalone module (173 tests, most against
+> real PostgreSQL 16). **Not yet wired into Legion's server**: `server/` was not in
 > the repository when this was written. Wiring is the ~15 lines in
 > [Integration](#integration); nothing in the existing human login needs to
 > change.
@@ -129,6 +131,88 @@ curl -s -X POST https://legion.example/agent/v1/token -H "Authorization: Bearer 
 curl -s https://legion.example/agent/v1/me -H "Authorization: Bearer lgt_…"
 ```
 
+## Agent firewall
+
+Every action by an AI agent or service account is decided **ALLOW**, **WARN**
+or **BLOCK** by one engine (`AgentFirewall.evaluate`) before it runs, and the
+decision is written to `firewall_decisions` first. If the decision can't be
+written, or the policy can't be read, the answer is BLOCK.
+
+### What is evaluated
+
+| Input | Where it comes from |
+|---|---|
+| Agent identity | The authenticated token (status, risk, credential) |
+| Tenant | Agent's tenant vs. the target's tenant |
+| User delegation | `x-legion-on-behalf-of: <userId>`, checked against a grant **that person** created (`POST /firewall/delegations`), their current role, and the agent's grants |
+| Requested action & permission | The route or executor. For tools, the policy's permission for the tool wins over the caller's claim |
+| Target resource | Type, id and owning tenant |
+| Sensitivity | `public` < `internal` < `confidential` < `restricted`. The policy can raise a resource type's level, never lower it. Data leaving Legion is at least `confidential`; `restricted` is never reachable |
+| Risk | Deterministic score: agent risk + permission tier + sensitivity + external effect + delegation + agent hops + unusual rate |
+| Destination | API resource, file path, `db:table`, URL, `tool:x`, `mcp:server/tool`, `agent:id` |
+
+### Surfaces and their rules
+
+| Surface | Enforced by | Key rules (hard = cannot be relaxed) |
+|---|---|---|
+| APIs | `guards.requirePermission` / `guards.traced` | permission, tenant, delegation, sensitivity, risk |
+| Files | `firewall.readFile` / `writeFile` | allowed roots only (none by default); `..` and symlink escapes caught at the real path; never `.env`, keys, `.ssh`, `/proc`…; writes never follow a symlink (`O_NOFOLLOW`) |
+| Databases | `firewall.execute({surface:"database"})` | no raw SQL or DDL; identity, secret and audit tables are never reachable (not even via policy); table and operation allowlist; the tenant filter must be the agent's own; row limit |
+| External services & network | `firewall.request` | https only; no credentials in URLs; loopback, private, link-local and cloud-metadata addresses refused, including decimal, hex, IPv4-mapped and NAT64 forms; host and port allowlist; **every DNS answer re-checked at connect time** (DNS rebinding); each redirect evaluated again; secrets in outgoing data refused |
+| Tools | `firewall.execute({surface:"tool"})` | unregistered tool → BLOCK; declared arguments only; size cap; secrets refused; URLs passed to externally-acting tools checked like egress |
+| MCP tools | `firewall.callMcpTool` | approved server and tool only; the tool definition's SHA-256 is pinned, so a changed description or schema (tool poisoning, "rug pull") → BLOCK |
+| Agent-to-agent | `POST /agent/v1/messages`, `x-legion-message-id` | pair allowlist (none by default); no laundering (you can't ask another agent for what you may not do); recipient must hold the permission; no cycles; depth ≤ `maxDepth`; the recipient's follow-up is limited to what the message asked; the chain is stored server-side and never read from headers |
+
+**Backstops:**
+- Machine tokens only work under the agent API (`/agent/v1`), so an agent can
+  never reach a human route that has no firewall in front of it.
+- An agent request that completes without a firewall decision (a route added
+  without a guard) is recorded as `firewall.unguarded_route` in the audit
+  trail.
+
+### Decisions
+
+- **Hard** rule hit → BLOCK, always.
+- **Soft** rule hit (host or port not allowlisted, row limit, rate limit,
+  agent pair not allowlisted, risk score ≥ `blockAt`) → BLOCK in `enforce`
+  mode. In `monitor` mode it becomes WARN, logged with `would_block = true`.
+- WARN hit or score ≥ `warnAt` → WARN: the action runs, flagged in the
+  `x-legion-firewall` response header, the log, and the `onFirewallDecision`
+  hook (connect this to Legion's alerting).
+- **An AI/LLM is never the decider.** `firewallAdvisors` run only after a
+  non-BLOCK deterministic decision. They can only return WARN or BLOCK, each
+  is limited to 2 seconds, and failures are logged and ignored. Tests prove
+  an advisor can't turn a BLOCK into an ALLOW.
+
+### Decision log (`firewall_decisions`)
+
+Each row records:
+- **who:** agent, owner, credential, token
+- **for whom:** delegated person and grant
+- **through which agents:** the chain and message
+- **what:** surface, action, permission, resource
+- **how sensitive, and where:** sensitivity and destination
+- **the outcome:** decision, mode, `would_block`
+- **why:** risk score and factors, every rule hit with its reason, any
+  advisor verdicts, the policy version
+- **the input:** a SHA-256 of the full input plus a redacted preview (strings
+  cut at 64 characters, secrets replaced)
+- the request id and IP
+
+The log is append-only and hash-chained per tenant. Endpoints:
+`GET /firewall/decisions` (filter by `decision`, `principalId`, `surface`)
+and `GET /firewall/decisions/verify`.
+
+### Policy (`GET`/`PUT /firewall/policy`)
+
+- Per tenant, validated on save, versioned (every version kept), and every
+  change audited.
+- **Deny by default:** no files, tables, tools, MCP servers, external hosts
+  or agent pairs until an administrator opens them.
+- **The schema itself refuses unsafe entries:** `*`, internal names,
+  private or metadata IPs, protected tables, and `/` as a file root.
+- Policies are cached for 5 seconds per instance.
+
 ## Integration
 
 Legion's server already has everything this needs (Express 5, `pg`,
@@ -162,12 +246,15 @@ Legion's server already has everything this needs (Express 5, `pg`,
    app.use("/agents", identity.agents);
    app.use("/service-accounts", identity.serviceAccounts);
    app.use("/audit/principal-events", identity.auditApi);
+   app.use("/firewall", identity.firewallApi);
    setInterval(() => identity.purgeExpiredTokens().catch(() => {}), 3_600_000).unref();
    ```
 4. Expose agent actions as **new** routes under `/agent/v1/…` that call the
    same service functions as the human routes, each behind
-   `identity.guards.requirePermission("<permission>", { resource })`. Leave
-   the existing human routes as they are.
+   `identity.guards.requirePermission("<permission>", { resource, sensitivity })`.
+   Any file, database, outbound HTTP, tool or MCP call that code makes for an
+   agent goes through `identity.firewall.readFile / writeFile / execute /
+   request / callMcpTool`. Leave the existing human routes as they are.
 5. Add the foreign keys noted in `src/schema.ts` once the `tenants.id` and
    `users.id` column types are confirmed.
 6. Mount `identity.principal` at the app root: the credential exemption
@@ -201,8 +288,29 @@ requests from self-declared AI user agents without an identity get 401, and
 - The `success`/`failure` audit row is written after the response. A crash in
   between leaves the `attempt` row without an outcome: the action is still
   attributed, but its result is unknown.
-- Each guarded request writes two audit rows under a per-tenant lock. That is
-  fine at SOC-console volumes; very high-rate agents would need batching.
+- Each guarded agent request writes one decision row and two audit rows under
+  per-tenant locks. That's fine at SOC-console volumes; very high-rate agents
+  would need batching.
+- **Firewall coverage depends on the host using the executors.** Code that
+  opens files, sockets or SQL for an agent directly bypasses the firewall.
+  The confinement and unguarded-route detection catch HTTP routes, not
+  in-process calls.
+- **The rate limit is per instance** (in memory). With several instances an
+  agent gets that rate on each; use Redis to share it.
+- **Policy changes reach other instances within 5 seconds** (cache).
+- **Monitor mode lets soft-blocked actions run**, including calls to
+  non-allowlisted public hosts. Use it only for rollout.
+- **Small race window in file access:** a directory swapped for a symlink
+  between the path check and the open is not caught. Only the final
+  component is protected (`O_NOFOLLOW`).
+- **A relayed message can be cited repeatedly until it expires** (1 hour).
+  Every use is logged.
+- **Secret scanning uses high-confidence formats only.** Unusual secrets pass.
+- **Payloads from other agents are untrusted text.** The firewall stops
+  credentials, not prompt injection inside a message.
+- **Outbound HTTPS on the allowed path hasn't been exercised against a live
+  server** (no internet in the test environment). The blocking paths are
+  tested.
 
 ## Development
 
