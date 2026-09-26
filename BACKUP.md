@@ -33,7 +33,42 @@ Yoqish kerak bo'lgan narsalar:
 **Muhim:** provayder backup olayotgani — uni tiklay olishingiz demak emas.
 Pastdagi mashqni baribir bajaring.
 
-## Skriptlar
+## Docker bilan o'rnatilgan bo'lsa — shu skriptlardan foydalaning
+
+Docker o'rnatmasida Postgres port tashqariga ochilmagan (ataylab), shuning
+uchun serverdan `DATABASE_URL` orqali ishlaydigan `ops/backup.sh` bazaga
+yeta olmaydi. Buning o'rniga:
+
+```bash
+./ops/docker-backup.sh                         # dump + VAQTINCHALIK bazaga tiklab tekshirish + eskisini tozalash
+./ops/docker-restore.sh backups/legion-….dump --yes   # tiklash (pastga qarang)
+```
+
+- `docker-backup.sh` har safar dump'ni vaqtinchalik bazaga **tiklab ko'radi**
+  va jadvallarni jonli baza bilan solishtiradi. Xato bo'lsa — nol bo'lmagan
+  kod bilan chiqadi va "yaxshi backup"ga o'xshash fayl qoldirmaydi.
+- Har dump yonida `.sha256` fayli bo'ladi; `docker-restore.sh` uni tekshiradi.
+- `docker-restore.sh` jonli bazaga **tegmaydi**: dump yangi bazaga tiklanadi,
+  muvaffaqiyatli bo'lsagina nomini almashtirib joyiga qo'yiladi. Eski baza
+  `legion_before_restore_…` nomi bilan saqlanib qoladi — noto'g'ri tiklashni
+  ikki buyruq bilan orqaga qaytarish mumkin (skript buyruqlarni chiqaradi).
+- `./install.sh` yangilashdan **oldin** avtomatik backup oladi; backup
+  muvaffaqiyatsiz bo'lsa, yangilash to'xtaydi.
+
+Kunlik cron (Docker):
+
+```cron
+0 3 * * * cd /opt/legion && BACKUP_DIR=/var/backups/legion ./ops/docker-backup.sh >> /var/log/legion-backup.log 2>&1 || echo "Legion backup FAILED" | mail -s "Legion backup FAILED" admin@example.com
+```
+
+Oxirgi qism muhim: jimgina ishlamay qolgan backup — eng xavfli holat.
+Xato haqida xabar kelishini bir marta ataylab tekshirib ko'ring.
+
+Sinov: `bash ops/tests/test-backup-restore.sh` — haqiqiy Postgres 16
+konteynerida backup → jadvalni o'chirish → tiklash, buzilgan va o'zgartirilgan
+dump'ni rad etish, baza o'chiq bo'lganda backup xatosi.
+
+## Skriptlar (Node.js yo'li)
 
 ```bash
 ./ops/backup.sh              # dump olish + o'qilishini tekshirish + eskisini tozalash

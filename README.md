@@ -23,8 +23,10 @@ git clone <repo> legion && cd legion
 ```
 
 Skript sirlarni yaratadi, `.env` yozadi va hamma narsani ishga tushiradi.
-Tugagach http://localhost:3000 ni oching va **birinchi administrator hisobini
-yarating**.
+Tugagach http://localhost:3000 ni oching va **darhol birinchi administrator
+hisobini yarating** — u yaratilmaguncha sahifaga birinchi yetgan odam admin
+bo'lib oladi. Dashboard va API standart holatda faqat `127.0.0.1` da tinglaydi
+(`.env` → `LEGION_BIND_ADDRESS`); tashqaridan kirish uchun HTTPS proxy qo'ying.
 
 > Birinchi hisob yaratilgach ro'yxatdan o'tish avtomatik **yopiladi**. Qolgan
 > xodimlar Settings → Team orqali taklif bilan qo'shiladi. Ya'ni serveringiz
@@ -127,8 +129,10 @@ git pull
 Sxema o'zgarishlari avtomatik va ma'lumotni saqlagan holda qo'llanadi.
 `.env` dagi sirlaringiz o'zgarmaydi.
 
-> **Yangilashdan oldin backup oling** — `./ops/backup.sh`. Bu sinovdan
-> o'tkazilgan, lekin sizning ma'lumotingiz sizniki.
+> `./install.sh` yangilashdan oldin bazaning backup'ini o'zi oladi
+> (`ops/docker-backup.sh`) va backup muvaffaqiyatsiz bo'lsa yangilashni
+> to'xtatadi. Backup'larni muntazam serverdan tashqariga ko'chiring —
+> [BACKUP.md](BACKUP.md).
 
 ### Nimadir ishlamayapti
 

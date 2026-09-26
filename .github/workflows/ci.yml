@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-scripts:
+    name: Install, backup and compose checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck install.sh ops/*.sh ops/tests/*.sh
+      - name: Compose files (ports, logs, startup order)
+        run: bash ops/tests/test-compose.sh
+      - name: Installer decisions (fake docker)
+        run: bash ops/tests/test-install.sh
+      - name: Backup and restore against real Postgres
+        run: bash ops/tests/test-backup-restore.sh
+
+  dependencies:
+    name: Known vulnerabilities in the lockfile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Fails the build on high/critical advisories. The docs once claimed
+      # "0 vulnerabilities" while a critical Next.js RCE sat in the lockfile;
+      # a claim nobody re-checks goes stale silently.
+      - run: npm audit --package-lock-only --audit-level=high
+
+  app:
+    name: Typecheck, tests and build
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: legion
+          POSTGRES_PASSWORD: legion-ci
+          POSTGRES_DB: legion_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U legion" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/legion_test
+    steps:
+      - uses: actions/checkout@v4
+      # The application sources were not part of the initial upload. Fail
+      # loudly rather than report a green build that tested nothing.
+      - name: Application sources present
+        run: |
+          for d in server frontend; do
+            [ -f "$d/package.json" ] || { echo "::error::$d/ is missing from the repository — nothing to test"; exit 1; }
+          done
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm run build

@@ -79,6 +79,20 @@ cd legion
 ```
 
 The script generates the same secrets, writes `.env`, and starts everything.
+Re-running it later is how you upgrade: it keeps `.env` exactly as it is,
+backs up the database first (`ops/docker-backup.sh`), pulls security updates
+for the Postgres and Redis images, and refuses to continue if `.env` is
+missing or damaged while a database already exists — a new random password
+would lock Legion out of its own data.
+
+**Network exposure.** The dashboard (3000) and API (8000) listen on
+`127.0.0.1` only (`LEGION_BIND_ADDRESS` in `.env`). Put the HTTPS reverse
+proxy from section 6 on the same machine. Docker writes its own firewall
+rules, so a port published on `0.0.0.0` is reachable from the internet even
+when `ufw` or `firewalld` says it is blocked. Set `LEGION_BIND_ADDRESS=0.0.0.0`
+only on a trusted internal network, and understand that it also exposes the
+first-run page: until the first administrator exists, whoever reaches it
+first becomes the administrator.
 
 ### On Windows
 
@@ -94,7 +108,8 @@ For a server that people depend on, use Linux.
 ## 4. First run
 
 Open the address you chose — `http://localhost:3000` by default — and create
-the first account. That account becomes the administrator.
+the first account **immediately**. That account becomes the administrator,
+and until it exists, anyone who can reach the page can claim it.
 
 **Registration closes the moment that account exists.** Everyone else joins by
 invitation from Settings → Team. This is deliberate: even if you put the server
@@ -143,6 +158,11 @@ and answers 503. Each request then carries two headers — `x-tenant-id` and
 A wrong or missing value is rejected with 401, and the comparison is
 constant-time. Treat that header value as a password: it is per-tenant and
 does not change between requests.
+
+Know its limits: the value does not cover the request body or a timestamp,
+so anyone who sees one request can forge or replay events for that tenant,
+and all tenants' values derive from one server-wide secret. Send it only over
+HTTPS, and read "Known limitations" in [WAZUH.md](WAZUH.md).
 
 ---
 
@@ -249,6 +269,11 @@ and your privacy page (section 4) should name whichever provider you chose.
 ./ops/verify-backup.sh    # prove the dump restores — run this, not just the backup
 ./ops/restore.sh <file>   # restore
 ```
+
+On a Docker install use `./ops/docker-backup.sh` and `./ops/docker-restore.sh`
+instead — the database port is not published to the host, so the scripts
+above cannot reach it. The Docker backup restores every dump into a temporary
+database before declaring success.
 
 A backup nobody has ever restored is a guess. `verify-backup.sh` exists so it
 does not have to stay a guess; run it on a schedule alongside the backup

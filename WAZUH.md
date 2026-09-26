@@ -11,7 +11,10 @@ Wazuh agent → Wazuh manager → custom-legion → POST /security-events/webhoo
 
 ## 1. Legion tomonida sirni yoqing
 
-`server/.env` faylida:
+Docker bilan o'rnatilgan bo'lsa (`./install.sh`), sir **allaqachon yaratilgan** —
+`.env` faylidagi `SECURITY_EVENT_WEBHOOK_SECRET`. Hech narsa qilish shart emas.
+
+Node.js yo'lida `server/.env` faylida:
 
 ```env
 SECURITY_EVENT_WEBHOOK_SECRET=uzun-tasodifiy-satr-shu-yerga
@@ -25,29 +28,26 @@ openssl rand -hex 32
 
 **Muhim:** sir bo'sh bo'lsa, webhook `503` qaytaradi va butunlay o'chiq bo'ladi.
 
-Legion'ni qayta ishga tushiring:
-
-```bash
-npm run dev
-```
+Legion'ni qayta ishga tushiring — Docker: `./install.sh`, Node.js: `npm start`.
+(`npm run dev` — faqat dasturchi uchun, ishlab turgan serverda ishlatmang.)
 
 ---
 
 ## 2. Tenant ID ni oling
 
-Har bir Legion o'rnatmasida tenant (tashkilot) ID si bo'ladi:
+Legion 2.0 dan beri ma'lumot PostgreSQL'da saqlanadi — eski
+`server/data/legion.json` fayli **endi yo'q**, undan ID olib bo'lmaydi.
 
 ```bash
-# Linux / macOS
-cat server/data/legion.json | python3 -c "import json,sys; print(json.load(sys.stdin)['tenants'][0]['id'])"
+# Docker bilan o'rnatilgan bo'lsa
+docker compose exec postgres psql -U legion -d legion -c "SELECT * FROM tenants;"
+
+# Node.js yo'lida (DATABASE_URL — server/.env dagi qiymat)
+psql "$DATABASE_URL" -c "SELECT * FROM tenants;"
 ```
 
-```powershell
-# Windows PowerShell
-(Get-Content server\data\legion.json | ConvertFrom-Json).tenants[0].id
-```
-
-Natija shunga o'xshash bo'ladi: `9fb5aede-cbb0-40c2-b95c-44fc17517d5b`
+`id` ustunidagi qiymat kerak. U shunga o'xshash bo'ladi:
+`9fb5aede-cbb0-40c2-b95c-44fc17517d5b`
 
 ---
 
@@ -83,7 +83,7 @@ Ruxsatlar noto'g'ri bo'lsa Wazuh skriptni umuman ishga tushirmaydi.
 
 | Maydon | Izoh |
 |---|---|
-| `hook_url` | Legion API manzili. Lokal sinov uchun `http://localhost:8000/...` |
+| `hook_url` | Legion API manzili — ishlab chiqarishda **`https://`** (pastdagi eslatmaga qarang). Wazuh shu serverda bo'lsa `http://127.0.0.1:8000/...` |
 | `api_key` | `TENANT_ID` va sir, ikki nuqta bilan ajratilgan |
 | `level` | Shu darajadan yuqori alertlar yuboriladi. `7` — oqilona boshlanish |
 | `alert_format` | **Albatta `json`** bo'lishi kerak |
@@ -148,8 +148,36 @@ python3 /var/ossec/integrations/custom-legion.py \
 ## Xavfsizlik eslatmasi
 
 Ishlab chiqarishda (production) Legion'ni **HTTPS** orqasiga qo'ying —
-`deploy/nginx.conf` da namuna bor. Sir HTTP orqali ochiq yuborilmasligi kerak.
+`deploy/nginx.conf` da namuna bor. Docker o'rnatmasi API'ni standart holatda
+faqat `127.0.0.1` da tinglaydi, ya'ni boshqa serverdagi Wazuh unga faqat
+HTTPS proxy orqali yeta oladi — bu ataylab qilingan.
 
-Autentifikatsiya HMAC-SHA256 imzosi orqali: imzo = `HMAC(sir, tenant_id)`.
-Skript imzoni har safar o'zi hisoblaydi, shuning uchun `ossec.conf` da
-faqat sir saqlanadi.
+Autentifikatsiya: `x-security-event-secret` sarlavhasi = `HMAC(sir, tenant_id)`.
+
+## Ma'lum cheklovlar (2026-09 audit)
+
+Bular hujjatlar va sozlamalar asosida aniqlangan; server kodi tekshiruvga
+berilmagan, shuning uchun kod tuzatilmaguncha ular **ochiq** hisoblanadi.
+
+1. **Sarlavha — doimiy parol, imzo emas.** Qiymat faqat tenant ID dan
+   hisoblanadi: so'rov tanasi, vaqt va nonce'ni qamramaydi va hech qachon
+   o'zgarmaydi. Uni bir marta ko'rgan (log, proxy, HTTP trafigi) odam istalgan
+   soxta alertni yubora oladi yoki eski so'rovni qayta yubora oladi.
+2. **Bitta global sir.** Barcha tenantlarning sarlavhasi bitta
+   `SECURITY_EVENT_WEBHOOK_SECRET` dan chiqadi. Sirni bilgan odam istalgan
+   tenant nomidan alert yubora oladi (`ADR-QARORLAR.md`, ADR-003).
+3. **Wazuh o'zi qayta urinmaydi.** `integratord` har alert uchun skriptni bir
+   marta ishga tushiradi. Legion o'sha paytda ishlamay tursa (yangilash,
+   qayta ishga tushirish, baza uzilishi), `custom-legion.py` o'zi navbatga
+   yozmasa, alert Legion'ga **hech qachon yetmaydi**. Skript tekshiruvga
+   berilmagan — buni birinchi navbatda tekshiring.
+4. **`202 skipped, duplicate` ≠ "hammasi yetkazildi".** Birinchi urinishda
+   alert bazaga yozilib, email yoki jonli bildirishnoma xato bilan tugagan
+   bo'lsa, qayta yuborilgan hodisa "dublikat" deb o'tkazib yuboriladi va
+   bildirishnoma qayta urinilmaydi.
+
+Tavsiya etilgan tuzatish (server kodida): har tenant uchun alohida,
+shifrlangan sir; imzo = `HMAC(sir, timestamp + "." + xom_tana)`; 5 daqiqalik
+vaqt oynasi va nonce/hodisa ID bo'yicha replay himoyasi; bildirishnomalarni
+alert bilan bir tranzaksiyada yoziladigan "outbox" jadvali orqali qayta
+urinish bilan yuborish.

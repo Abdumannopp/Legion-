@@ -1,36 +1,28 @@
-# Legion — Windows PowerShell + Node.js
+# Legion — Windows
 
-Bu versiya Python, PostgreSQL yoki Docker talab qilmaydi. Node.js 20.9+ kerak.
+> **Bu fayl yangilandi (2026-09).** Oldingi versiyasi eskirgan edi: u
+> `admin@legion.demo` / `legion123` demo hisobini va `server/data/legion.json`
+> faylini tilga olardi. Ikkalasi ham Legion 2.0 da olib tashlangan — demo
+> hisob mijoz serverida yaratilmaydi, ma'lumot PostgreSQL'da saqlanadi.
+> Hech qachon hammaga ma'lum parol bilan hisob yaratmang.
 
-## Bir buyruqda ishga tushirish
-
-Arxivni oching, loyiha ichida PowerShell oching va bajaring:
+Node.js 20.9+ va PostgreSQL 14+ kerak. Docker shart emas.
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\start-legion.ps1
 ```
 
-Yoki qo'lda:
+Skript Node.js va PostgreSQL'ni tekshiradi, paketlarni o'rnatadi, birinchi
+marta `npm run setup` ni ishga tushiradi (sirlar va baza), quradi va Legion'ni
+ishga tushiradi.
 
-```powershell
-npm install
-Copy-Item server\.env.example server\.env
-npm run dev
-```
+- Dashboard: http://localhost:3000 — birinchi ochganingizda **o'zingizning**
+  administrator hisobingizni yaratasiz; shundan keyin ro'yxatdan o'tish yopiladi.
+- API holati: http://localhost:8000/health — `"database":"up"` bo'lishi kerak.
 
-- Dashboard: http://localhost:3000
-- API health: http://localhost:8000/health
-- Demo login: `admin@legion.demo` / `legion123`
+Batafsil, qadamma-qadam: [SINOV.md](SINOV.md). Mijoz uchun to'liq qo'llanma:
+[INSTALL.md](INSTALL.md).
 
-Ma'lumotlar `server/data/legion.json` faylida saqlanadi. Uni zaxiralash uchun
-Legion'ni to'xtating va shu fayldan nusxa oling.
-
-## Production build
-
-```powershell
-npm run build
-npm start
-```
-
-Production'da `server/.env` ichidagi `JWT_SECRET` uzun, tasodifiy qiymat bo'lishi shart.
+**Eslatma:** Windows — faqat sinov va baholash uchun. Odamlar tayanadigan
+server uchun Linux + Docker (`./install.sh`) ishlating.

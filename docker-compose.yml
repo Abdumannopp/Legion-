@@ -3,10 +3,29 @@
 # Do not run `docker compose up` directly the first time; run ./install.sh,
 # which generates the secrets this file expects. Values with no default here
 # are deliberate: Legion must never start with a guessable secret.
+#
+# Published ports listen on 127.0.0.1 unless LEGION_BIND_ADDRESS says
+# otherwise. Docker writes its own iptables rules, so a port published on
+# 0.0.0.0 is reachable from the internet even when ufw/firewalld "deny" it —
+# and an exposed, not-yet-claimed install lets a stranger create the first
+# administrator. Put a reverse proxy with HTTPS in front (deploy/nginx.conf),
+# or set LEGION_BIND_ADDRESS=0.0.0.0 deliberately for a trusted LAN.
+
+# Docker's default json-file log never rotates; a busy Wazuh feed fills the
+# disk and takes Postgres down with it.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
 
 services:
   postgres:
     image: postgres:16-alpine
+    logging: *default-logging
+    # Postgres needs time to checkpoint on shutdown; Docker's 10 s default
+    # SIGKILLs it mid-flush and forces crash recovery on the next start.
+    stop_grace_period: 60s
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-legion}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./install.sh to generate secrets}
@@ -27,6 +46,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    logging: *default-logging
     # Rate-limit counters and realtime fan-out only — nothing here needs to
     # survive a restart, and persistence would add disk I/O to every request.
     command: ["redis-server", "--save", "", "--appendonly", "no"]
@@ -39,6 +59,7 @@ services:
 
   backend:
     build: ./server
+    logging: *default-logging
     environment:
       DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-self-hosted}
       DATABASE_URL: postgresql://${POSTGRES_USER:-legion}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-legion}
@@ -74,7 +95,7 @@ services:
       start_period: 20s
     restart: unless-stopped
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "${LEGION_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8000}:8000"
 
   frontend:
     build:
@@ -88,12 +109,15 @@ services:
         # and re-run ./install.sh so the pages are rebuilt.
         NEXT_PUBLIC_OPERATOR_NAME: ${NEXT_PUBLIC_OPERATOR_NAME:-}
         NEXT_PUBLIC_SUPPORT_EMAIL: ${NEXT_PUBLIC_SUPPORT_EMAIL:-}
+    logging: *default-logging
     depends_on:
+      # service_started let the dashboard come up while the API was still
+      # failing its database check, so the first page load showed errors.
       backend:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
     ports:
-      - "${WEB_PORT:-3000}:3000"
+      - "${LEGION_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-3000}:3000"
 
 volumes:
   legion-pgdata:

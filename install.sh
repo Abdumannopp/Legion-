@@ -45,19 +45,39 @@ existing() {
   sed -n "s/^$1=//p" "$ENV_FILE" | head -1
 }
 
-JWT_SECRET="$(existing JWT_SECRET)"
-POSTGRES_PASSWORD="$(existing POSTGRES_PASSWORD)"
-WEBHOOK_SECRET="$(existing SECURITY_EVENT_WEBHOOK_SECRET)"
+# Compose names volumes <project>_<volume>; the project defaults to this
+# directory's name, normalised the way Compose does it.
+project_name() {
+  local name="${COMPOSE_PROJECT_NAME:-$(existing COMPOSE_PROJECT_NAME)}"
+  [[ -n "$name" ]] || name="$(basename "$PWD")"
+  printf '%s' "$name" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-'
+}
 
 NEW_INSTALL=false
-if [[ -z "$JWT_SECRET" ]]; then
+if [[ -f "$ENV_FILE" ]]; then
+  JWT_SECRET="$(existing JWT_SECRET)"
+  POSTGRES_PASSWORD="$(existing POSTGRES_PASSWORD)"
+  # An existing .env is never rewritten. Regenerating only the missing values
+  # would still hand Postgres a password its data directory does not know.
+  [[ -n "$JWT_SECRET" && -n "$POSTGRES_PASSWORD" ]] || die "$ENV_FILE exists but JWT_SECRET or POSTGRES_PASSWORD is empty.
+  Restore those lines from your backup of $ENV_FILE. The installer will not
+  invent new ones: the database was created with the old password and would
+  refuse the new one, locking Legion out of its own data."
+  ok "Existing secrets in $ENV_FILE kept"
+else
+  # No .env but a database volume from an earlier install: a fresh random
+  # password cannot open it. Stop before overwriting anything.
+  if docker volume inspect "$(project_name)_legion-pgdata" >/dev/null 2>&1; then
+    die "$ENV_FILE is missing, but a Legion database volume ($(project_name)_legion-pgdata) already exists.
+  Restore $ENV_FILE from your backup — its POSTGRES_PASSWORD is the only key
+  to that database. To deliberately start over and DESTROY the old data:
+    $COMPOSE down -v && ./install.sh"
+  fi
   NEW_INSTALL=true
   JWT_SECRET="$(random_hex 32)"
   POSTGRES_PASSWORD="$(random_hex 16)"
   WEBHOOK_SECRET="$(random_hex 32)"
   say "Generated new secrets"
-else
-  ok "Existing secrets in $ENV_FILE kept"
 fi
 
 # --- Configuration -----------------------------------------------------------
@@ -77,6 +97,12 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 
 # Set to true once you have put Legion behind HTTPS (see deploy/nginx.conf).
 COOKIE_SECURE=false
+
+# Which network interface the dashboard and API listen on. 127.0.0.1 means
+# "only this machine" — right when a reverse proxy on this server provides
+# HTTPS. Set 0.0.0.0 only for a trusted internal network without a proxy:
+# Docker bypasses ufw/firewalld, so 0.0.0.0 on a public IP is the internet.
+LEGION_BIND_ADDRESS=127.0.0.1
 
 # --- Your organisation -------------------------------------------------------
 # You run this installation, so the privacy and terms pages describe YOUR
@@ -123,18 +149,94 @@ EOF
   ok "Wrote $ENV_FILE (permissions 600)"
 fi
 
+# --- Check the configuration before a long build ----------------------------
+
+cfg() { local v; v="$(existing "$1")"; printf '%s' "${v:-$2}"; }
+scheme_of() { printf '%s' "${1%%://*}"; }
+host_of() {
+  local rest="${1#*://}"; rest="${rest%%/*}"; rest="${rest##*@}"
+  if [[ "$rest" == \[* ]]; then printf '%s' "${rest%%]*}]"; else printf '%s' "${rest%%:*}"; fi
+}
+is_loopback() { case "$1" in localhost|127.*|"[::1]") return 0 ;; *) return 1 ;; esac; }
+
+check_config() {
+  local frontend api cookie bind problems=()
+  frontend="$(cfg FRONTEND_URL http://localhost:3000)"
+  api="$(cfg NEXT_PUBLIC_API_URL http://localhost:8000)"
+  cookie="$(cfg COOKIE_SECURE false)"
+  bind="$(cfg LEGION_BIND_ADDRESS 127.0.0.1)"
+
+  if ! is_loopback "$(host_of "$frontend")" && is_loopback "$(host_of "$api")"; then
+    problems+=("FRONTEND_URL is $frontend but NEXT_PUBLIC_API_URL is still $api.
+    Every browser on another machine would call its OWN localhost and the
+    dashboard would load with no data. Set NEXT_PUBLIC_API_URL to the API's
+    public address.")
+  fi
+  if [[ "$(scheme_of "$frontend")" == https && "$(scheme_of "$api")" != https ]]; then
+    problems+=("FRONTEND_URL is https but NEXT_PUBLIC_API_URL ($api) is not.
+    Browsers block http calls from an https page, so nothing would load.")
+  fi
+  if [[ "$(scheme_of "$frontend")" == https && "$cookie" != true ]]; then
+    problems+=("FRONTEND_URL is https but COOKIE_SECURE is not true. Legion refuses
+    to start this way (the session cookie would travel unprotected); set
+    COOKIE_SECURE=true.")
+  fi
+  if [[ "$(scheme_of "$frontend")" == http ]] && ! is_loopback "$(host_of "$frontend")" && is_loopback "$bind"; then
+    problems+=("FRONTEND_URL is $frontend (plain HTTP, another machine) but Legion
+    only listens on $bind. Either put Legion behind HTTPS (deploy/nginx.conf,
+    recommended) and use https:// addresses, or — on a trusted internal
+    network only — set LEGION_BIND_ADDRESS=0.0.0.0 in $ENV_FILE.")
+  fi
+
+  if (( ${#problems[@]} )); then
+    local p
+    for p in "${problems[@]}"; do printf '\033[0;31m✗\033[0m %s\n' "$p" >&2; done
+    die "Fix $ENV_FILE and run ./install.sh again. Nothing was changed."
+  fi
+  ok "Configuration is consistent"
+}
+check_config
+
+# --- Back up before upgrading -------------------------------------------------
+
+# Schema changes apply automatically when the new version starts. If that goes
+# wrong, this dump is the way back.
+# `ps --status` does not exist in docker-compose v1, so ask Docker directly.
+postgres_running() {
+  local id; id="$($COMPOSE ps -q postgres 2>/dev/null || true)"
+  [[ -n "$id" && "$(docker inspect --format '{{.State.Running}}' "$id" 2>/dev/null)" == true ]]
+}
+if [[ "$NEW_INSTALL" != true ]] && postgres_running; then
+  say "Backing up the database before upgrading"
+  if ! COMPOSE="$COMPOSE" ./ops/docker-backup.sh; then
+    [[ "${LEGION_SKIP_BACKUP:-}" == 1 ]] || die "Pre-upgrade backup failed; nothing was changed.
+  Fix the problem above, or re-run with LEGION_SKIP_BACKUP=1 to upgrade without one."
+    warn "Continuing WITHOUT a backup because LEGION_SKIP_BACKUP=1"
+  fi
+fi
+
 # --- Start -------------------------------------------------------------------
 
+# Without an explicit pull, Postgres and Redis stay on whatever image was
+# downloaded on day one and never receive security fixes.
+say "Fetching security updates for the database and Redis images"
+$COMPOSE pull postgres redis || warn "Could not pull newer images (offline?) — continuing with the ones already here."
+
 say "Building and starting Legion — the first run downloads images and may take a few minutes."
-$COMPOSE up -d --build
+$COMPOSE build --pull || $COMPOSE build
+$COMPOSE up -d
 
 # --- Wait for readiness ------------------------------------------------------
 
-API_URL="http://localhost:8000/health"
+# Ask Docker for the backend's own healthcheck (which queries the database)
+# instead of guessing a URL: API_PORT and LEGION_BIND_ADDRESS may differ.
 printf 'Waiting for Legion to become ready'
 READY=false
 for _ in $(seq 1 60); do
-  if curl -fsS --max-time 2 "$API_URL" >/dev/null 2>&1; then READY=true; break; fi
+  BACKEND_ID="$($COMPOSE ps -q backend 2>/dev/null || true)"
+  if [[ -n "$BACKEND_ID" && "$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$BACKEND_ID" 2>/dev/null)" == healthy ]]; then
+    READY=true; break
+  fi
   printf '.'
   sleep 2
 done
@@ -162,7 +264,7 @@ cat <<EOF
   joins by invitation from Settings → Team.
 
   Connect Wazuh:        see WAZUH.md
-  Set up backups:       see BACKUP.md
+  Set up backups:       ./ops/docker-backup.sh  (schedule it — BACKUP.md)
   Put Legion on HTTPS:  see deploy/nginx.conf
 
   Useful commands

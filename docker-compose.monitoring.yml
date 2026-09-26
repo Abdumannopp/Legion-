@@ -3,7 +3,9 @@ services:
     image: prom/prometheus:v2.55.1
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    # Prometheus has no authentication. Loopback only — reach it through an
+    # SSH tunnel or an authenticated proxy, never directly from the network.
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     depends_on:
       - backend
