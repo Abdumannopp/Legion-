@@ -57,6 +57,7 @@ const MONITOR: ExternalPrincipal = { type: "external_system", id: "legion-behavi
 
 export class BehaviorMonitor {
   private readonly cache = new Map<string, { at: number; state: BehaviorState }>();
+  private suspender: ((tenantId: string, identityId: string, actor: ExternalPrincipal, reason: string) => Promise<boolean>) | null = null;
 
   constructor(
     private readonly o: {
@@ -191,9 +192,19 @@ export class BehaviorMonitor {
     }
   }
 
+  /** The kill switch, when wired: auto-suspension then has the same effect as an administrator's. */
+  setSuspender(fn: (tenantId: string, identityId: string, actor: ExternalPrincipal, reason: string) => Promise<boolean>): void {
+    this.suspender = fn;
+  }
+
   private async suspend(tenantId: string, identityId: string, name: string, a: Assessment): Promise<boolean> {
     try {
       const reason = `Behaviour CRITICAL (score ${a.score}): ${a.signals.map((s) => s.id).join(", ")}`.slice(0, 500);
+      if (this.suspender) {
+        if (!(await this.suspender(tenantId, identityId, { ...MONITOR, tenantId }, reason))) return false;
+        await this.record({ tenantId, identityId, identityName: name, kind: "auto_suspended", fromLevel: a.level, toLevel: a.level, score: a.score, signals: a.signals, actor: MONITOR.id, reason });
+        return true;
+      }
       await this.o.store.tx(async (c) => {
         const current = await this.o.store.getForUpdate(c, tenantId, "ai_agent", identityId)
           ?? await this.o.store.getForUpdate(c, tenantId, "service_account", identityId);

@@ -118,6 +118,7 @@ export class AgentFirewall {
         contentRisk: await this.contentRisk(p, policy.promptInjection.suspiciousWindowSeconds),
         payloadClassification: req.surface === "agent_message" ? this.classifyPayload(req.payload) : undefined,
         behavior: await this.behaviorState(p),
+        live: await this.liveIdentity(p),
       };
     } catch (err) {
       this.o.log("firewall could not look up facts; blocking", err);
@@ -231,6 +232,22 @@ export class AgentFirewall {
       this.o.log("prompt-injection history unavailable", err);
       return "unavailable";
     }
+  }
+
+  /**
+   * Not an enrichment: a status that cannot be read is a failed lookup, and
+   * the decision fails closed. This is what makes a suspension take effect
+   * for callers that hold a principal resolved before it.
+   */
+  private async liveIdentity(p: MachinePrincipal): Promise<RuleInputs["live"]> {
+    if (p.type !== "ai_agent" && p.type !== "service_account") return undefined;
+    if (!/^[0-9a-f-]{36}$/i.test(p.id)) return null;
+    const r = (await this.o.pool.query(
+      `SELECT status, risk_level, (expires_at IS NOT NULL AND expires_at <= now()) AS expired
+         FROM machine_identities WHERE id = $1 AND tenant_id = $2`,
+      [p.id, p.tenantId],
+    )).rows[0];
+    return r ? { status: r.status, riskLevel: r.risk_level, expired: r.expired } : null;
   }
 
   setBehaviorMonitor(m: BehaviorMonitor): void {
@@ -357,6 +374,8 @@ export class AgentFirewall {
       maxRedirects?: number;
       maxResponseBytes?: number;
       timeoutMs?: number;
+      /** Aborts the request in flight (the kill switch uses this). */
+      signal?: AbortSignal;
     },
   ): Promise<EgressResponse> {
     const decisions: FirewallDecision[] = [];
@@ -373,13 +392,14 @@ export class AgentFirewall {
         method,
         payload: { headers: spec.headers ?? {}, body },
       };
+      spec.signal?.throwIfAborted();
       const d = await this.evaluate(ctx, req);
       decisions.push(d);
       if (d.decision === "BLOCK") throw new FirewallBlockedError(d);
 
       let res: { status: number; headers: EgressResponse["headers"]; body: Buffer };
       try {
-        res = await this.send(url, method, spec.headers ?? {}, body, spec.maxResponseBytes ?? 5 * 1024 * 1024, spec.timeoutMs ?? 10_000);
+        res = await this.send(url, method, spec.headers ?? {}, body, spec.maxResponseBytes ?? 5 * 1024 * 1024, spec.timeoutMs ?? 10_000, spec.signal);
       } catch (err) {
         if ((err as { code?: string }).code === "EFIREWALL") {
           const blocked = await this.evaluate(ctx, req, [
@@ -404,7 +424,7 @@ export class AgentFirewall {
     }
   }
 
-  private send(url: string, method: string, headers: Record<string, string>, body: string | undefined, maxBytes: number, timeoutMs: number) {
+  private send(url: string, method: string, headers: Record<string, string>, body: string | undefined, maxBytes: number, timeoutMs: number, signal?: AbortSignal) {
     const lookup: LookupFunction = (hostname, options, callback) => {
       this.lookup(hostname).then(
         (addrs) => {
@@ -424,7 +444,7 @@ export class AgentFirewall {
     };
 
     return new Promise<{ status: number; headers: EgressResponse["headers"]; body: Buffer }>((resolve, reject) => {
-      const r = https.request(url, { method, headers, lookup, timeout: timeoutMs, agent: false }, (res) => {
+      const r = https.request(url, { method, headers, lookup, timeout: timeoutMs, agent: false, signal }, (res) => {
         const chunks: Buffer[] = [];
         let size = 0;
         res.on("data", (c: Buffer) => {
@@ -487,7 +507,7 @@ export class AgentFirewall {
       const m = /^[0-9a-f-]{36}$/i.test(messageId)
         ? (await this.o.pool.query(
             `SELECT id, from_identity, requested_permission, chain FROM agent_messages
-              WHERE id = $1 AND tenant_id = $2 AND to_identity = $3 AND expires_at > now()`,
+              WHERE id = $1 AND tenant_id = $2 AND to_identity = $3 AND expires_at > now() AND withdrawn_at IS NULL`,
             [messageId, p.tenantId, p.id],
           )).rows[0]
         : undefined;
@@ -557,7 +577,7 @@ export class AgentFirewall {
   async inbox(p: MachinePrincipal) {
     const res = await this.o.pool.query(
       `SELECT id, from_identity, requested_permission, payload, chain, decision_id, created_at, expires_at
-         FROM agent_messages WHERE tenant_id = $1 AND to_identity = $2 AND expires_at > now()
+         FROM agent_messages WHERE tenant_id = $1 AND to_identity = $2 AND expires_at > now() AND withdrawn_at IS NULL
         ORDER BY created_at DESC LIMIT 100`,
       [p.tenantId, p.id],
     );

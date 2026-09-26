@@ -379,6 +379,17 @@ describe("agent-to-agent communication", () => {
     await setPolicy({ agentMessages: { allow: [{ from: a.agent.id, to: b.agent.id }] } });
     const sent = await request(t.app).post("/agent/v1/messages").set(bearer(a.token)).send({ toAgentId: b.agent.id, requestedPermission: "alerts:read" });
     await request(t.app).post(`/agents/${a.agent.id}/suspend`).set(as("alice")).send({});
+    // Suspension withdraws the sender's pending requests outright.
+    const res = await request(t.app).get("/agent/v1/alerts").set(bearer(b.token)).set("x-legion-message-id", sent.body.messageId);
+    expect(res.status).toBe(403);
+    expect(res.body.error.rules).toContain("a2a.message_invalid");
+  });
+
+  it("a message is void once its sender can no longer act for any other reason", async () => {
+    const { a, b } = await pair();
+    await setPolicy({ agentMessages: { allow: [{ from: a.agent.id, to: b.agent.id }] } });
+    const sent = await request(t.app).post("/agent/v1/messages").set(bearer(a.token)).send({ toAgentId: b.agent.id, requestedPermission: "alerts:read" });
+    await t.pool.query("UPDATE machine_identities SET expires_at = now() - interval '1 second' WHERE id = $1", [a.agent.id]);
     const res = await request(t.app).get("/agent/v1/alerts").set(bearer(b.token)).set("x-legion-message-id", sent.body.messageId);
     expect(res.body.error.rules).toContain("a2a.sender_inactive");
   });

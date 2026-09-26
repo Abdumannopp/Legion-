@@ -23,6 +23,22 @@ export class ToolBlockedError extends FirewallBlockedError {
   }
 }
 
+/** A tool call stopped mid-run because its agent was suspended (or the host aborted it). */
+export class ToolAbortedError extends Error {
+  constructor(readonly identityId: string, readonly reason: string) {
+    super(`Tool execution aborted: ${reason}`);
+    this.name = "ToolAbortedError";
+  }
+}
+
+interface Running {
+  identityId: string;
+  tenantId: string;
+  kind: ToolKind;
+  startedAt: number;
+  controller: AbortController;
+}
+
 export interface ToolAuthorization {
   decision: FirewallDecision;
   analysis: ToolAnalysis;
@@ -60,6 +76,10 @@ export function callDigest(call: ToolCall): string {
  */
 export class ToolGateway {
   readonly audit: ToolAuditLog;
+  /** Executions in progress on this instance, so a suspension can stop them. */
+  private readonly running = new Map<symbol, Running>();
+  private watchdog: NodeJS.Timeout | null = null;
+  private watchdogBusy = false;
 
   constructor(
     private readonly o: {
@@ -68,9 +88,68 @@ export class ToolGateway {
       policies: PolicyStore;
       contentGuard: PromptInjectionGuard;
       log: (msg: string, err?: unknown) => void;
+      /** How often running executions re-check their agent's status (default 1000 ms). */
+      statusPollMs?: number;
     },
   ) {
     this.audit = new ToolAuditLog(o.pool);
+  }
+
+  /**
+   * Stops every execution this instance is running for these identities.
+   * The kill switch calls it after committing; other instances find out
+   * through the watchdog within statusPollMs.
+   */
+  abortFor(identityIds: Iterable<string>, reason: string): number {
+    const ids = new Set(identityIds);
+    let n = 0;
+    for (const r of this.running.values()) {
+      if (ids.has(r.identityId) && !r.controller.signal.aborted) {
+        r.controller.abort(new ToolAbortedError(r.identityId, reason));
+        n++;
+      }
+    }
+    return n;
+  }
+
+  /** Executions in progress on this instance (for operators). */
+  runningExecutions(): { identityId: string; tenantId: string; kind: ToolKind; startedAt: string }[] {
+    return [...this.running.values()].map((r) => ({ identityId: r.identityId, tenantId: r.tenantId, kind: r.kind, startedAt: new Date(r.startedAt).toISOString() }));
+  }
+
+  private startWatchdog(): void {
+    if (this.watchdog) return;
+    this.watchdog = setInterval(() => void this.checkRunning(), this.o.statusPollMs ?? 1_000);
+    this.watchdog.unref();
+  }
+
+  private stopWatchdogIfIdle(): void {
+    if (this.running.size || !this.watchdog) return;
+    clearInterval(this.watchdog);
+    this.watchdog = null;
+  }
+
+  /** One query for all running executions: is any of their agents no longer active? */
+  private async checkRunning(): Promise<void> {
+    if (this.watchdogBusy || !this.running.size) return;
+    this.watchdogBusy = true;
+    try {
+      const ids = [...new Set([...this.running.values()].map((r) => r.identityId))];
+      const res = await this.o.pool.query(
+        "SELECT id::text, status FROM machine_identities WHERE id = ANY($1::uuid[])",
+        [ids],
+      );
+      const active = new Set(res.rows.filter((r) => r.status === "active").map((r) => r.id as string));
+      const stopped = ids.filter((id) => !active.has(id));
+      if (stopped.length) {
+        const n = this.abortFor(stopped, "agent is no longer active");
+        if (n) this.o.log(`kill switch: aborted ${n} running tool execution(s) for ${stopped.join(", ")}`);
+      }
+    } catch (err) {
+      this.o.log("tool execution status check failed", err);
+    } finally {
+      this.watchdogBusy = false;
+    }
   }
 
   async authorize(ctx: FirewallContext, input: unknown, extraHits: FirewallDecision["hits"] = []): Promise<ToolAuthorization> {
@@ -156,19 +235,26 @@ export class ToolGateway {
     // AND this exact call is consumed. A mismatch does not burn the ticket.
     const digestOfCall = callDigest(parsed.data);
     const res = await this.o.pool.query(
-      `UPDATE tool_call_tickets SET consumed_at = now(), consumed_by = $2
-        WHERE ticket_hash = $1 AND consumed_at IS NULL AND expires_at > now() AND tenant_id = $3 AND call_digest = $4
-        RETURNING identity_id, decision_id`,
+      `UPDATE tool_call_tickets t SET consumed_at = now(), consumed_by = $2
+        WHERE t.ticket_hash = $1 AND t.consumed_at IS NULL AND t.revoked_at IS NULL AND t.expires_at > now()
+          AND t.tenant_id = $3 AND t.call_digest = $4
+          AND EXISTS (SELECT 1 FROM machine_identities i WHERE i.id = t.identity_id AND i.status = 'active')
+        RETURNING t.identity_id, t.decision_id`,
       [hash, verifier.id, verifier.tenantId, digestOfCall],
     );
     const row = res.rows[0];
     if (!row) {
       const known = (await this.o.pool.query(
-        "SELECT tenant_id, identity_id, decision_id, call_digest, consumed_at, expires_at > now() AS live FROM tool_call_tickets WHERE ticket_hash = $1",
+        `SELECT t.tenant_id, t.identity_id, t.decision_id, t.call_digest, t.consumed_at, t.revoked_at, t.expires_at > now() AS live,
+                i.status AS identity_status
+           FROM tool_call_tickets t LEFT JOIN machine_identities i ON i.id = t.identity_id
+          WHERE t.ticket_hash = $1`,
         [hash],
       )).rows[0];
       if (!known) return reject("unknown");
       if (known.tenant_id !== verifier.tenantId) return reject("unknown"); // do not reveal other tenants' tickets
+      // Suspension outranks every other reason: the tool server should know the agent was stopped.
+      if (known.revoked_at || known.identity_status !== "active") return reject("agent_suspended", known);
       if (known.consumed_at) return reject("already_used", known);
       if (!known.live) return reject("expired", known);
       return reject("call_mismatch", known);
@@ -186,20 +272,50 @@ export class ToolGateway {
    * as external content (classified, recorded against the agent if
    * flagged). For audited calls the outcome is recorded too.
    */
-  async execute<T extends ToolResult>(ctx: FirewallContext, input: unknown, executor: (call: ToolCall, auth: ToolAuthorization) => Promise<T>): Promise<T & { decisionId: string; outputVerdict: Verdict | null }> {
+  async execute<T extends ToolResult>(
+    ctx: FirewallContext,
+    input: unknown,
+    executor: (call: ToolCall, auth: ToolAuthorization, signal: AbortSignal) => Promise<T>,
+  ): Promise<T & { decisionId: string; outputVerdict: Verdict | null }> {
     const auth = await this.authorize(ctx, input);
     if (auth.decision.decision === "BLOCK" || !auth.call) throw new ToolBlockedError(auth.decision, auth.analysis);
     const call = auth.call;
+
+    // Registered while it runs, so a suspension can stop it. The executor gets
+    // the signal; one that ignores it is still cut loose — its result never
+    // reaches the agent.
+    const key = Symbol(call.kind);
+    const controller = new AbortController();
+    this.running.set(key, { identityId: ctx.principal.id, tenantId: ctx.principal.tenantId, kind: call.kind, startedAt: Date.now(), controller });
+    this.startWatchdog();
     let result: T;
     try {
-      result = await executor(call, auth);
+      const aborted = new Promise<never>((_, reject) => {
+        const fail = () => reject(controller.signal.reason);
+        if (controller.signal.aborted) fail();
+        else controller.signal.addEventListener("abort", fail, { once: true });
+      });
+      aborted.catch(() => {});
+      result = await Promise.race([executor(call, auth, controller.signal), aborted]);
+      controller.signal.throwIfAborted();
     } catch (err) {
+      if (controller.signal.aborted) {
+        const reason = controller.signal.reason instanceof ToolAbortedError ? controller.signal.reason : new ToolAbortedError(ctx.principal.id, "aborted");
+        // Always recorded: a stopped execution is a security event, whatever its risk.
+        await this.audit.record(ToolAuditLog.build("outcome", ctx, input, auth.analysis, auth.decision, {
+          outcome: "aborted", outcomeDetail: reason.reason,
+        })).catch((e) => this.o.log("tool audit write failed for an aborted call", e));
+        throw reason;
+      }
       if (auth.audited) {
         await this.audit.record(ToolAuditLog.build("outcome", ctx, input, auth.analysis, auth.decision, {
           outcome: "error", outcomeDetail: err instanceof Error ? err.message : String(err),
         })).catch((e) => this.o.log("tool audit write failed for an outcome", e));
       }
       throw err;
+    } finally {
+      this.running.delete(key);
+      this.stopWatchdogIfIdle();
     }
     let outputVerdict: Verdict | null = null;
     if (typeof result.output === "string" && result.output.length) {
@@ -231,7 +347,7 @@ export class ToolGateway {
    * output and working directory are bounded.
    */
   async runShell(ctx: FirewallContext, input: unknown, opts: { timeoutMs?: number; maxOutputBytes?: number } = {}) {
-    return this.execute(ctx, input, async (call) => {
+    return this.execute(ctx, input, async (call, _auth, signal) => {
       if (call.kind !== "shell") throw new Error("not a shell call");
       const { policy } = await this.o.policies.get(ctx.principal.tenantId);
       const cwd = call.cwd ?? policy.files.roots.find((r) => r.access === "readwrite")!.path;
@@ -247,6 +363,9 @@ export class ToolGateway {
           timeout: opts.timeoutMs ?? 10_000,
           maxBuffer: opts.maxOutputBytes ?? 1_048_576,
           windowsHide: true,
+          // Suspension kills the process outright; it gets no chance to ignore it.
+          signal,
+          killSignal: "SIGKILL",
         }, (err, stdout, stderr) => {
           const code = err ? (typeof (err as { code?: unknown }).code === "number" ? (err as { code: number }).code : 1) : 0;
           resolve({ stdout: String(stdout), stderr: String(stderr), code });
@@ -283,10 +402,10 @@ export class ToolGateway {
 
   /** HTTP through the firewall's egress executor (DNS answers re-checked at connect time). */
   async http(ctx: FirewallContext, input: unknown) {
-    return this.execute(ctx, input, async (call) => {
+    return this.execute(ctx, input, async (call, _auth, signal) => {
       if (call.kind !== "http") throw new Error("not an http call");
       const res = await this.o.firewall.request(ctx, {
-        url: call.url, method: call.method, headers: call.headers, body: call.body,
+        url: call.url, method: call.method, headers: call.headers, body: call.body, signal,
         action: `tool:http.${call.method.toLowerCase()}`, permission: call.method.toUpperCase() === "GET" || call.method.toUpperCase() === "HEAD" ? "tool.http:read" : "tool.http:write",
       });
       return { output: res.body.toString("utf8"), data: { status: res.status } };

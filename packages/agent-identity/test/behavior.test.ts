@@ -147,6 +147,10 @@ describe("risk-based enforcement", () => {
     expect(audit).toMatchObject({ principal_type: "external_system", principal_id: "legion-behavior-monitor" });
     const kinds = (await t.identity.behavior.events(TENANT_A, { identityId: agent.id })).map((e) => e.kind);
     expect(kinds).toEqual(["auto_suspended", "level_change"]);
+    // Through the kill switch: same effect as an administrator's suspension.
+    const [event] = await t.identity.killSwitch.events(TENANT_A, { identityId: agent.id });
+    expect(event).toMatchObject({ kind: "agent_auto_suspended", severity: "high", compromise: "suspected", actorId: "legion-behavior-monitor" });
+    expect((await t.pool.query("SELECT count(*)::int AS n FROM security_notifications WHERE $1 = ANY(event_ids)", [event!.eventId])).rows[0].n).toBe(1);
   });
 
   it("a brand-new agent doing new things is not treated as an attack", async () => {

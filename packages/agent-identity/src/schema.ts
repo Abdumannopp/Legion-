@@ -381,6 +381,62 @@ DROP TRIGGER IF EXISTS agent_behavior_events_no_truncate ON agent_behavior_event
 CREATE TRIGGER agent_behavior_events_no_truncate
   BEFORE TRUNCATE ON agent_behavior_events
   FOR EACH STATEMENT EXECUTE FUNCTION principal_audit_log_append_only();
+
+-- ---- Emergency kill switch ------------------------------------------------------
+
+-- Cut-off markers: what a suspension withdrew, and when.
+ALTER TABLE tool_call_tickets ADD COLUMN IF NOT EXISTS revoked_at timestamptz;
+ALTER TABLE agent_messages ADD COLUMN IF NOT EXISTS withdrawn_at timestamptz;
+
+-- Every suspension or revocation of an agent, with who, why and what was cut
+-- off. Evidence: append-only and hash-chained per tenant.
+CREATE TABLE IF NOT EXISTS security_events (
+  seq           bigserial PRIMARY KEY,
+  chain_key     text NOT NULL,
+  event_id      uuid NOT NULL UNIQUE,
+  occurred_at   timestamptz NOT NULL,
+  tenant_id     text NOT NULL,
+  kind          text NOT NULL CHECK (kind IN ('agent_killed', 'agent_suspended', 'agent_revoked', 'agent_auto_suspended')),
+  severity      text NOT NULL CHECK (severity IN ('medium', 'high', 'critical')),
+  identity_id   text NOT NULL,
+  identity_kind text NOT NULL,
+  identity_name text NOT NULL,
+  actor_type    text NOT NULL,
+  actor_id      text NOT NULL,
+  compromise    text NOT NULL CHECK (compromise IN ('none', 'suspected', 'confirmed')),
+  reason        text,
+  details       jsonb NOT NULL,
+  prev_hash     text NOT NULL,
+  hash          text NOT NULL UNIQUE
+);
+CREATE INDEX IF NOT EXISTS security_events_chain ON security_events (chain_key, seq);
+CREATE INDEX IF NOT EXISTS security_events_identity ON security_events (tenant_id, identity_id, seq DESC);
+DROP TRIGGER IF EXISTS security_events_no_update ON security_events;
+CREATE TRIGGER security_events_no_update
+  BEFORE UPDATE OR DELETE ON security_events
+  FOR EACH ROW EXECUTE FUNCTION principal_audit_log_append_only();
+DROP TRIGGER IF EXISTS security_events_no_truncate ON security_events;
+CREATE TRIGGER security_events_no_truncate
+  BEFORE TRUNCATE ON security_events
+  FOR EACH STATEMENT EXECUTE FUNCTION principal_audit_log_append_only();
+
+-- Administrator notifications (outbox). Written in the same transaction as
+-- the suspension, so a notice cannot be lost between "suspended" and "sent".
+CREATE TABLE IF NOT EXISTS security_notifications (
+  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id       text NOT NULL,
+  event_ids       uuid[] NOT NULL,
+  subject         text NOT NULL,
+  body            jsonb NOT NULL,
+  status          text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed', 'undeliverable')),
+  attempts        integer NOT NULL DEFAULT 0,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  next_attempt_at timestamptz NOT NULL DEFAULT now(),
+  sent_at         timestamptz,
+  last_error      text
+);
+CREATE INDEX IF NOT EXISTS security_notifications_due ON security_notifications (next_attempt_at) WHERE status IN ('pending', 'failed');
+CREATE INDEX IF NOT EXISTS security_notifications_tenant ON security_notifications (tenant_id, created_at DESC);
 `;
 
 /** Constant advisory-lock key, so concurrently starting instances migrate one at a time. */

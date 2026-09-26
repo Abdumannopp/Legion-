@@ -320,3 +320,18 @@ describe("decision-log hygiene", () => {
     expect(findSecrets("nothing to see")).toEqual([]);
   });
 });
+
+describe("live identity status (kill switch)", () => {
+  const live = (status: string, extra: Partial<NonNullable<RuleInputs["live"]>> = {}) => ({ live: { status, riskLevel: "low", expired: false, ...extra } });
+  it("a principal resolved before a suspension is refused at the next decision", () => {
+    expect(hardIds(run(api(), live("suspended")))).toContain("identity.not_active");
+    expect(hardIds(run(api(), live("revoked")))).toContain("identity.not_active");
+    expect(hardIds(run(api(), { live: null }))).toContain("identity.not_active");
+    expect(hardIds(run(api(), live("active", { expired: true })))).toContain("identity.not_active");
+    expect(hardIds(run(api(), live("active", { riskLevel: "critical" })))).toContain("identity.risk_hold");
+  });
+  it("an active identity passes, and reads are not exempt from the stop", () => {
+    expect(hardIds(run(api(), live("active")))).toEqual([]);
+    expect(hardIds(run(api({ action: "alerts:read" }), live("suspended")))).toEqual(["identity.not_active"]);
+  });
+});

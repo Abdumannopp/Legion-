@@ -14,6 +14,8 @@ import { ToolGateway } from "./tools/gateway.js";
 import { toolAdminRouter, toolAgentRouter } from "./tools/routes.js";
 import { BehaviorMonitor, type BehaviorChange } from "./behavior/monitor.js";
 import { behaviorAdminRouter } from "./behavior/routes.js";
+import { KillSwitch, type AdminNotice, type SecurityEventRow } from "./killswitch/service.js";
+import { killSwitchRouter } from "./killswitch/routes.js";
 import { Router } from "express";
 import { agentRouter } from "./routes/agent.js";
 import { auditRouter, managementRouter } from "./routes/management.js";
@@ -47,6 +49,9 @@ export type { ToolAuditRow } from "./tools/audit.js";
 export { BehaviorMonitor, type BehaviorChange, type BehaviorState, type BehaviorEventRow } from "./behavior/monitor.js";
 export { assess, isAttackIndicator, isUnsafeAction } from "./behavior/assess.js";
 export { destinationKey, ATTACK_INDICATORS } from "./behavior/keys.js";
+export { KillSwitch, severityOf, type AdminNotice, type Compromise, type KillSwitchResult, type NotificationStatus, type SecurityEventKind, type SecurityEventRow, type Severity } from "./killswitch/service.js";
+export { ToolAbortedError } from "./tools/gateway.js";
+export type { CutOff } from "./store.js";
 export { levelOf, LEVEL_THRESHOLDS, LEVEL_ORDER, type BehaviorLevel, type Assessment, type BehaviorProfile, type Signal } from "./behavior/types.js";
 
 export interface AgentIdentityOptions {
@@ -68,6 +73,16 @@ export interface AgentIdentityOptions {
   onBehaviorChange?: (change: BehaviorChange) => void | Promise<void>;
   /** How long a per-agent behaviour assessment is reused (default 30 s). */
   behaviorRefreshSeconds?: number;
+  /**
+   * Delivers a kill-switch / suspension notice to the tenant's
+   * administrators (email, Slack, pager…). Throw to have it retried.
+   * Without it, notices are logged and kept in the API as undeliverable.
+   */
+  notifyAdmins?: (notice: AdminNotice) => void | Promise<void>;
+  /** Called once per security event (suspension, revocation, kill switch) — hook this to Legion's alerting/SIEM. */
+  onSecurityEvent?: (event: Omit<SecurityEventRow, "seq">) => void | Promise<void>;
+  /** How often running tool executions re-check their agent's status (default 1000 ms). */
+  killSwitchPollMs?: number;
   log?: (msg: string, err?: unknown) => void;
 }
 
@@ -87,6 +102,7 @@ export interface AgentIdentityOptions {
  *   app.use("/prompt-guard", identity.promptGuardApi); // people: injection events, acknowledge
  *   app.use("/tools", identity.toolsApi);        // people: tool audit log
  *   app.use("/behavior", identity.behaviorApi);  // people: agent behaviour, review
+ *   app.use("/kill-switch", identity.killSwitchApi); // admins: emergency stop, security events
  *   app.get("/agent/v1/alerts", identity.guards.requirePermission("alerts:read"), handler);
  */
 export function createAgentIdentity(opts: AgentIdentityOptions) {
@@ -111,15 +127,22 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
     log,
   });
   const guards = createGuards(audit, log, firewall);
-  const tools = new ToolGateway({ pool: opts.pool, firewall, policies, contentGuard, log });
+  const tools = new ToolGateway({ pool: opts.pool, firewall, policies, contentGuard, log, statusPollMs: opts.killSwitchPollMs });
   const behavior = new BehaviorMonitor({
     pool: opts.pool, policies, store, audit, contentGuard, log,
     onChange: opts.onBehaviorChange, refreshSeconds: opts.behaviorRefreshSeconds,
   });
   firewall.setBehaviorMonitor(behavior);
+  const killSwitch = new KillSwitch({
+    pool: opts.pool, store, audit, tools, behavior, log, notifyAdmins: opts.notifyAdmins, onSecurityEvent: opts.onSecurityEvent,
+  });
+  behavior.setSuspender(async (tenantId, identityId, actor, reason) => {
+    const r = await killSwitch.activate({ tenantId, identityIds: [identityId], reason, compromise: "suspected", actor, kind: "agent_auto_suspended" });
+    return r.affected.length > 0;
+  });
   const agentBasePath = opts.agentBasePath ?? "/agent/v1";
   const sampler = new FailureSampler();
-  const deps = { store, audit, host: opts.host, guards, sampler, log, firewall, policies, decisions, delegations, contentGuard, tools, behavior };
+  const deps = { store, audit, host: opts.host, guards, sampler, log, firewall, policies, decisions, delegations, contentGuard, tools, behavior, killSwitch };
   const agentExtras = Router();
   agentExtras.use(agentMessageRouter(deps));
   agentExtras.use(contentInspectRouter(deps));
@@ -167,6 +190,7 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
     promptGuardApi: promptGuardAdminRouter(deps),
     toolsApi: toolAdminRouter(deps),
     behaviorApi: behaviorAdminRouter(deps),
+    killSwitchApi: killSwitchRouter(deps),
     guards,
     audit,
     firewall,
@@ -176,6 +200,8 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
     tools,
     /** Behavioural profiles and runtime classification. Run behavior.sweep(tenantId) every minute. */
     behavior,
+    /** Emergency stop for agents. Run killSwitch.deliverPending() every minute to retry admin notices. */
+    killSwitch,
     /** Call periodically (e.g. hourly) to drop long-expired token and tool-ticket rows. */
     purgeExpiredTokens: async () => (await store.purgeExpiredTokens()) + (await tools.purgeExpiredTickets()),
   };

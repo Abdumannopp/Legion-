@@ -10,6 +10,7 @@ import {
   type Permission,
 } from "../permissions.js";
 import { sendError, clientIp } from "../principal.js";
+import type { KillSwitch } from "../killswitch/service.js";
 import type { Identity, IdentityStore } from "../store.js";
 import type { HostAdapter, HumanPrincipal, MachineKind, RiskLevel } from "../types.js";
 
@@ -73,9 +74,9 @@ function isUniqueViolation(err: unknown): boolean {
  */
 export function managementRouter(
   kind: MachineKind,
-  deps: { store: IdentityStore; audit: AuditLog; host: HostAdapter; guards: ReturnType<typeof createGuards> },
+  deps: { store: IdentityStore; audit: AuditLog; host: HostAdapter; guards: ReturnType<typeof createGuards>; killSwitch: KillSwitch },
 ): Router {
-  const { store, audit, host, guards } = deps;
+  const { store, audit, host, guards, killSwitch } = deps;
   const router = Router();
   const admin = guards.requireHuman(["admin"]);
   const staff = guards.requireHuman(["admin", "analyst"]);
@@ -219,21 +220,24 @@ export function managementRouter(
 
   // Suspension is the fast "stop this agent now" switch, so its owner may use
   // it too — not only administrators. Resuming stays with administrators.
+  // Suspension and revocation go through the kill switch, so every way of
+  // stopping an identity has the same effect: tokens, tool tickets and
+  // pending agent requests withdrawn, running tool calls aborted, a
+  // security event recorded and administrators notified.
   router.post("/:id/suspend", anyone, handle(async (req, res) => {
     const { reason } = parse(reasonBody, req.body);
     const caller = me(req);
-    const updated = await store.tx(async (c) => {
-      const current = await lockedIdentity(c, req);
-      if (caller.role !== "admin" && current.ownerUserId !== caller.id) {
-        throw new HttpError(403, "forbidden", "Only an administrator or the identity's owner can suspend it.");
-      }
-      if (current.status === "revoked") throw new HttpError(409, "revoked", "This identity is revoked.");
-      if (current.status === "suspended") return current;
-      const next = await store.setStatus(c, current.id, "suspended", reason ?? null);
-      await audit.record({ ...ctx(req), action: "identity.suspended", outcome: "success", resourceId: current.id, reason }, c);
-      return next;
+    const current = await store.get(caller.tenantId, kind, idParam(req));
+    if (!current) throw new HttpError(404, "not_found", "No such identity.");
+    if (caller.role !== "admin" && current.ownerUserId !== caller.id) {
+      throw new HttpError(403, "forbidden", "Only an administrator or the identity's owner can suspend it.");
+    }
+    if (current.status === "revoked") throw new HttpError(409, "revoked", "This identity is revoked.");
+    await killSwitch.activate({
+      tenantId: caller.tenantId, identityIds: [current.id], onlyKind: kind, reason: reason ?? null, compromise: "none",
+      actor: caller, kind: "agent_suspended", requestId: req.requestId, ip: clientIp(req), userAgent: req.get("user-agent"),
     });
-    res.json({ identity: updated });
+    res.json({ identity: await store.get(caller.tenantId, kind, current.id) });
   }));
 
   router.post("/:id/resume", admin, handle(async (req, res) => {
@@ -250,14 +254,15 @@ export function managementRouter(
 
   router.post("/:id/revoke", admin, handle(async (req, res) => {
     const { reason } = parse(reasonBody, req.body);
-    const updated = await store.tx(async (c) => {
-      const current = await lockedIdentity(c, req);
-      if (current.status === "revoked") throw new HttpError(409, "revoked", "Already revoked.");
-      const next = await store.setStatus(c, current.id, "revoked", reason ?? null);
-      await audit.record({ ...ctx(req), action: "identity.revoked", outcome: "success", resourceId: current.id, reason }, c);
-      return next;
+    const caller = me(req);
+    const current = await store.get(caller.tenantId, kind, idParam(req));
+    if (!current) throw new HttpError(404, "not_found", "No such identity.");
+    if (current.status === "revoked") throw new HttpError(409, "revoked", "Already revoked.");
+    await killSwitch.activate({
+      tenantId: caller.tenantId, identityIds: [current.id], onlyKind: kind, reason: reason ?? null, compromise: "none",
+      actor: caller, kind: "agent_revoked", status: "revoked", requestId: req.requestId, ip: clientIp(req), userAgent: req.get("user-agent"),
     });
-    res.json({ identity: updated });
+    res.json({ identity: await store.get(caller.tenantId, kind, current.id) });
   }));
 
   router.post("/:id/credentials", admin, handle(async (req, res) => {

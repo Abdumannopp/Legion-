@@ -69,6 +69,15 @@ function toCredential(r: any): CredentialInfo {
   };
 }
 
+/** What a suspension or revocation withdrew. */
+export interface CutOff {
+  tokens: number;
+  toolTickets: number;
+  messages: number;
+  credentials: number;
+  delegations: number;
+}
+
 export const MAX_ACTIVE_CREDENTIALS = 2;
 
 export class IdentityStore {
@@ -175,19 +184,62 @@ export class IdentityStore {
    * Revocation additionally kills every credential and is final.
    */
   async setStatus(c: PoolClient, id: string, status: IdentityStatus, reason: string | null): Promise<Identity> {
+    return (await this.changeStatus(c, id, status, reason)).identity;
+  }
+
+  /**
+   * The one place an identity stops (or restarts). Any status other than
+   * active cuts off everything short-lived the identity holds — access
+   * tokens, unused tool tickets, and the requests it sent other agents that
+   * have not expired — so no path keeps working after the switch. Long-lived
+   * credentials and people's delegations go too on revocation, or when asked
+   * (a confirmed compromise).
+   */
+  async changeStatus(
+    c: PoolClient,
+    id: string,
+    status: IdentityStatus,
+    reason: string | null,
+    opts: { revokeCredentials?: boolean; revokeDelegations?: boolean; by?: string } = {},
+  ): Promise<{ identity: Identity; cutOff: CutOff }> {
     const res = await c.query(
       `UPDATE machine_identities SET status = $2, status_reason = $3, updated_at = now(),
          revoked_at = CASE WHEN $2 = 'revoked' THEN now() ELSE NULL END
        WHERE id = $1 RETURNING *`,
       [id, status, reason],
     );
-    if (status !== "active") {
-      await c.query("UPDATE machine_tokens SET revoked_at = now() WHERE identity_id = $1 AND revoked_at IS NULL", [id]);
+    const cutOff = status === "active"
+      ? { tokens: 0, toolTickets: 0, messages: 0, credentials: 0, delegations: 0 }
+      : await this.cutOff(c, id, {
+          revokeCredentials: status === "revoked" || opts.revokeCredentials,
+          revokeDelegations: status === "revoked" || opts.revokeDelegations,
+          by: opts.by,
+        });
+    return { identity: toIdentity(res.rows[0]), cutOff };
+  }
+
+  /** Withdraws what the identity holds (see changeStatus). Safe to repeat: counts only what it withdrew now. */
+  async cutOff(c: PoolClient, id: string, opts: { revokeCredentials?: boolean; revokeDelegations?: boolean; by?: string } = {}): Promise<CutOff> {
+    const n = async (sql: string, args: unknown[] = [id]) => (await c.query(sql, args)).rowCount ?? 0;
+    const out: CutOff = { tokens: 0, toolTickets: 0, messages: 0, credentials: 0, delegations: 0 };
+    out.tokens = await n("UPDATE machine_tokens SET revoked_at = now() WHERE identity_id = $1 AND revoked_at IS NULL AND expires_at > now()");
+    await n("UPDATE machine_tokens SET revoked_at = now() WHERE identity_id = $1 AND revoked_at IS NULL");
+    out.toolTickets = await n(
+      "UPDATE tool_call_tickets SET revoked_at = now() WHERE identity_id = $1 AND revoked_at IS NULL AND consumed_at IS NULL AND expires_at > now()",
+    );
+    out.messages = await n(
+      "UPDATE agent_messages SET withdrawn_at = now(), expires_at = now() WHERE from_identity = $1 AND withdrawn_at IS NULL AND expires_at > now()",
+    );
+    if (opts.revokeCredentials) {
+      out.credentials = await n("UPDATE machine_credentials SET revoked_at = now() WHERE identity_id = $1 AND revoked_at IS NULL");
     }
-    if (status === "revoked") {
-      await c.query("UPDATE machine_credentials SET revoked_at = now() WHERE identity_id = $1 AND revoked_at IS NULL", [id]);
+    if (opts.revokeDelegations) {
+      out.delegations = await n(
+        "UPDATE agent_delegations SET revoked_at = now(), revoked_by = $2 WHERE identity_id = $1 AND revoked_at IS NULL AND expires_at > now()",
+        [id, opts.by ?? "legion-kill-switch"],
+      );
     }
-    return toIdentity(res.rows[0]);
+    return out;
   }
 
   async listCredentials(identityId: string): Promise<CredentialInfo[]> {

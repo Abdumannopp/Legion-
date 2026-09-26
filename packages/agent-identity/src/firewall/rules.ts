@@ -36,6 +36,12 @@ export interface RuleInputs {
   payloadClassification?: { verdict: Verdict; riskScore: number; findingIds: string[] };
   /** Runtime behaviour classification, or "unavailable" if it could not be assessed. */
   behavior?: BehaviorState | "unavailable";
+  /**
+   * The identity as stored right now (null: no such identity). The
+   * principal may have been resolved earlier — a long-running agent loop, a
+   * queued job — so its status is re-read at every decision.
+   */
+  live?: { status: string; riskLevel: string; expired: boolean } | null;
 }
 
 export interface RuleOutput {
@@ -213,6 +219,13 @@ export function evaluateRules(input: RuleInputs): RuleOutput {
   // ---- Checks every surface shares ----------------------------------------
   if (p.type !== "ai_agent" && p.type !== "service_account") hard("identity.not_machine", "Only registered machine identities pass this firewall.");
   if (p.riskLevel === "critical") hard("identity.risk_hold", "This identity is on risk hold.");
+  if (input.live !== undefined) {
+    const l = input.live;
+    if (!l) hard("identity.not_active", "This identity no longer exists.");
+    else if (l.status !== "active") hard("identity.not_active", `This identity is ${l.status}.`);
+    else if (l.expired) hard("identity.not_active", "This identity has expired.");
+    else if (l.riskLevel === "critical" && p.riskLevel !== "critical") hard("identity.risk_hold", "This identity is on risk hold.");
+  }
   if (req.resource?.tenantId && req.resource.tenantId !== p.tenantId) {
     hard("tenant.mismatch", "The target belongs to another organisation.");
   }

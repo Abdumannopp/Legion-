@@ -8,9 +8,11 @@ runs ([below](#agent-firewall)), and all external content that reaches a model
 passes the [prompt-injection guard](#prompt-injection-protection). Every AI
 tool call goes through the [tool gateway](#tool-security), and each agent's
 behaviour is compared with its own normal role at runtime
-([behaviour monitoring](#runtime-behaviour-monitoring)).
+([behaviour monitoring](#runtime-behaviour-monitoring)). Administrators can
+stop a compromised agent at once with the
+[emergency kill switch](#emergency-kill-switch).
 
-> **Status.** Complete and tested as a standalone module (465 tests, many against
+> **Status.** Complete and tested as a standalone module (498 tests, many against
 > real PostgreSQL 16). **Not yet wired into Legion's server**: `server/` was not in
 > the repository when this was written. Wiring is the ~15 lines in
 > [Integration](#integration); nothing in the existing human login needs to
@@ -497,7 +499,8 @@ intent evidence they're capped at SUSPICIOUS.
   assessments across instances can't duplicate it.
 - The change reaches `onBehaviorChange` for alerting.
 - `autoSuspendOnCritical` (off by default) additionally suspends the
-  identity, and records and audits the suspension.
+  identity through the kill switch (below), with the same effect as an
+  administrator's suspension.
 - **An administrator's review** (`POST /behavior/agents/:id/acknowledge`,
   reason required) restarts the window. The admin decides what the reviewed
   activity was:
@@ -519,6 +522,80 @@ Run `identity.behavior.sweep(tenantId)` every minute or so, so levels (and
 alerts) update even when an agent goes quiet. Configure with
 `PUT /firewall/policy` → `behavior` (`windowMinutes`, `baselineDays`,
 `minBaselineEvents`, `minBaselineDays`, `autoSuspendOnCritical`).
+
+## Emergency kill switch
+
+For an agent that is confirmed or strongly suspected to be compromised.
+
+```bash
+curl -X POST /kill-switch/agents/<id> -d '{"reason":"Exfiltration to an unknown host","compromise":"suspected"}'
+curl -X POST /kill-switch/all -d '{"reason":"…","compromise":"confirmed","confirmAll":true}'   # every AI agent in the org
+```
+
+**One transaction** (`KillSwitch.activate`):
+
+1. The identity is marked `suspended`, with the reason.
+2. Everything short-lived is withdrawn:
+   - access tokens;
+   - unused tool tickets;
+   - its unexpired requests to other agents (they leave the recipients'
+     inboxes, and citing one is refused).
+3. On a **confirmed** compromise, its credentials and people's delegations
+   are revoked too, so a resume alone does not bring it back: an
+   administrator must issue a new credential. On a **suspected** one they
+   are kept, so a false alarm is undone with `POST /agents/:id/resume`.
+4. An audit row (`killswitch.activated`) is written.
+5. A **security event** goes into `security_events` (append-only,
+   hash-chained): who, why, how sure, and what was cut off.
+6. An **administrator notice** is queued in `security_notifications`.
+
+**Then:**
+
+- **Running tool executions stop.** Those on this instance are aborted
+  immediately; other instances abort theirs within `killSwitchPollMs`
+  (default 1 s). Shell commands are killed (SIGKILL) and HTTP requests
+  cancelled. An executor that ignores the signal is cut loose: its result
+  never reaches the agent. Every abort is recorded in `tool_call_audit` with
+  outcome `aborted`.
+- **The notice is delivered** through `notifyAdmins`. A failure is retried
+  with backoff (`killSwitch.deliverPending()`, or
+  `POST /kill-switch/notifications/retry`), and two instances never send
+  the same notice twice. Without a notifier, the notice is logged as
+  `ADMIN NOTICE NOT DELIVERED` and shown as `undeliverable` in the API.
+- `onSecurityEvent` fires once per stopped identity, for the SIEM.
+
+**No path around it.** Every way of stopping an identity goes through
+`activate()`, so each has exactly the same effect:
+
+- the kill switch;
+- an owner's or administrator's `POST /agents/:id/suspend`;
+- `POST /agents/:id/revoke`;
+- behaviour auto-suspension;
+- a library call from, say, a SOAR playbook.
+
+The stop is enforced at every entry point, not only at the one that was
+used:
+
+| Path | Enforcement |
+|---|---|
+| Existing access token, any route (agent API, people's routes, unguarded paths) | Identity status re-checked on every request → 401 |
+| Credential → new token | Refused while not active; revoked on confirmed compromise |
+| Code holding a principal resolved *before* the stop (agent loops, queued jobs) | The firewall re-reads the status at **every** decision (`identity.not_active`, fails closed) |
+| Tool ticket issued before the stop | Revoked; the tool server's verify returns `agent_suspended` |
+| Request relayed to another agent | Withdrawn; acting on it is refused (`a2a.message_invalid`) |
+| Acting for a person (`x-legion-on-behalf-of`) | Token refused first; confirmed compromise also revokes the grants |
+| Execution already running | Aborted (locally at once, other instances within 1 s) |
+
+| Endpoint | Who |
+|---|---|
+| `POST /kill-switch/agents/:id { reason (≥10 chars), compromise: suspected\|confirmed }` | admin |
+| `POST /kill-switch/all { reason, compromise, confirmAll: true }` — every active AI agent (service accounts keep running) | admin |
+| `GET /kill-switch/events`, `/events/verify` | admin, analyst / admin |
+| `GET /kill-switch/notifications`, `POST /kill-switch/notifications/retry` | admin |
+
+Repeating the switch is harmless: with nothing left to withdraw, it records
+nothing. Escalating from suspected to confirmed revokes what remains.
+Concurrent activations record exactly one event.
 
 ## Integration
 
@@ -546,7 +623,10 @@ Legion's server already has everything this needs (Express 5, `pg`,
    before the existing routes:
 
    ```ts
-   const identity = createAgentIdentity({ pool, host, exemptPaths: ["/health", "/security-events/webhook", "/billing/webhook"] });
+   const identity = createAgentIdentity({
+     pool, host, exemptPaths: ["/health", "/security-events/webhook", "/billing/webhook"],
+     notifyAdmins: (notice) => mailer.sendToTenantAdmins(notice.tenantId, notice.subject, notice), // existing mailer/Slack
+   });
    await identity.migrate();                                  // next to the existing migrate()
    app.use(identity.principal);
    app.use("/agent/v1", identity.agentApi);
@@ -557,7 +637,9 @@ Legion's server already has everything this needs (Express 5, `pg`,
    app.use("/prompt-guard", identity.promptGuardApi);
    app.use("/tools", identity.toolsApi);
    app.use("/behavior", identity.behaviorApi);
+   app.use("/kill-switch", identity.killSwitchApi);
    setInterval(() => identity.purgeExpiredTokens().catch(() => {}), 3_600_000).unref();
+   setInterval(() => identity.killSwitch.deliverPending().catch(() => {}), 60_000).unref();
    ```
 4. Expose agent actions as **new** routes under `/agent/v1/…` that call the
    same service functions as the human routes, each behind
@@ -663,6 +745,19 @@ requests from self-declared AI user agents without an identity get 401, and
 - **If the injection history can't be read, decisions fail open with a
   visible WARN** (`content.risk_unavailable`) instead of blocking every
   agent.
+- **The kill switch stops what passes through Legion.** An agent process
+  keeps running on its own host, and anything it does *without* Legion,
+  such as a cloud key it was handed directly, is outside this switch. Rotate
+  such secrets as part of the incident.
+- **An effect already delivered cannot be recalled.** An aborted HTTP
+  request may already have reached the server. A custom executor that
+  ignores the abort signal may finish its side effect; only its result is
+  withheld.
+- **Other instances stop running executions within `killSwitchPollMs`**
+  (1 s by default), not instantly. New actions are refused everywhere at
+  once.
+- **Notices depend on the host's `notifyAdmins`.** Without it, notices are
+  only logged and listed.
 
 ## Development
 
