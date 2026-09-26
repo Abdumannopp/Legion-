@@ -10,6 +10,8 @@ import type { ActionRequest, Advisor, FirewallContext, FirewallDecision } from "
 import { createPrincipalResolver, DEFAULT_AI_USER_AGENTS, FailureSampler } from "./principal.js";
 import { PromptInjectionGuard } from "./prompt-guard/guard.js";
 import { contentInspectRouter, promptGuardAdminRouter } from "./prompt-guard/routes.js";
+import { ToolGateway } from "./tools/gateway.js";
+import { toolAdminRouter, toolAgentRouter } from "./tools/routes.js";
 import { Router } from "express";
 import { agentRouter } from "./routes/agent.js";
 import { auditRouter, managementRouter } from "./routes/management.js";
@@ -35,6 +37,11 @@ export { PromptAssembly, SYSTEM_PROMPTS, reviewProposedAction, type SystemPrompt
 export { classifyContent } from "./prompt-guard/detectors.js";
 export type * from "./prompt-guard/types.js";
 export { CONTENT_SOURCES, THRESHOLDS } from "./prompt-guard/types.js";
+export { ToolGateway, ToolBlockedError, callDigest, type ToolAuthorization, type ToolResult } from "./tools/gateway.js";
+export { analyzeToolCall } from "./tools/analyzers.js";
+export { TOOL_KINDS, toolCallSchema, type ToolCall, type ToolCallInput, type ToolKind, type ToolAnalysis } from "./tools/types.js";
+export { DENIED_COMMANDS } from "./tools/shell.js";
+export type { ToolAuditRow } from "./tools/audit.js";
 
 export interface AgentIdentityOptions {
   pool: Pool;
@@ -68,6 +75,7 @@ export interface AgentIdentityOptions {
  *   app.use("/audit/principal-events", identity.auditApi);
  *   app.use("/firewall", identity.firewallApi);   // people: policy, decisions, delegations
  *   app.use("/prompt-guard", identity.promptGuardApi); // people: injection events, acknowledge
+ *   app.use("/tools", identity.toolsApi);        // people: tool audit log
  *   app.get("/agent/v1/alerts", identity.guards.requirePermission("alerts:read"), handler);
  */
 export function createAgentIdentity(opts: AgentIdentityOptions) {
@@ -92,12 +100,14 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
     log,
   });
   const guards = createGuards(audit, log, firewall);
+  const tools = new ToolGateway({ pool: opts.pool, firewall, policies, contentGuard, log });
   const agentBasePath = opts.agentBasePath ?? "/agent/v1";
   const sampler = new FailureSampler();
-  const deps = { store, audit, host: opts.host, guards, sampler, log, firewall, policies, decisions, delegations, contentGuard };
+  const deps = { store, audit, host: opts.host, guards, sampler, log, firewall, policies, decisions, delegations, contentGuard, tools };
   const agentExtras = Router();
   agentExtras.use(agentMessageRouter(deps));
   agentExtras.use(contentInspectRouter(deps));
+  agentExtras.use(toolAgentRouter(deps));
 
   // Safety net: a machine request that completed without a firewall decision
   // means a route was added without a guard. It is recorded as a failure so
@@ -139,13 +149,16 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
     auditApi: auditRouter(deps),
     firewallApi: firewallAdminRouter(deps),
     promptGuardApi: promptGuardAdminRouter(deps),
+    toolsApi: toolAdminRouter(deps),
     guards,
     audit,
     firewall,
     /** Classify, record and wrap external content before any model reads it. */
     contentGuard,
-    /** Call periodically (e.g. hourly) to drop long-expired token rows. */
-    purgeExpiredTokens: () => store.purgeExpiredTokens(),
+    /** Every AI tool call passes here: authorize, execute safely, audit. */
+    tools,
+    /** Call periodically (e.g. hourly) to drop long-expired token and tool-ticket rows. */
+    purgeExpiredTokens: async () => (await store.purgeExpiredTokens()) + (await tools.purgeExpiredTickets()),
   };
 }
 

@@ -1,7 +1,7 @@
-import path from "node:path";
 import { PERMISSION_TIERS, roleAllows, type Permission } from "../permissions.js";
 import type { HumanRole, MachinePrincipal } from "../types.js";
 import { classifyUrl } from "./destinations.js";
+import { checkFilePath } from "./paths.js";
 import { PROTECTED_TABLES, type FirewallPolicy } from "./policy.js";
 import { byteSize, findSecrets, findUrls } from "./scan.js";
 import type { ContentRiskSummary, Verdict } from "../prompt-guard/types.js";
@@ -42,8 +42,6 @@ export interface RuleOutput {
   destination: string | null;
 }
 
-/** Paths nobody's agent should read or write, whatever the roots say. */
-const SENSITIVE_PATH = /(^|\/)(\.env(\..*)?|\.ssh|\.gnupg|\.aws|\.kube|\.docker|id_rsa[^/]*|id_ed25519[^/]*|[^/]+\.(pem|key|p12|pfx|kdbx)|shadow|gshadow|sudoers|passwd|\.git-credentials|\.npmrc|\.pgpass)($|\/)|^\/(proc|sys|dev|boot|root)(\/|$)/i;
 const TABLE_NAME = /^[a-z_][a-z0-9_]{0,62}$/;
 const HTTP_METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
 
@@ -92,20 +90,9 @@ export function evaluateRules(input: RuleInputs): RuleOutput {
       break;
 
     case "file": {
-      if (req.path.includes("\0") || !path.isAbsolute(req.path)) {
-        hard("file.bad_path", "File paths must be absolute and contain no NUL bytes.");
-        destination = `file:${req.path.replace(/\0/g, "\\0")}`;
-        break;
-      }
-      const normalized = path.resolve(req.path);
-      destination = `file:${normalized}`;
-      if (SENSITIVE_PATH.test(normalized)) hard("file.sensitive_path", "Credentials, keys and system files are never accessible to agents.");
-      const root = policy.files.roots.find((r) => {
-        const rel = path.relative(path.resolve(r.path), normalized);
-        return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-      });
-      if (!root) hard("file.outside_roots", "Path is outside every directory this organisation opened to agents.");
-      else if (req.mode === "write" && root.access !== "readwrite") hard("file.read_only_root", "This directory is read-only for agents.");
+      const v = checkFilePath(policy, req.path, req.mode);
+      destination = v.destination;
+      for (const pr of v.problems) hard(pr.id, pr.reason);
       if (req.mode === "write") {
         add("file write", 10);
         changesState = true;
@@ -176,6 +163,15 @@ export function evaluateRules(input: RuleInputs): RuleOutput {
       permission = spec.permission;
       sensitivity = maxSensitivity(sensitivity, spec.sensitivity);
       checkArgs(spec, req.args, "mcp");
+      break;
+    }
+
+    case "tool_call": {
+      destination = req.destination;
+      hits.push(...req.analysisHits);
+      factors.push(...req.analysisFactors);
+      if (req.changesState) changesState = true;
+      if (req.externalEffect) externalEffect = true;
       break;
     }
 

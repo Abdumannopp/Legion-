@@ -5,9 +5,10 @@ owner, permissions and audit trail, so every action it takes is traceable to
 it, and so an AI agent is never served as an anonymous API client. Every
 agent action then passes a central, deterministic **agent firewall** before it
 runs ([below](#agent-firewall)), and all external content that reaches a model
-passes the [prompt-injection guard](#prompt-injection-protection).
+passes the [prompt-injection guard](#prompt-injection-protection). Every AI
+tool call goes through the [tool gateway](#tool-security).
 
-> **Status.** Complete and tested as a standalone module (286 tests, many against
+> **Status.** Complete and tested as a standalone module (427 tests, many against
 > real PostgreSQL 16). **Not yet wired into Legion's server**: `server/` was not in
 > the repository when this was written. Wiring is the ~15 lines in
 > [Integration](#integration); nothing in the existing human login needs to
@@ -333,6 +334,98 @@ When an agent is served alert content through `/agent/v1/…`, call
 `identity.contentGuard.ingest({ tenantId, principal: agent }, "security_alert", text)`
 so the risk follows the content to the agent that received it.
 
+## Tool security
+
+Every AI tool call passes through `ToolGateway.authorize` **before it runs**:
+1. The call is validated against a strict shape for its tool family.
+2. It is analysed deterministically.
+3. The agent firewall decides ALLOW, WARN or BLOCK.
+4. Blocked and high-risk calls are written to `tool_call_audit` first.
+
+### What is verified on every call
+
+| Check | How |
+|---|---|
+| Agent | The authenticated identity: status, risk, credential and owner, checked per request |
+| Tenant | The agent's tenant. For SQL, a bound `tenant_id = $n` parameter is required per table, and a parameter naming another tenant is refused |
+| Tool | One of `browser`, `http`, `database`, `files`, `shell`, `email`, `github`, `slack`, `mcp`, `cloud`. Anything else, or any malformed call, is itself a blocked, audited event |
+| Target | URL, tables, path, command line, recipients, repo@branch, channel, MCP tool, cloud resource |
+| Permission | `tool.<family>:read` / `:write` (`tool.shell:execute`), which must be granted *and* within the owner's role; plus delegation when acting for a person |
+| Risk | The firewall's deterministic score, plus tool-specific factors and prompt-injection quarantine |
+| Destination | `url:…`, `db:…`, `file:…`, `shell:…`, `email:<domains>`, `github:owner/repo`, `slack:<channel>`, `mcp:server/tool`, `cloud:provider:account:region` |
+
+### Blocked, whatever the policy says (hard rules)
+
+| Tool | Examples |
+|---|---|
+| Browser | Running scripts in a page; typing passwords or card data; executable downloads; `javascript:`, `file:` and internal URLs |
+| HTTP | SSRF (internal, metadata, mapped addresses; DNS re-checked at connect time); Host-header overrides; Legion credentials or secrets in the payload |
+| Database | Anything other than one SELECT/INSERT/UPDATE/DELETE; DDL, GRANT, COPY; comments; dollar quoting; server/file/network functions; system catalogs; identity/secret/audit tables; UPDATE/DELETE without WHERE; missing or foreign tenant scope |
+| Files | Keys, `.env`, `.ssh`, `/proc`; paths outside the roots, including via symlinks (re-checked at the real path); recursive delete; writing executables |
+| Shell | Interpreters, privilege tools, network tools, destructive and system commands (`DENIED_COMMANDS`; the policy *can't* allow them); paths or shell strings instead of a bare command; option-based code execution (`git -c`, `--upload-pack`, `core.sshCommand`); shell syntax in arguments; paths leaving the roots. Runs through `execFile` with no shell, a fixed `PATH`, and time and output limits |
+| Email | Recipients outside allowed domains; more than `maxRecipients`; choosing the sender; executable attachments; credentials in the message; deleting more than 50 messages |
+| GitHub | Merge, delete, visibility, settings, collaborators, deploy keys, secrets, webhooks, branch protection, releases, workflow runs; pushes to protected branches; force pushes; CI/CD and CODEOWNERS changes; secrets in content |
+| Slack | Channels not allowlisted or read-only; inviting, creating, archiving, topics; secrets; executable uploads |
+| MCP | Unapproved servers or tools; a changed tool definition (pinned SHA-256); undeclared arguments; secrets |
+| Cloud | Identity (IAM, STS, SSO, org), logging/detection tampering (CloudTrail, GuardDuty, Config, logs), key management, secret reads, remote command (`ssm:SendCommand`), public exposure (`0.0.0.0/0`, `Principal: "*"`, bucket policies); accounts and regions not allowlisted; destructive actions unless `allowDestructive` |
+
+**Soft rules** block in `enforce` mode and only warn in `monitor` mode:
+unlisted hosts or ports, downloads, attachments, Slack mass mentions,
+direct messages and uploads, and SQL without a LIMIT.
+
+### Tickets: making "through Legion" enforceable
+
+An allowed call returns a single-use ticket (`ltk_…`, 60 seconds), bound to
+the SHA-256 of the exact validated call. A tool server (a service account)
+calls `POST /agent/v1/tools/verify { ticket, call }` and runs only on
+`valid: true`:
+- **Changed arguments** → `call_mismatch`, and the ticket is *not* used up.
+- **Second use** → `already_used`.
+- **Another tenant** → `unknown`.
+- **Expired** → `expired`.
+
+Every verification, accepted or rejected, is audited.
+
+### Executing through Legion
+
+`tools.execute(ctx, call, executor)` runs your executor only after an allow.
+Built-in executors:
+- `tools.runShell` — `execFile`, no shell
+- `tools.files` — symlink-safe
+- `tools.http` — via the firewall's egress executor
+
+**Tool output is untrusted content:** it's classified by the prompt-injection
+guard, and an injection in a web page, file or API response quarantines the
+agent. Outcomes (success, error, output verdict) are appended to the audit.
+
+### Audit (`tool_call_audit`)
+
+- **What's recorded:** every BLOCK and WARN, every high-risk call (state
+  changes and external effects, even when allowed), and any call scoring
+  at or above `toolSecurity.auditRiskThreshold`.
+- **Phases:** `decision`, `outcome`, `ticket_verified`, `ticket_rejected`.
+- **Each row holds:**
+  - agent, owner, delegated person, tenant
+  - tool, operation, target, destination, permission
+  - decision, risk score, every rule hit
+  - the firewall decision id
+  - a digest and redacted preview of the call
+  - outcome and output verdict
+- **Integrity:** append-only and hash-chained per tenant.
+- **Fail closed:** if a risky call can't be audited, it's blocked
+  (`tool.audit_unavailable`).
+
+| Endpoint | Who |
+|---|---|
+| `POST /agent/v1/tools/authorize { call }` | agents |
+| `POST /agent/v1/tools/verify { ticket, call }` | service accounts (tool servers) |
+| `GET /tools/audit` (filter `decision`, `tool`, `principalId`, `phase`) | admin, analyst |
+| `GET /tools/audit/verify` | admin |
+
+Configure through `PUT /firewall/policy` → `toolSecurity`. Everything is
+closed by default: no shell commands, email domains, repos, channels or cloud
+accounts.
+
 ## Integration
 
 Legion's server already has everything this needs (Express 5, `pg`,
@@ -368,6 +461,7 @@ Legion's server already has everything this needs (Express 5, `pg`,
    app.use("/audit/principal-events", identity.auditApi);
    app.use("/firewall", identity.firewallApi);
    app.use("/prompt-guard", identity.promptGuardApi);
+   app.use("/tools", identity.toolsApi);
    setInterval(() => identity.purgeExpiredTokens().catch(() => {}), 3_600_000).unref();
    ```
 4. Expose agent actions as **new** routes under `/agent/v1/…` that call the
@@ -440,6 +534,17 @@ requests from self-declared AI user agents without an identity get 401, and
   clean, labelled input and stops the dangerous *consequences* (quarantine,
   proposal gating), but a model may still be swayed in what it *says*. Show
   analysts the verdict next to AI answers.
+- **Tickets only enforce anything if the tool server checks them.** Tools
+  an agent runs itself, without a Legion-verifying server in between, are
+  only as safe as the agent's honesty; route them through `tools.execute`
+  or a verifying proxy.
+- **The SQL reader deliberately accepts a narrow subset.** Valid but
+  unusual queries are refused, and a join is accepted only with a
+  tenant filter per table (counted, not proven per alias).
+- **Browser and HTTP tools require https.** Plain-http sites are refused.
+- **Tool-family classification is by name and pattern,** such as cloud
+  action names. A provider's new or renamed dangerous action needs adding
+  to the list.
 - **Planted content can quarantine an agent.** An attacker who gets
   malicious text into logs an agent reads can stop its sensitive actions
   until an admin reviews it. That's the conservative trade-off: a stopped

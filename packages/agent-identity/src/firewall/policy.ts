@@ -3,6 +3,7 @@ import type { Pool, PoolClient } from "pg";
 import { z } from "zod";
 import { ALL_PERMISSIONS, type Permission } from "../permissions.js";
 import { isBlockedHostName, parseIpLiteral, isNonPublicIp } from "./destinations.js";
+import { DENIED_COMMANDS } from "../tools/shell.js";
 
 /**
  * Tables no machine identity may touch through the firewall, whatever a
@@ -103,6 +104,77 @@ export const policySchema = z.strictObject({
         .default([]),
     })
     .default({ maxDepth: 2, allow: [] }),
+  /** Tool gateway (src/tools). Everything closed until opened here. */
+  toolSecurity: z
+    .strictObject({
+      /** Allowed calls at or above this risk score are written to the tool audit log. */
+      auditRiskThreshold: z.number().int().min(1).max(100).default(40),
+      /** Lifetime of the single-use ticket a tool server verifies. */
+      ticketTtlSeconds: z.number().int().min(10).max(600).default(60),
+      browser: z.strictObject({ allowDownloads: z.boolean().default(false) }).default({ allowDownloads: false }),
+      shell: z
+        .strictObject({
+          commands: z
+            .record(
+              z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/i, "a bare command name, no path"),
+              z.strictObject({
+                /** If set, the first argument must be one of these (e.g. git: status, log, diff). */
+                subcommands: z.array(z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/i)).max(50).optional(),
+                maxArgs: z.number().int().min(0).max(100).default(30),
+              }),
+            )
+            .refine((c) => Object.keys(c).every((name) => !DENIED_COMMANDS.has(name.toLowerCase())),
+              "interpreters, privilege, network and destructive commands cannot be allowed")
+            .default({}),
+        })
+        .default({ commands: {} }),
+      email: z
+        .strictObject({
+          allowedRecipientDomains: z.array(z.string().toLowerCase().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/)).max(100).default([]),
+          allowedSenders: z.array(z.email().toLowerCase()).max(20).default([]),
+          maxRecipients: z.number().int().min(1).max(100).default(10),
+          allowAttachments: z.boolean().default(false),
+        })
+        .default({ allowedRecipientDomains: [], allowedSenders: [], maxRecipients: 10, allowAttachments: false }),
+      github: z
+        .strictObject({
+          repos: z.record(z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, "owner/repo"), z.enum(["read", "write"])).default({}),
+        })
+        .default({ repos: {} }),
+      slack: z
+        .strictObject({
+          channels: z.record(z.string().regex(/^[A-Z0-9]{6,20}$/, "a Slack channel id"), z.enum(["read", "write"])).default({}),
+          allowMassMentions: z.boolean().default(false),
+          allowDirectMessages: z.boolean().default(false),
+          allowUploads: z.boolean().default(false),
+        })
+        .default({ channels: {}, allowMassMentions: false, allowDirectMessages: false, allowUploads: false }),
+      cloud: z
+        .strictObject({
+          accounts: z
+            .array(z.strictObject({
+              provider: z.enum(["aws", "gcp", "azure"]),
+              account: z.string().regex(/^[A-Za-z0-9_.:-]{1,100}$/),
+              regions: z.array(z.string().regex(/^[a-z0-9-]{2,40}$/)).max(40).default([]),
+              access: z.enum(["read", "write"]),
+            }))
+            .max(50)
+            .default([]),
+          /** Delete/terminate/destroy actions. Identity, logging and public-exposure changes stay blocked regardless. */
+          allowDestructive: z.boolean().default(false),
+        })
+        .default({ accounts: [], allowDestructive: false }),
+    })
+    .default({
+      auditRiskThreshold: 40,
+      ticketTtlSeconds: 60,
+      browser: { allowDownloads: false },
+      shell: { commands: {} },
+      email: { allowedRecipientDomains: [], allowedSenders: [], maxRecipients: 10, allowAttachments: false },
+      github: { repos: {} },
+      slack: { channels: {}, allowMassMentions: false, allowDirectMessages: false, allowUploads: false },
+      cloud: { accounts: [], allowDestructive: false },
+    }),
   promptInjection: z
     .strictObject({
       /** How long suspicious (not malicious) content keeps raising an agent's risk. Malicious content counts until reviewed. */

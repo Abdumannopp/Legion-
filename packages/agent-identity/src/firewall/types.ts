@@ -7,7 +7,7 @@ export type Decision = "ALLOW" | "WARN" | "BLOCK";
 export type Sensitivity = "public" | "internal" | "confidential" | "restricted";
 export const SENSITIVITY_ORDER: readonly Sensitivity[] = ["public", "internal", "confidential", "restricted"];
 
-export type Surface = "api" | "file" | "database" | "egress" | "tool" | "mcp_tool" | "agent_message";
+export type Surface = "api" | "file" | "database" | "egress" | "tool" | "mcp_tool" | "agent_message" | "tool_call";
 
 /** Who is asking, and on whose authority. Built by the firewall, never by the caller. */
 export interface FirewallContext {
@@ -88,7 +88,26 @@ export interface AgentMessageRequest extends Base {
   payload?: unknown;
 }
 
+/**
+ * A tool call already analysed by the tool gateway (src/tools). The analysis
+ * is computed by Legion from the call; callers never supply it.
+ */
+export interface ToolCallRequest extends Base {
+  surface: "tool_call";
+  toolKind: string;
+  operation: string;
+  target: string;
+  destination: string;
+  changesState: boolean;
+  externalEffect: boolean;
+  analysisHits: RuleHit[];
+  analysisFactors: RiskFactor[];
+  /** The call itself, for the input digest and redacted preview in the decision log. */
+  call: unknown;
+}
+
 export type ActionRequest =
+  | ToolCallRequest
   | ApiRequest
   | FileRequest
   | DatabaseRequest

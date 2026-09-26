@@ -256,6 +256,71 @@ CREATE TABLE IF NOT EXISTS content_risk_acknowledgements (
   reason                   text NOT NULL,
   PRIMARY KEY (tenant_id, principal_id)
 );
+
+-- ---- Tool gateway -----------------------------------------------------------
+
+-- Every blocked or high-risk tool call, and what happened when it ran.
+-- Append-only and hash-chained per tenant.
+CREATE TABLE IF NOT EXISTS tool_call_audit (
+  seq                  bigserial PRIMARY KEY,
+  chain_key            text NOT NULL,
+  event_id             uuid NOT NULL UNIQUE,
+  phase                text NOT NULL CHECK (phase IN ('decision', 'outcome', 'ticket_verified', 'ticket_rejected')),
+  occurred_at          timestamptz NOT NULL,
+  tenant_id            text NOT NULL,
+  principal_type       text NOT NULL,
+  principal_id         text NOT NULL,
+  principal_name       text NOT NULL,
+  owner_user_id        text,
+  delegated_user       text,
+  tool_kind            text NOT NULL,
+  operation            text NOT NULL,
+  target               text NOT NULL,
+  destination          text NOT NULL,
+  permission           text,
+  decision             text NOT NULL CHECK (decision IN ('ALLOW', 'WARN', 'BLOCK')),
+  risk_score           integer NOT NULL,
+  high_risk            boolean NOT NULL,
+  rule_ids             text[] NOT NULL,
+  rule_hits            jsonb NOT NULL,
+  firewall_decision_id uuid NOT NULL,
+  call_digest          text NOT NULL,
+  call_preview         jsonb NOT NULL,
+  outcome              text,
+  outcome_detail       text,
+  output_verdict       text,
+  request_id           text,
+  prev_hash            text NOT NULL,
+  hash                 text NOT NULL UNIQUE
+);
+CREATE INDEX IF NOT EXISTS tool_call_audit_chain ON tool_call_audit (chain_key, seq);
+CREATE INDEX IF NOT EXISTS tool_call_audit_tenant ON tool_call_audit (tenant_id, seq DESC);
+CREATE INDEX IF NOT EXISTS tool_call_audit_principal ON tool_call_audit (tenant_id, principal_id, seq DESC);
+CREATE INDEX IF NOT EXISTS tool_call_audit_decision ON tool_call_audit (firewall_decision_id);
+DROP TRIGGER IF EXISTS tool_call_audit_no_update ON tool_call_audit;
+CREATE TRIGGER tool_call_audit_no_update
+  BEFORE UPDATE OR DELETE ON tool_call_audit
+  FOR EACH ROW EXECUTE FUNCTION principal_audit_log_append_only();
+DROP TRIGGER IF EXISTS tool_call_audit_no_truncate ON tool_call_audit;
+CREATE TRIGGER tool_call_audit_no_truncate
+  BEFORE TRUNCATE ON tool_call_audit
+  FOR EACH STATEMENT EXECUTE FUNCTION principal_audit_log_append_only();
+
+-- Proof, for a tool server, that Legion approved exactly this call. Single
+-- use, short-lived, bound to the digest of the call's arguments.
+CREATE TABLE IF NOT EXISTS tool_call_tickets (
+  ticket_hash  bytea PRIMARY KEY CHECK (length(ticket_hash) = 32),
+  tenant_id    text NOT NULL,
+  identity_id  uuid NOT NULL,
+  decision_id  uuid NOT NULL,
+  call_digest  text NOT NULL,
+  tool_kind    text NOT NULL,
+  issued_at    timestamptz NOT NULL DEFAULT now(),
+  expires_at   timestamptz NOT NULL,
+  consumed_at  timestamptz,
+  consumed_by  text
+);
+CREATE INDEX IF NOT EXISTS tool_call_tickets_expiry ON tool_call_tickets (expires_at);
 `;
 
 /** Constant advisory-lock key, so concurrently starting instances migrate one at a time. */

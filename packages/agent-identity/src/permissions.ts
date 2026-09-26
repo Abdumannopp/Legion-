@@ -3,9 +3,10 @@ import type { HumanRole, RiskLevel } from "./types.js";
 /**
  * Everything a machine identity can ever be granted, with its risk tier:
  *
- *   0  read
- *   1  annotate — adds information, changes nothing
- *   2  change state — reversible, but alters what analysts see
+ *   0  read inside Legion's reach
+ *   1  annotate, or read through something that reaches outside Legion
+ *      (a URL fetched by a browser or HTTP tool can itself carry data out)
+ *   2  change state or act on the world — sending, pushing, running
  *
  * Tier 3 (users, roles, credentials, settings, exports, containment) is
  * deliberately absent: no agent or service account can hold it, whatever an
@@ -18,6 +19,26 @@ export const PERMISSION_TIERS = {
   "alerts:comment": 1,
   "alerts:update_status": 2,
   "assets:update": 2,
+  // Tool families (enforced by the tool gateway, src/tools/).
+  "tool.browser:read": 1,
+  "tool.browser:write": 2,
+  "tool.http:read": 1,
+  "tool.http:write": 2,
+  "tool.database:read": 0,
+  "tool.database:write": 2,
+  "tool.files:read": 0,
+  "tool.files:write": 2,
+  "tool.shell:execute": 2,
+  "tool.email:read": 0,
+  "tool.email:write": 2,
+  "tool.github:read": 0,
+  "tool.github:write": 2,
+  "tool.slack:read": 0,
+  "tool.slack:write": 2,
+  "tool.mcp:read": 1,
+  "tool.mcp:write": 2,
+  "tool.cloud:read": 1,
+  "tool.cloud:write": 2,
 } as const;
 
 export type Permission = keyof typeof PERMISSION_TIERS;
