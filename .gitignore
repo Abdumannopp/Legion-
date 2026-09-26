@@ -17,3 +17,6 @@ __pycache__/
 
 # Database dumps from ops/docker-backup.sh — every tenant's security data.
 backups/
+
+# Build output of workspace packages
+packages/*/dist/

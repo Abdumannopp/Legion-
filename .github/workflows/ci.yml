@@ -35,6 +35,38 @@ jobs:
       # a claim nobody re-checks goes stale silently.
       - run: npm audit --package-lock-only --audit-level=high
 
+  agent-identity:
+    name: Agent identity module
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/agent-identity
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: legion
+          POSTGRES_PASSWORD: legion-test
+          POSTGRES_DB: legion_test
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U legion" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://legion:legion-test@localhost:55432/legion_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/agent-identity/package-lock.json
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+
   app:
     name: Typecheck, tests and build
     runs-on: ubuntu-latest
