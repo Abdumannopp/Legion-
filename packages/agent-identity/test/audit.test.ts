@@ -143,9 +143,12 @@ describe("the audit log is tamper-evident", () => {
   it("verifies as intact after normal use", async () => {
     const { token } = await agentWithToken(t, "alice");
     await request(t.app).get("/agent/v1/alerts").set(bearer(token));
-    const res = await request(t.app).get("/audit/principal-events/verify").set(as("alice"));
-    expect(res.body.ok).toBe(true);
-    expect(res.body.rows).toBeGreaterThan(3);
+    // The result row follows the response asynchronously; wait for it.
+    await vi.waitFor(async () => {
+      const res = await request(t.app).get("/audit/principal-events/verify").set(as("alice"));
+      expect(res.body.ok).toBe(true);
+      expect(res.body.rows).toBeGreaterThan(3);
+    });
   });
 
   it("refuses UPDATE, DELETE and TRUNCATE", async () => {

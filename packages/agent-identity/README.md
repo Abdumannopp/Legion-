@@ -6,9 +6,11 @@ it, and so an AI agent is never served as an anonymous API client. Every
 agent action then passes a central, deterministic **agent firewall** before it
 runs ([below](#agent-firewall)), and all external content that reaches a model
 passes the [prompt-injection guard](#prompt-injection-protection). Every AI
-tool call goes through the [tool gateway](#tool-security).
+tool call goes through the [tool gateway](#tool-security), and each agent's
+behaviour is compared with its own normal role at runtime
+([behaviour monitoring](#runtime-behaviour-monitoring)).
 
-> **Status.** Complete and tested as a standalone module (427 tests, many against
+> **Status.** Complete and tested as a standalone module (465 tests, many against
 > real PostgreSQL 16). **Not yet wired into Legion's server**: `server/` was not in
 > the repository when this was written. Wiring is the ~15 lines in
 > [Integration](#integration); nothing in the existing human login needs to
@@ -426,6 +428,98 @@ Configure through `PUT /firewall/policy` → `toolSecurity`. Everything is
 closed by default: no shell commands, email domains, repos, channels or cloud
 accounts.
 
+## Runtime behaviour monitoring
+
+**Goal:** notice when an agent behaves differently from its normal role, and
+respond in proportion. Not every anomaly is blocked.
+
+### The profile
+
+Each agent's baseline is learned from its **own** firewall decisions. Every
+action it took or tried passed the firewall, so that log is its complete
+behavioural record.
+- **Span:** by default 14 days, excluding the current window, so an attack in
+  progress doesn't become "normal".
+- **Contents:**
+  - actions per active hour (mean, standard deviation, p95)
+  - actions and tools used
+  - resource types
+  - destinations, compared by host, directory or domain set, so a new *path*
+    on a known host isn't "new"
+  - external destinations and agent peers
+  - the people it acts for
+  - block rate and share of sensitive requests
+  - messages per hour
+  - activity by hour of day
+- **Storage:** stored, and rebuilt at most hourly.
+
+### What is monitored in the current window (default 60 minutes)
+
+| Dimension | Signals |
+|---|---|
+| Request volume | Spike; extreme spike |
+| Tool usage | Actions never used before; new *unsafe* (state-changing or outward) tools weigh more |
+| Accessed resources | Resource types never touched |
+| External destinations | One new, several new, fan-out of ten or more (possible exfiltration) |
+| Failed operations | Block rate against the baseline; mostly blocked; operations that ran and failed |
+| Boundary probing | Many *different* rules stopped it |
+| Attack indicators | Cross-tenant attempts, internal addresses, interpreters, protected tables, laundering, public exposure… Counted **even without a baseline** |
+| Sensitive data | Any restricted attempt; a rise in confidential access |
+| Agent-to-agent | New peers; message bursts; repeated blocks while acting for another agent |
+| Changes in normal behaviour | Activity at hours it's never active; acting for new people; malicious external content that reached it |
+
+**Scoring:** the strongest signal per category is summed, capped at 100.
+Independent deviations add up; one noisy dimension alone can't reach
+CRITICAL.
+
+| Level | Score |
+|---|---|
+| NORMAL | < 30 |
+| SUSPICIOUS | ≥ 30 |
+| HIGH_RISK | ≥ 60 |
+| CRITICAL | ≥ 85 |
+
+**Agents without a baseline** (fewer than `minBaselineEvents`, or younger than
+`minBaselineDays`): "new" means nothing, so novelty isn't counted. Without
+intent evidence they're capped at SUSPICIOUS.
+
+### Risk-based enforcement
+
+| Level | Established work | New behaviour | Reads |
+|---|---|---|---|
+| NORMAL | — | — | — |
+| SUSPICIOUS | +5 risk | +10 risk | continue |
+| HIGH_RISK | +5 risk, **continues** | unsafe new actions or destinations **held** (`behavior.high_risk_novel_action`), safe ones +25 risk | continue |
+| CRITICAL | unsafe actions **contained** (`behavior.critical_containment`) | contained | continue (+40 risk) |
+
+- Every level change is recorded **once**, in the append-only, hash-chained
+  `agent_behavior_events`. It's a locked transaction, so concurrent
+  assessments across instances can't duplicate it.
+- The change reaches `onBehaviorChange` for alerting.
+- `autoSuspendOnCritical` (off by default) additionally suspends the
+  identity, and records and audits the suspension.
+- **An administrator's review** (`POST /behavior/agents/:id/acknowledge`,
+  reason required) restarts the window. The admin decides what the reviewed
+  activity was:
+  - `learn: true` — "this is its role": the activity joins the baseline.
+  - `learn: false` — "this was wrong": it's kept out of the baseline.
+
+**If behaviour can't be assessed,** decisions continue on every other rule
+with a visible WARN (`behavior.unavailable`).
+
+| Endpoint | Who |
+|---|---|
+| `GET /behavior/agents` — all agents, worst first | admin, analyst |
+| `GET /behavior/agents/:id` — fresh assessment with evidence, and the baseline | admin, analyst |
+| `GET /behavior/events`, `/events/verify` | admin, analyst / admin |
+| `POST /behavior/agents/:id/acknowledge { reason, learn }` | admin |
+| `POST /behavior/sweep` — reassess all active agents now | admin |
+
+Run `identity.behavior.sweep(tenantId)` every minute or so, so levels (and
+alerts) update even when an agent goes quiet. Configure with
+`PUT /firewall/policy` → `behavior` (`windowMinutes`, `baselineDays`,
+`minBaselineEvents`, `minBaselineDays`, `autoSuspendOnCritical`).
+
 ## Integration
 
 Legion's server already has everything this needs (Express 5, `pg`,
@@ -462,6 +556,7 @@ Legion's server already has everything this needs (Express 5, `pg`,
    app.use("/firewall", identity.firewallApi);
    app.use("/prompt-guard", identity.promptGuardApi);
    app.use("/tools", identity.toolsApi);
+   app.use("/behavior", identity.behaviorApi);
    setInterval(() => identity.purgeExpiredTokens().catch(() => {}), 3_600_000).unref();
    ```
 4. Expose agent actions as **new** routes under `/agent/v1/…` that call the
@@ -545,6 +640,16 @@ requests from self-declared AI user agents without an identity get 401, and
 - **Tool-family classification is by name and pattern,** such as cloud
   action names. A provider's new or renamed dangerous action needs adding
   to the list.
+- **Behaviour is assessed at most every 30 seconds per agent per instance**
+  (`behaviorRefreshSeconds`). A burst inside that interval is classified on
+  the next assessment, not mid-burst. Hard firewall rules still apply to
+  every single action.
+- **A new agent has no baseline for its first days.** It's judged only on
+  intent evidence (probing, attack indicators, failures, injected content),
+  so a slow, careful misuse by a brand-new agent can pass as "new".
+- **Baselines can be poisoned by slow drift.** An agent that shifts its
+  behaviour gradually over weeks teaches the baseline as it goes. Periodic
+  human review of `GET /behavior/agents/:id` catches what statistics can't.
 - **Planted content can quarantine an agent.** An attacker who gets
   malicious text into logs an agent reads can stop its sensitive actions
   until an admin reviews it. That's the conservative trade-off: a stopped

@@ -321,6 +321,66 @@ CREATE TABLE IF NOT EXISTS tool_call_tickets (
   consumed_by  text
 );
 CREATE INDEX IF NOT EXISTS tool_call_tickets_expiry ON tool_call_tickets (expires_at);
+
+-- ---- Behaviour monitoring ------------------------------------------------------
+
+CREATE INDEX IF NOT EXISTS firewall_decisions_principal_time ON firewall_decisions (tenant_id, principal_id, occurred_at DESC);
+
+-- Each agent's learned normal behaviour. Recomputed from its own history.
+CREATE TABLE IF NOT EXISTS agent_behavior_profiles (
+  tenant_id   text NOT NULL,
+  identity_id uuid NOT NULL,
+  computed_at timestamptz NOT NULL,
+  events      integer NOT NULL,
+  profile     jsonb NOT NULL,
+  PRIMARY KEY (tenant_id, identity_id)
+);
+
+-- Current classification per agent, plus the review cursor.
+CREATE TABLE IF NOT EXISTS agent_behavior_state (
+  tenant_id       text NOT NULL,
+  identity_id     uuid NOT NULL,
+  level           text NOT NULL CHECK (level IN ('NORMAL', 'SUSPICIOUS', 'HIGH_RISK', 'CRITICAL')),
+  score           integer NOT NULL,
+  signals         jsonb NOT NULL,
+  assessed_at     timestamptz NOT NULL,
+  window_start    timestamptz,
+  acknowledged_at timestamptz,
+  acknowledged_by text,
+  excluded_from   timestamptz,
+  excluded_to     timestamptz,
+  PRIMARY KEY (tenant_id, identity_id)
+);
+
+-- Every level change, review and automatic containment. Append-only, hash-chained.
+CREATE TABLE IF NOT EXISTS agent_behavior_events (
+  seq           bigserial PRIMARY KEY,
+  chain_key     text NOT NULL,
+  event_id      uuid NOT NULL UNIQUE,
+  occurred_at   timestamptz NOT NULL,
+  tenant_id     text NOT NULL,
+  identity_id   text NOT NULL,
+  identity_name text NOT NULL,
+  kind          text NOT NULL CHECK (kind IN ('level_change', 'acknowledged', 'auto_suspended')),
+  from_level    text NOT NULL,
+  to_level      text NOT NULL,
+  score         integer NOT NULL,
+  signals       jsonb NOT NULL,
+  actor         text NOT NULL,
+  reason        text,
+  prev_hash     text NOT NULL,
+  hash          text NOT NULL UNIQUE
+);
+CREATE INDEX IF NOT EXISTS agent_behavior_events_chain ON agent_behavior_events (chain_key, seq);
+CREATE INDEX IF NOT EXISTS agent_behavior_events_identity ON agent_behavior_events (tenant_id, identity_id, seq DESC);
+DROP TRIGGER IF EXISTS agent_behavior_events_no_update ON agent_behavior_events;
+CREATE TRIGGER agent_behavior_events_no_update
+  BEFORE UPDATE OR DELETE ON agent_behavior_events
+  FOR EACH ROW EXECUTE FUNCTION principal_audit_log_append_only();
+DROP TRIGGER IF EXISTS agent_behavior_events_no_truncate ON agent_behavior_events;
+CREATE TRIGGER agent_behavior_events_no_truncate
+  BEFORE TRUNCATE ON agent_behavior_events
+  FOR EACH STATEMENT EXECUTE FUNCTION principal_audit_log_append_only();
 `;
 
 /** Constant advisory-lock key, so concurrently starting instances migrate one at a time. */

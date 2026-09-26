@@ -12,6 +12,8 @@ import { PromptInjectionGuard } from "./prompt-guard/guard.js";
 import { contentInspectRouter, promptGuardAdminRouter } from "./prompt-guard/routes.js";
 import { ToolGateway } from "./tools/gateway.js";
 import { toolAdminRouter, toolAgentRouter } from "./tools/routes.js";
+import { BehaviorMonitor, type BehaviorChange } from "./behavior/monitor.js";
+import { behaviorAdminRouter } from "./behavior/routes.js";
 import { Router } from "express";
 import { agentRouter } from "./routes/agent.js";
 import { auditRouter, managementRouter } from "./routes/management.js";
@@ -42,6 +44,10 @@ export { analyzeToolCall } from "./tools/analyzers.js";
 export { TOOL_KINDS, toolCallSchema, type ToolCall, type ToolCallInput, type ToolKind, type ToolAnalysis } from "./tools/types.js";
 export { DENIED_COMMANDS } from "./tools/shell.js";
 export type { ToolAuditRow } from "./tools/audit.js";
+export { BehaviorMonitor, type BehaviorChange, type BehaviorState, type BehaviorEventRow } from "./behavior/monitor.js";
+export { assess, isAttackIndicator, isUnsafeAction } from "./behavior/assess.js";
+export { destinationKey, ATTACK_INDICATORS } from "./behavior/keys.js";
+export { levelOf, LEVEL_THRESHOLDS, LEVEL_ORDER, type BehaviorLevel, type Assessment, type BehaviorProfile, type Signal } from "./behavior/types.js";
 
 export interface AgentIdentityOptions {
   pool: Pool;
@@ -58,6 +64,10 @@ export interface AgentIdentityOptions {
   onFirewallDecision?: (ctx: FirewallContext, req: ActionRequest, d: FirewallDecision) => void | Promise<void>;
   /** DNS resolver for firewall.request(); every returned address is checked. */
   dnsLookup?: (host: string) => Promise<{ address: string; family: number }[]>;
+  /** Called once when an agent's behaviour level changes — hook this to Legion's alerting. */
+  onBehaviorChange?: (change: BehaviorChange) => void | Promise<void>;
+  /** How long a per-agent behaviour assessment is reused (default 30 s). */
+  behaviorRefreshSeconds?: number;
   log?: (msg: string, err?: unknown) => void;
 }
 
@@ -76,6 +86,7 @@ export interface AgentIdentityOptions {
  *   app.use("/firewall", identity.firewallApi);   // people: policy, decisions, delegations
  *   app.use("/prompt-guard", identity.promptGuardApi); // people: injection events, acknowledge
  *   app.use("/tools", identity.toolsApi);        // people: tool audit log
+ *   app.use("/behavior", identity.behaviorApi);  // people: agent behaviour, review
  *   app.get("/agent/v1/alerts", identity.guards.requirePermission("alerts:read"), handler);
  */
 export function createAgentIdentity(opts: AgentIdentityOptions) {
@@ -101,9 +112,14 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
   });
   const guards = createGuards(audit, log, firewall);
   const tools = new ToolGateway({ pool: opts.pool, firewall, policies, contentGuard, log });
+  const behavior = new BehaviorMonitor({
+    pool: opts.pool, policies, store, audit, contentGuard, log,
+    onChange: opts.onBehaviorChange, refreshSeconds: opts.behaviorRefreshSeconds,
+  });
+  firewall.setBehaviorMonitor(behavior);
   const agentBasePath = opts.agentBasePath ?? "/agent/v1";
   const sampler = new FailureSampler();
-  const deps = { store, audit, host: opts.host, guards, sampler, log, firewall, policies, decisions, delegations, contentGuard, tools };
+  const deps = { store, audit, host: opts.host, guards, sampler, log, firewall, policies, decisions, delegations, contentGuard, tools, behavior };
   const agentExtras = Router();
   agentExtras.use(agentMessageRouter(deps));
   agentExtras.use(contentInspectRouter(deps));
@@ -150,6 +166,7 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
     firewallApi: firewallAdminRouter(deps),
     promptGuardApi: promptGuardAdminRouter(deps),
     toolsApi: toolAdminRouter(deps),
+    behaviorApi: behaviorAdminRouter(deps),
     guards,
     audit,
     firewall,
@@ -157,6 +174,8 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
     contentGuard,
     /** Every AI tool call passes here: authorize, execute safely, audit. */
     tools,
+    /** Behavioural profiles and runtime classification. Run behavior.sweep(tenantId) every minute. */
+    behavior,
     /** Call periodically (e.g. hourly) to drop long-expired token and tool-ticket rows. */
     purgeExpiredTokens: async () => (await store.purgeExpiredTokens()) + (await tools.purgeExpiredTickets()),
   };

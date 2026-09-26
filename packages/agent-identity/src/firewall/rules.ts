@@ -5,6 +5,8 @@ import { checkFilePath } from "./paths.js";
 import { PROTECTED_TABLES, type FirewallPolicy } from "./policy.js";
 import { byteSize, findSecrets, findUrls } from "./scan.js";
 import type { ContentRiskSummary, Verdict } from "../prompt-guard/types.js";
+import type { BehaviorState } from "../behavior/monitor.js";
+import { destinationKey } from "../behavior/keys.js";
 import { SENSITIVITY_ORDER, type ActionRequest, type RiskFactor, type RuleHit, type Sensitivity } from "./types.js";
 
 /** Facts the engine looked up before evaluation. The rules never do I/O. */
@@ -32,6 +34,8 @@ export interface RuleInputs {
   contentRisk?: ContentRiskSummary | "unavailable";
   /** Agent-to-agent: how the message payload classifies as external content. */
   payloadClassification?: { verdict: Verdict; riskScore: number; findingIds: string[] };
+  /** Runtime behaviour classification, or "unavailable" if it could not be assessed. */
+  behavior?: BehaviorState | "unavailable";
 }
 
 export interface RuleOutput {
@@ -257,6 +261,37 @@ export function evaluateRules(input: RuleInputs): RuleOutput {
     }
   } else if (cr && cr.unacknowledgedSuspicious > 0) {
     add("recent suspicious external content", Math.min(25, 10 + 5 * (cr.unacknowledgedSuspicious - 1)));
+  }
+
+  // ---- Runtime behaviour (risk-based, not block-everything) ---------------------
+  // SUSPICIOUS only raises risk. HIGH_RISK blocks unsafe actions that are
+  // also NEW for this agent — its established work continues. CRITICAL
+  // contains every unsafe action. Reads are never blocked by behaviour.
+  const bh = input.behavior;
+  if (bh === "unavailable") {
+    warn("behavior.unavailable", "Could not assess this agent's behaviour.");
+  } else if (bh && bh.level !== "NORMAL") {
+    const key = destinationKey(destination);
+    const novelAction = bh.established && !bh.knownActions.has(req.action);
+    const novelDestination = bh.established && !!key && !bh.knownDestinations.has(key);
+    // The anomaly's risk attaches to anomalous actions: the agent's
+    // established work carries only a little extra, so it keeps flowing.
+    const novel = novelAction || novelDestination;
+    if (bh.level === "SUSPICIOUS") add(novel ? "new behaviour while suspicious" : "behaviour suspicious", novel ? 10 : 5);
+    if (bh.level === "HIGH_RISK") {
+      add(novel ? "new behaviour while high risk" : "behaviour high risk", novel ? 25 : 5);
+      if (unsafe && (novelAction || novelDestination)) {
+        hard("behavior.high_risk_novel_action",
+          `This agent's behaviour is HIGH_RISK (score ${bh.score}); a ${novelAction ? "new kind of action" : "new destination"} that changes state or leaves Legion is held until a person reviews it.`);
+      }
+    }
+    if (bh.level === "CRITICAL") {
+      add("behaviour critical", 40);
+      if (unsafe) {
+        hard("behavior.critical_containment",
+          `This agent's behaviour is CRITICAL (score ${bh.score}). Unsafe actions are contained until an administrator reviews it.`);
+      }
+    }
   }
 
   const pc = input.payloadClassification;

@@ -1,7 +1,7 @@
 import express, { type Express, type Request } from "express";
 import pg from "pg";
 import request from "supertest";
-import { createAgentIdentity, type AgentIdentity, type HostAdapter, type HostUser, type HumanRole } from "../src/index.js";
+import { createAgentIdentity, type AgentIdentity, type AgentIdentityOptions, type HostAdapter, type HostUser, type HumanRole } from "../src/index.js";
 
 export const DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? "postgresql://legion:legion-test@127.0.0.1:55432/legion_test";
@@ -49,20 +49,22 @@ export interface TestApp {
 
 export async function resetDb(pool: pg.Pool) {
   await pool.query(`
-    DROP TABLE IF EXISTS tool_call_audit, tool_call_tickets, content_ingestion_log, content_risk_acknowledgements,
+    DROP TABLE IF EXISTS agent_behavior_profiles, agent_behavior_state, agent_behavior_events,
+      tool_call_audit, tool_call_tickets, content_ingestion_log, content_risk_acknowledgements,
       agent_messages, agent_delegations, firewall_decisions, firewall_policies,
       principal_audit_log, machine_tokens, machine_credentials, machine_identities CASCADE;
     DROP FUNCTION IF EXISTS principal_audit_log_append_only() CASCADE;
   `);
 }
 
-export async function makeApp(opts: { pool?: pg.Pool; logs?: string[] } = {}): Promise<TestApp> {
+export async function makeApp(opts: { pool?: pg.Pool; logs?: string[]; extra?: Partial<AgentIdentityOptions> } = {}): Promise<TestApp> {
   const pool = opts.pool ?? new pg.Pool({ connectionString: DATABASE_URL, max: 20 });
   const host = new FakeHost();
   const identity = createAgentIdentity({
     pool,
     host,
     log: (msg) => opts.logs?.push(msg),
+    ...opts.extra,
   });
   await identity.migrate();
 
@@ -82,6 +84,7 @@ export async function makeApp(opts: { pool?: pg.Pool; logs?: string[] } = {}): P
   app.use("/firewall", identity.firewallApi);
   app.use("/prompt-guard", identity.promptGuardApi);
   app.use("/tools", identity.toolsApi);
+  app.use("/behavior", identity.behaviorApi);
 
   // Stand-ins for existing human routes: they keep their own auth and see
   // exactly what they saw before (plus req.principal, which they ignore).

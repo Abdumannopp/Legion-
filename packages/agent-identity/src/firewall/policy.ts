@@ -175,6 +175,20 @@ export const policySchema = z.strictObject({
       slack: { channels: {}, allowMassMentions: false, allowDirectMessages: false, allowUploads: false },
       cloud: { accounts: [], allowDestructive: false },
     }),
+  /** Runtime behaviour monitoring (src/behavior). */
+  behavior: z
+    .strictObject({
+      /** The recent activity compared with the baseline. */
+      windowMinutes: z.number().int().min(5).max(1440).default(60),
+      /** How much history forms the baseline. */
+      baselineDays: z.number().int().min(1).max(90).default(14),
+      /** Before this much history, nothing counts as "new" or "unusual" — only intent indicators. */
+      minBaselineEvents: z.number().int().min(10).max(100_000).default(100),
+      minBaselineDays: z.number().min(0).max(30).default(2),
+      /** Suspend the identity when it reaches CRITICAL (containment of unsafe actions happens regardless). */
+      autoSuspendOnCritical: z.boolean().default(false),
+    })
+    .default({ windowMinutes: 60, baselineDays: 14, minBaselineEvents: 100, minBaselineDays: 2, autoSuspendOnCritical: false }),
   promptInjection: z
     .strictObject({
       /** How long suspicious (not malicious) content keeps raising an agent's risk. Malicious content counts until reviewed. */

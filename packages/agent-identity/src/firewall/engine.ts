@@ -17,6 +17,7 @@ import type { PolicyStore, VersionedPolicy } from "./policy.js";
 import { evaluateRules, scoreOf, type RuleInputs } from "./rules.js";
 import { hashToolDefinition } from "./scan.js";
 import type { PromptInjectionGuard } from "../prompt-guard/guard.js";
+import type { BehaviorMonitor } from "../behavior/monitor.js";
 import type {
   ActionRequest,
   Advisor,
@@ -50,6 +51,8 @@ export interface FirewallOptions {
   dnsLookup?: (host: string) => Promise<{ address: string; family: number }[]>;
   /** Supplies prompt-injection history per agent, and classifies agent-to-agent payloads. */
   contentGuard?: PromptInjectionGuard;
+  /** Runtime behaviour classification per agent. Set after construction (setBehaviorMonitor). */
+  behavior?: BehaviorMonitor;
   log: (msg: string, err?: unknown) => void;
 }
 
@@ -114,6 +117,7 @@ export class AgentFirewall {
         actionsLastMinute: this.velocity.record(p.id),
         contentRisk: await this.contentRisk(p, policy.promptInjection.suspiciousWindowSeconds),
         payloadClassification: req.surface === "agent_message" ? this.classifyPayload(req.payload) : undefined,
+        behavior: await this.behaviorState(p),
       };
     } catch (err) {
       this.o.log("firewall could not look up facts; blocking", err);
@@ -225,6 +229,21 @@ export class AgentFirewall {
       return await this.o.contentGuard.summary(p.tenantId, p.id, windowSeconds);
     } catch (err) {
       this.o.log("prompt-injection history unavailable", err);
+      return "unavailable";
+    }
+  }
+
+  setBehaviorMonitor(m: BehaviorMonitor): void {
+    this.o.behavior = m;
+  }
+
+  /** Like content risk: an enrichment. If it cannot be assessed, decide on everything else and WARN. */
+  private async behaviorState(p: MachinePrincipal): Promise<RuleInputs["behavior"]> {
+    if (!this.o.behavior) return undefined;
+    try {
+      return await this.o.behavior.stateFor(p);
+    } catch (err) {
+      this.o.log("behaviour assessment unavailable", err);
       return "unavailable";
     }
   }
