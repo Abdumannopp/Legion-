@@ -1,51 +1,37 @@
-# Legion — AI Cybersecurity SaaS
+# Legion — AI xavfsizlik konsoli
 
 🇬🇧 [English](README.md) | 🇺🇿 O'zbekcha
 
-AI-native platformasi: tahdidlarni aniqlaydi (Sentinel, Hunter), xavf darajasini
-baholaydi (Guardian), tushuntiradi (Oracle), va bildirishnoma yuboradi.
+> Asosiy, doim yangilanadigan hujjat aslida shu papkadagi
+> [README.md](README.md) — u ham o'zbek tilida yozilgan. Ushbu fayl qisqacha
+> kirish va GitHub'ga yuklash bo'yicha yo'riqnoma uchun saqlanmoqda.
 
-Bu papkada butun loyiha bor:
+Wazuh xavfsizlik hodisalarini qabul qiladi, tartiblaydi, tushuntiradi va
+keyingi qadamni taklif qiladi. Bu papkada butun loyiha bor:
 
 ```
 legion/
-├── backend/    — FastAPI API (login, alertlar, Oracle AI, Gmail)
-├── frontend/   — Next.js dashboard
-└── docker-compose.yml   — hammasini bitta buyruq bilan ishga tushiradi
+├── server/       — Express + TypeScript API
+├── frontend/     — Next.js dashboard
+├── ops/          — backup, restore, verify skriptlari
+└── integrations/ — Wazuh integratsiyasi
 ```
 
-## Eng oson ishga tushirish yo'li: Docker
+## Ishga tushirish
 
-Bu — **hech qanday Python yoki Node o'rnatmasdan** butun loyihani ishga
-tushiradigan yo'l.
+Docker shart emas — Legion to'g'ridan-to'g'ri Node.js'da ishlaydi. Kerak:
+Node.js 20.9+ va PostgreSQL 14+.
 
-1. [Docker Desktop](https://www.docker.com/products/docker-desktop/) o'rnating
-   va oching (u ishga tushib turishi kerak)
-2. Terminalda ushbu papkaga o'ting va:
-
-```
-cp .env.example .env
-docker compose up --build
+```bash
+npm install
+npm run setup      # bazani yaratadi, sirlarni yozadi, sxemani qo'llaydi
+npm run build && npm start
 ```
 
-3. Bir necha daqiqadan so'ng:
-   - Dashboard: `http://localhost:3000`
-   - API hujjatlari: `http://localhost:8000/docs`
-   - Kirish: `admin@legion.demo` / `legion123`
+Keyin http://localhost:3000 ni oching va birinchi administrator hisobingizni
+yarating. Batafsil: [README.md](README.md) va [SINOV.md](SINOV.md).
 
-4. To'xtatish uchun: `Ctrl+C`, keyin `docker compose down`
-   (ma'lumotlarni butunlay o'chirish uchun: `docker compose down -v`)
-
-**Eslatma:** `.env` faylida `HF_API_TOKEN` va `GMAIL_APP_PASSWORD`ni bo'sh
-qoldirsangiz ham bo'ladi — loyiha baribir ishga tushadi, faqat Oracle
-tushuntirishi va Gmail xabarlari o'chirilgan bo'ladi. Ularni keyinroq
-qo'shishingiz mumkin (`backend/README.md`da batafsil yozilgan).
-
-## Docker'siz ishga tushirish
-
-Agar Docker o'rnatishni xohlamasangiz, `backend/README.md` va
-`frontend/README.md` fayllarida Python/Node orqali alohida ishga tushirish
-yo'riqnomasi bor.
+**Windows:** `.\start-legion.ps1` — yuqoridagi hamma narsani o'zi bajaradi.
 
 ## GitHub'ga yuklash
 
@@ -82,18 +68,18 @@ git push -u origin main
 
 ## Avtomatik tekshiruv (CI)
 
-`.github/workflows/docker-build.yml` fayli — GitHub'ga har safar kod
-yuklanganda backend va frontend Docker image'lari muvaffaqiyatli
-build bo'lishini avtomatik tekshiradi. Agar kimdir loyihani buzadigan
-o'zgarish kiritsa, GitHub sizga "❌ qizil belgi" bilan xabar beradi.
+`.github/workflows/ci.yml` — GitHub'ga har safar kod yuklanganda testlarni,
+xavfsizlik tekshiruvlarini va 56 ta hujum ssenariysini avtomatik ishga
+tushiradi. Agar kimdir loyihani buzadigan yoki xavfsizlikni pasaytiradigan
+o'zgarish kiritsa, reliz bloklanadi. Batafsil: [.github/CI.md](.github/CI.md).
 
 ## Arxitektura
 
 ```
-User → Next.js Dashboard → FastAPI → PostgreSQL
-                              │
-                              ├── Oracle agent → Hugging Face API
-                              └── Notifications → Gmail (SMTP)
+Foydalanuvchi → Next.js Dashboard → Express API → PostgreSQL
+                                        │
+                                        ├── Oracle/Copilot → OpenRouter yoki Groq (ixtiyoriy)
+                                        └── Bildirishnomalar → SMTP
 ```
 
 ## Litsenziya

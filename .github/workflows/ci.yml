@@ -1,0 +1,239 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-scripts:
+    name: Deploy scripts and backup/restore checks
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: legion
+          POSTGRES_PASSWORD: legion-ops
+          POSTGRES_DB: legion_ops
+        ports: ["55434:5432"]
+        options: >-
+          --health-cmd "pg_isready -U legion" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://legion:legion-ops@localhost:55434/legion_ops
+    steps:
+      - uses: actions/checkout@v4
+      # Fails if anyone adds continue-on-error or unhooks the security gate.
+      - name: CI security gate is intact
+        run: node .github/scripts/check-ci-gate.mjs
+      - name: CI gate cannot be switched off quietly (self-test)
+        run: bash ops/tests/test-ci-gate.sh
+      - name: shellcheck
+        run: shellcheck ops/*.sh ops/tests/*.sh
+      - name: PostgreSQL client tools are available
+        run: |
+          if ! command -v pg_dump >/dev/null || ! command -v pg_restore >/dev/null || ! command -v psql >/dev/null; then
+            sudo apt-get update && sudo apt-get install -y postgresql-client
+          fi
+      - name: Backup, verify and restore against real Postgres
+        run: bash ops/tests/test-backup-restore.sh
+
+  dependencies:
+    name: Known vulnerabilities in the lockfile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Fails the build on high/critical advisories. The docs once claimed
+      # "0 vulnerabilities" while a critical Next.js RCE sat in the lockfile;
+      # a claim nobody re-checks goes stale silently.
+      - run: npm audit --package-lock-only --audit-level=high
+
+  agent-identity:
+    name: Agent identity module
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/agent-identity
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: legion
+          POSTGRES_PASSWORD: legion-test
+          POSTGRES_DB: legion_test
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U legion" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://legion:legion-test@localhost:55432/legion_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/agent-identity/package-lock.json
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      # The built API, self-hosted, as its own hardened database role;
+      # Wazuh alerts delivered by the real integration script; an AI agent
+      # reading them and running skills. See ops/tests/e2e-wazuh.mjs.
+      - name: End-to-end (provision-cli, API as app role, Wazuh integration, agents)
+        env:
+          E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+        run: node ops/tests/e2e-wazuh.mjs
+
+  app:
+    name: Typecheck, tests and build
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: legion
+          POSTGRES_PASSWORD: legion-ci
+          POSTGRES_DB: legion_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U legion" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/legion_test
+    steps:
+      - uses: actions/checkout@v4
+      # The application sources were not part of the initial upload. Fail
+      # loudly rather than report a green build that tested nothing.
+      - name: Application sources present
+        run: |
+          for d in server frontend; do
+            [ -f "$d/package.json" ] || { echo "::error::$d/ is missing from the repository — nothing to test"; exit 1; }
+          done
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/agent-identity/package-lock.json
+      - run: npm ci
+      # The server links packages/agent-identity (AI agents, firewall, skills);
+      # it is built first so the server can typecheck, test and build against it.
+      - name: Build agent-identity
+        working-directory: packages/agent-identity
+        run: npm ci && npm run build
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+
+  # ---------------------------------------------------------------------------
+  # Security gate. Separate from the normal test jobs above so its result is
+  # visible on its own. Fails when: a security regression test fails; the
+  # attack assessment has a NOT DEFENDED finding at Critical/High severity; a
+  # required scenario is missing; the run file is malformed or incomplete; or
+  # its provenance is missing, dirty, or from a different commit than this one.
+  security-assessment:
+    name: Security tests and attack assessment
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: legion
+          POSTGRES_PASSWORD: legion-sec
+          POSTGRES_DB: legion_sec
+        ports: ["55433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U legion" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://legion:legion-sec@localhost:55433/legion_sec
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/agent-identity/package-lock.json
+      - name: Application sources present
+        run: |
+          for d in server packages/agent-identity; do
+            [ -f "$d/package.json" ] || { echo "::error::$d/ is missing — nothing to test"; exit 1; }
+          done
+      - name: Install (server)
+        run: npm ci
+      - name: Install and build (agent-identity)
+        working-directory: packages/agent-identity
+        run: npm ci && npm run build
+      # shell: bash runs with pipefail, so a failing test fails the step even through tee.
+      - name: Server security regression tests
+        shell: bash
+        run: npm run test:security -w server 2>&1 | tee security-server.log
+      - name: Agent security regression tests
+        working-directory: packages/agent-identity
+        shell: bash
+        run: npm run test:security 2>&1 | tee ../../security-agent.log
+      - name: Attack assessment
+        working-directory: packages/agent-identity
+        shell: bash
+        run: npm run assess 2>&1 | tee ../../security-assessment.log
+      - name: Validate assessment run (format, provenance, required scenarios, verdicts)
+        working-directory: packages/agent-identity
+        run: node assessment/provenance.mjs validate assessment/results/latest.jsonl --require-clean --expect-commit "$(git rev-parse HEAD)"
+      - name: Keep evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-assessment-${{ github.sha }}
+          path: |
+            packages/agent-identity/assessment/results/
+            security-*.log
+          if-no-files-found: warn
+          retention-days: 90
+
+  # The single check to mark "required" in branch protection. It runs even
+  # when a job it waits for failed, and then fails itself.
+  release-gate:
+    name: Release gate
+    runs-on: ubuntu-latest
+    needs: [deploy-scripts, dependencies, agent-identity, app, security-assessment]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every required job passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: node .github/scripts/release-gate.mjs
+
+  # Release artifact for version tags only, and only past the gate.
+  release:
+    name: Release package
+    runs-on: ubuntu-latest
+    needs: [release-gate]
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Source package of the tested commit
+        run: git archive --format=zip --prefix=legion/ -o "legion-${GITHUB_REF_NAME}.zip" HEAD
+      - uses: actions/download-artifact@v4
+        with:
+          name: security-assessment-${{ github.sha }}
+          path: security-evidence
+      - uses: actions/upload-artifact@v4
+        with:
+          name: legion-release-${{ github.ref_name }}
+          path: |
+            legion-${{ github.ref_name }}.zip
+            security-evidence/
+

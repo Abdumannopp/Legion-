@@ -1,0 +1,39 @@
+{
+  "name": "@legion/agent-identity",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Identities, credentials, authorization and a tamper-evident audit trail for AI agents and service accounts in Legion. express and pg are supplied by the host server.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:security": "vitest run test/untrusted-content.test.ts test/injection-regression.test.ts test/suspension-immediate.test.ts test/notice-retry-automatic.test.ts test/assessment-provenance.test.ts test/killswitch.test.ts test/prompt-guard.test.ts test/firewall.test.ts test/db-least-privilege.test.ts test/tools-database-executor.test.ts test/tools-analyzers.test.ts test/skills.test.ts test/skills-redteam.test.ts test/skills-registry.test.ts",
+    "assess": "vitest run --config assessment/vitest.config.ts",
+    "assess:validate": "node assessment/provenance.mjs validate assessment/results/latest.jsonl"
+  },
+  "dependencies": {
+    "zod": "^4.1.12",
+    "libpg-query": "^18.1.5"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.5",
+    "@types/node": "^22.19.1",
+    "@types/pg": "^8.23.1",
+    "@types/supertest": "^7.2.1",
+    "express": "^5.1.0",
+    "pg": "^8.23.0",
+    "supertest": "^7.2.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ]
+}

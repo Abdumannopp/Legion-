@@ -1,5 +1,10 @@
 # Legion — Backup va falokatdan tiklash
 
+> **Yangilanish:** backup endi **shifrlanadi** (age, ochiq kalit bilan), serverdan tashqariga
+> nusxalanadi, har safar haqiqiy tiklab sinaladi, monitoring va ogohlantirishlarga ega.
+> To'liq, joriy qo'llanma: **[RECOVERY.md](RECOVERY.md)**. Quyidagi matn eski (shifrsiz)
+> tavsif bo'lib, `RECOVERY.md` bilan ziddiyat bo'lsa — `RECOVERY.md` to'g'ri.
+
 > Hech qachon tiklanmagan backup — bu backup emas, bu taxmin.
 
 ## Nima himoyalanadi
@@ -36,13 +41,31 @@ Pastdagi mashqni baribir bajaring.
 ## Skriptlar
 
 ```bash
-./ops/backup.sh              # dump olish + o'qilishini tekshirish + eskisini tozalash
-./ops/verify-backup.sh       # vaqtinchalik bazaga tiklab, ma'lumotni tekshirish
-./ops/restore.sh <dump>      # MAVJUD baza ustiga tiklash (buzuvchi)
+DATABASE_URL=... ./ops/backup.sh                  # dump olish + o'qilishini tekshirish + eskisini tozalash
+DATABASE_URL=... ./ops/verify-backup.sh           # vaqtinchalik bazaga tiklab, ma'lumotni tekshirish
+DATABASE_URL=... ./ops/restore.sh <dump> --yes    # MAVJUD baza ustiga tiklash (buzuvchi)
 ```
 
-O'zgaruvchilar: `DATABASE_URL`, `BACKUP_DIR` (standart `./backups`),
-`RETENTION_DAYS` (standart 14).
+- `backup.sh` dump'ni tekshiradi (o'qilishi mumkinmi), lekin uni tiklamaydi —
+  bu tezkor, kunlik ish uchun.
+- `verify-backup.sh` dump'ni **haqiqatan vaqtinchalik bazaga tiklaydi** va har
+  jadvalning qatorlar sonini chiqaradi — buni oyiga bir marta ishga
+  tushiring, chunki tiklanmagan backup — bu shunchaki taxmin. Buning uchun
+  baza yarata oladigan (`CREATEDB`) ulanish kerak; `npm run setup` yaratgan
+  rolda ataylab yo'q (pastga qarang), shuning uchun faqat shu skript uchun
+  `DATABASE_ADMIN_URL` (superuser ulanishi) bering.
+- `restore.sh` jonli bazani **o'zgartiradi**: bitta tranzaksiya ichida
+  (`--single-transaction`) ishlaydi — xato bo'lsa **hech narsa** qo'llanmaydi
+  va baza avvalgi holatida qoladi. Har dump yonida `.sha256` fayli bo'ladi;
+  `restore.sh` uni tekshiradi va mos kelmasa rad etadi.
+
+O'zgaruvchilar: `DATABASE_URL` (majburiy — serveringiz ishlatadigan xuddi
+o'sha qiymat), `DATABASE_ADMIN_URL` (ixtiyoriy, faqat `verify-backup.sh`
+uchun), `BACKUP_DIR` (standart `./backups`), `RETENTION_DAYS` (standart 14).
+
+Sinov: `DATABASE_URL=... bash ops/tests/test-backup-restore.sh` — haqiqiy
+Postgres'da backup → jadvalni o'chirish → tiklash, buzilgan va o'zgartirilgan
+dump'ni rad etish, baza o'chiq bo'lganda backup xatosi.
 
 ### Kunlik backup (cron)
 
@@ -73,17 +96,17 @@ o'chirishga urinadi.
 ## Falokat holatida tiklash
 
 ```bash
-# 1. Yozuvni to'xtating (API ni o'chiring) — tiklash paytida yangi yozuv kelmasin
-docker compose stop backend
+# 1. Yozuvni to'xtating — tiklash paytida yangi yozuv kelmasin
+sudo systemctl stop legion        # yoki API jarayonini boshqa usulda to'xtating
 
 # 2. Eng yangi backup'ni toping va TEKSHIRING (tiklashdan oldin!)
-./ops/verify-backup.sh /var/backups/legion/legion-20260820T030000Z.dump
+DATABASE_ADMIN_URL=... ./ops/verify-backup.sh /var/backups/legion/legion-20260820T030000Z.dump
 
 # 3. Tiklang
-./ops/restore.sh /var/backups/legion/legion-20260820T030000Z.dump
+DATABASE_URL=... ./ops/restore.sh /var/backups/legion/legion-20260820T030000Z.dump --yes
 
 # 4. API ni qaytaring
-docker compose start backend
+sudo systemctl start legion
 
 # 5. Tekshiring
 curl -s https://api.legion.example/health

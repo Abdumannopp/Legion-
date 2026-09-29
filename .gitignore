@@ -14,3 +14,16 @@ __pycache__/
 
 # Test mode database (npm run try)
 .legion-testdb/
+
+# Database dumps from ops/backup.sh — every tenant's security data.
+backups/
+
+# Build output of workspace packages
+packages/*/dist/
+
+# First-run setup token (a secret until the first administrator exists)
+.legion-setup-token
+*.tsbuildinfo
+
+# Security-assessment run files (CI uploads them as artifacts)
+packages/agent-identity/assessment/results/

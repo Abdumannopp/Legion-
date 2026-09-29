@@ -43,7 +43,7 @@ Oxirgi qatordagi **manzilni brauzerda oching** va **5-qadamga** o'ting.
 > ⚠️ **Bu faqat sinov uchun.** Baza dastur papkasi ichida yotadi
 > (`.legion-testdb`), backup qilinmaydi va u ishlatadigan paketning
 > barqaror versiyasi hali yo'q. Haqiqiy foydalanish uchun pastdagi
-> **A yo'l** yoki **B yo'l** ni ishlating.
+> qadamlarni bajaring (o'zingiz o'rnatgan PostgreSQL bilan).
 >
 > Noldan boshlash: `.legion-testdb` papkasini o'chiring.
 
@@ -66,30 +66,26 @@ npm install
 npm run try
 ```
 
-Ruxsat bermoqchi bo'lmasangiz — **A yo'l** dan boring (PostgreSQL'ni
+Ruxsat bermoqchi bo'lmasangiz — pastdagi qadamlardan boring (PostgreSQL'ni
 o'zingiz o'rnatasiz, hech qanday skript ishga tushmaydi).
 
 ---
 
-## Haqiqiy o'rnatish uchun ikkita yo'l
+## Haqiqiy o'rnatish
 
-| | **A yo'l — Node.js** | **B yo'l — Docker** |
-|---|---|---|
-| Nima o'rnatiladi | Node.js + PostgreSQL | Docker Desktop |
-| Buyruq | `npm run setup` → `npm start` | `./install.sh` |
-| Ma'lumot qayerda | O'rnatgan PostgreSQL'ingizda | Docker volume'ida |
+Kerak bo'ladigan narsalar: Node.js va PostgreSQL. Docker shart emas — Legion
+to'g'ridan-to'g'ri Node.js'da ishlaydi, ma'lumot esa siz o'rnatgan
+PostgreSQL'da saqlanadi.
 
 ---
 
-# A yo'l — Node.js bilan
-
-## A1. Node.js o'rnating
+## 1-qadam. Node.js o'rnating
 
 https://nodejs.org — "LTS" tugmasini bosing, o'rnating.
 
 **Tekshiruv:** terminalda `node --version` → `v20.` yoki `v22.` bilan boshlanishi kerak.
 
-## A2. PostgreSQL o'rnating
+## 2-qadam. PostgreSQL o'rnating
 
 Bu Legion ma'lumot saqlaydigan baza. Bir marta o'rnatiladi, keyin unutasiz.
 
@@ -129,7 +125,7 @@ Get-Service -Name "*postgres*"
 Start-Service -Name "postgresql*"
 ```
 
-## A3. Fayllarni oching va sozlang
+## 3-qadam. Fayllarni oching va sozlang
 
 Zip'ni oching, terminalda o'sha papkaga o'ting va:
 
@@ -144,7 +140,7 @@ npm run setup
 `npm run setup` PostgreSQL'ni topadi, Legion uchun baza yaratadi va sirlarni
 o'ylab topadi.
 
-**Parol so'rasa** — A2 dagi Password oynasida yozib qo'ygan parolingizni
+**Parol so'rasa** — 2-qadamdagi Password oynasida yozib qo'ygan parolingizni
 kiriting. Boshqa savollarni (Host, Port, Superuser name) Enter bilan
 o'tkazib yuboring.
 
@@ -160,7 +156,7 @@ o'tkazib yuboring.
 Setup complete.
 ```
 
-## A4. Ishga tushiring
+## 4-qadam. Ishga tushiring
 
 ```
 npm run build
@@ -175,43 +171,6 @@ Windows'da buning o'rniga bitta fayl ham yetadi:
 ```
 
 Endi **5-qadamga** o'ting (brauzerda ochish).
-
----
-
-# B yo'l — Docker bilan
-
-## B1. Docker o'rnating
-
-- **Windows / Mac:** https://docker.com/products/docker-desktop — yuklab oling,
-  o'rnating va **ishga tushiring**.
-- **Linux:** https://docs.docker.com/engine/install/
-
-**Ko'rinishi kerak:** Docker Desktop oynasida yashil "Engine running".
-
-## B2. Fayllarni oching va ishga tushiring
-
-Zip'ni oching, terminalda o'sha papkaga o'ting va:
-
-```
-./install.sh
-```
-
-Birinchi marta 5–10 daqiqa ketadi.
-
-**Ko'rinishi kerak:**
-
-```
-✓ Legion is running
-  Legion is ready:  http://localhost:3000
-```
-
-**Agar xato chiqsa:**
-
-| Xato | Nima qilish |
-|---|---|
-| `Docker is not installed` | B1 ga qayting |
-| `Cannot talk to the Docker daemon` | Docker Desktop ochiq emas — oching |
-| `permission denied` | Oldiga qo'shing: `bash install.sh` |
 
 ---
 
@@ -275,14 +234,9 @@ demak hech qanday ma'lumot tashqariga chiqmaydi.
 
 ## 7-qadam. To'xtatish va qayta ishga tushirish
 
-**Node.js yo'lida:** terminalda `Ctrl+C` — to'xtaydi.
-Qayta ishga tushirish: `npm start`
-
-**Docker yo'lida:**
-```
-docker compose down      # to'xtatish
-docker compose up -d     # qayta ishga tushirish
-```
+Terminalda `Ctrl+C` — to'xtaydi. Qayta ishga tushirish: `npm start`
+(doimiy server uchun — `sudo systemctl restart legion`, agar
+[deploy/legion.service](deploy/legion.service) o'rnatgan bo'lsangiz).
 
 **Muhim tekshiruv:** to'xtatib, qayta ishga tushiring va **kirib ko'ring**.
 Hisobingiz va ma'lumotingiz joyida qolishi kerak. Agar yo'qolsa — menga ayting,
@@ -298,8 +252,8 @@ Keyingi ikkita ish — **birinchi mijozdan oldin**:
 
 1. **Serverda takrorlang.** Xuddi shu qadamlar, lekin haqiqiy serverda.
    Farqi: `localhost` o'rniga server manzilini ishlatasiz —
-   `server/.env` (Node yo'li) yoki `.env` (Docker yo'li) faylida
-   `FRONTEND_URL` ni o'zgartirib, qaytadan ishga tushirasiz.
+   `server/.env` faylida `FRONTEND_URL` ni o'zgartirib, qaytadan ishga
+   tushirasiz.
 
 2. **Haqiqiy Wazuh ulang.** [WAZUH.md](WAZUH.md) da yozilgan. Bu eng muhim
    sinov — men uni o'tkaza olmadim, chunki menda Wazuh yo'q edi.
@@ -308,10 +262,8 @@ Keyingi ikkita ish — **birinchi mijozdan oldin**:
 
 ## Nimadir noto'g'ri bo'lsa
 
-Xato xabarini toping:
-
-- **Node.js yo'lida:** xato to'g'ridan-to'g'ri terminalda ko'rinadi
-- **Docker yo'lida:** `docker compose logs backend | tail -30`
+Xato xabarini toping — u to'g'ridan-to'g'ri terminalda ko'rinadi (yoki
+`journalctl -u legion -f`, agar systemd orqali ishga tushirgan bo'lsangiz).
 
 Chiqqan matnni menga yuboring — kodni tushunish shart emas, sabab o'sha matnda
 yozilgan bo'ladi.
@@ -324,7 +276,7 @@ yozilgan bo'ladi.
 | `The bundled PostgreSQL is installed but incomplete` | npm o'rnatish skriptini bloklagan — pastdagi izohga qarang |
 | `Could not start the database` | Xabar ostida **"What the database reported"** bo'limi bor — sabab o'sha yerda. Windows'da ko'pincha Visual C++ runtime yetishmaydi: https://aka.ms/vs/17/release/vc_redist.x64.exe |
 | `Refusing to start: JWT_SECRET…` | Sozlash bajarilmagan — `npm run setup` |
-| `ECONNREFUSED …:5432` | PostgreSQL ishlamayapti — A2 dagi tekshiruvni bajaring |
+| `ECONNREFUSED …:5432` | PostgreSQL ishlamayapti — 2-qadamdagi tekshiruvni bajaring |
 | `password authentication failed` | Parol mos emas — `npm run setup` ni qayta ishga tushiring |
 | `EADDRINUSE` | 8000 yoki 3000 port band — boshqa dastur ishlatayapti |
 
@@ -333,14 +285,9 @@ yozilgan bo'ladi.
 Hech narsani buzib qo'yishdan qo'rqmang: bu sizning kompyuteringizda, sinov
 uchun.
 
-**Node.js yo'lida** — bazani tozalash:
+Bazani tozalash:
 ```
 npm run setup
 ```
-(bazani o'chirish uchun PostgreSQL'da `DROP DATABASE legion;`)
-
-**Docker yo'lida** — hammasini o'chirish:
-```
-docker compose down -v
-./install.sh
-```
+(bazani butunlay o'chirish uchun PostgreSQL'da `DROP DATABASE legion;`, so'ng
+`npm run setup` ni qayta ishga tushiring)

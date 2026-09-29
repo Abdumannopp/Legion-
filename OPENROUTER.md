@@ -101,3 +101,30 @@ kalit bilan sinab ko'rasiz.
 
 Ishlamasa — server logida sabab yoziladi (masalan "no credit" yoki
 "unknown model"). Logni menga ko'rsating.
+
+
+## AI xavfsizligi (2026-09-29)
+
+**AI faqat maslahat beradi.** Provayderga yuboriladigan so'rovda hech qanday
+`tools`/`functions` yo'q, shuning uchun model hech narsa *qila olmaydi*: uning
+javobi — inson o'qiydigan matn. Dashboard, incident sahifasi va Copilot'da
+modelning har bir javobi **"AI taklifi"** deb belgilanadi; Legion'ning o'z
+qoidalari yozgan matn esa **"Legion tahlili"** deb belgilanadi.
+
+| Himoya | Qanday |
+|---|---|
+| Ogohlantirish matni — ishonchsiz ma'lumot | Faqat user-xabarida, har so'rovda tasodifiy chegarali "fence" ichida; ko'rinmas belgilar va chat-template tokenlari olib tashlanadi |
+| Xost nomi, IP, MITRE, ID | Formatga mos kelmasa, model o'rniga `(non-standard value omitted)` ko'radi |
+| Sirlar provayderga ketmaydi | Parol, token, API kalit, JWT, private key, URL ichidagi login va serverning o'z sirlari yuborishdan oldin `[REDACTED:…]` qilinadi |
+| Ma'lumotni kamaytirish | Maydonlar qisqartiriladi; **qat'iy rejim** IP, email va xost nomlarini `IP_1`, `HOST_1`… bilan almashtiradi va javobda qaytaradi |
+| Chiqish | JSON/tuzilma tekshiriladi, HTML va rasmlar olib tashlanadi, havolalar zararsizlantiriladi (`hxxps://x[.]y`), sirlar yashiriladi, uzunlik cheklanadi; so'rovning o'z chegarasini qaytargan javob rad etiladi |
+| Vaqt va xatolar | `AI_TIMEOUT_MS`, javob hajmi 256 KB, redirect taqiqlangan; ketma-ket xatolarda circuit breaker. Har qanday xatoda deterministik mahalliy tahlil qaytadi |
+| Tashkilot nazorati | `GET/PATCH /ai/settings` va Settings → Profil'dagi "AI tahlili" kartasi (faqat administrator o'zgartiradi). O'chirilsa, agent skill'lari uchun ham hech narsa yuborilmaydi |
+| Audit | `alert.explained` / `copilot.chat` yozuvida faqat provayder, hajm, necha sir yashirilgani, vaqt va xato sababi — prompt, javob yoki kalit emas |
+
+**Hosted (SaaS) rejimda AI standart holatda O'CHIQ** — tashkilot administratori
+yoqmaguncha uning ma'lumoti uchinchi tomonga ketmaydi. Self-hosted'da yoqilgan.
+`AI_TENANT_DEFAULT=on|off` bilan o'zgartiriladi.
+
+Testlar: `server/tests/ai-hardening.test.ts` (66 ta hujum ssenariysi),
+`server/tests/ai-safety.test.ts`.

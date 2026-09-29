@@ -1,0 +1,18 @@
+# Alerts when backups are stale, failed, unencrypted, untested or not copied
+# off the server. Independent of the backup job, so it also notices a job that
+# stopped running altogether.
+[Unit]
+Description=Legion backup health check
+
+[Service]
+Type=oneshot
+User=legion
+Group=legion
+WorkingDirectory=/opt/legion
+EnvironmentFile=/etc/legion/backup.env
+ExecStart=/opt/legion/ops/check-backup.sh --quiet
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/legion-backup

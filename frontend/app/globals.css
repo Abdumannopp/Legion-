@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Colours: lib/theme.ts (also feeds the Tailwind tokens). */
+html,
+body {
+  background-color: #08060f; /* palette.canvas */
+  color: #f6f4fb; /* palette.ink */
+}
+
+body {
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
+}
+
+::selection {
+  background: rgba(124, 58, 237, 0.45); /* palette.brand */
+  color: #fff;
+}
+
+/* Keyboard focus in the brand colour, everywhere, without touching mouse clicks. */
+:focus-visible {
+  outline: 2px solid #8b5cf6; /* palette.brandHover */
+  outline-offset: 2px;
+}
+
+/* Thin scrollbars that belong to the dark violet theme. */
+* {
+  scrollbar-color: #342a4f transparent; /* palette.lineStrong */
+  scrollbar-width: thin;
+}
+
+@layer components {
+  /* The faint violet glow behind the logo on the brand sheet. */
+  .legion-backdrop {
+    background:
+      radial-gradient(60rem 30rem at 50% -10%, rgba(124, 58, 237, 0.16), transparent 60%),
+      #08060f;
+  }
+}
+
+@layer components {
+  /* Page titles: the logo's wide face, uppercase, like "CYBER INTELLIGENCE". */
+  .legion-title {
+    @apply font-display font-normal uppercase tracking-[0.12em] text-[17px] leading-snug;
+  }
+  /* Small section / overline labels. */
+  .legion-eyebrow {
+    @apply font-display uppercase tracking-[0.28em] text-[10px];
+  }
+}

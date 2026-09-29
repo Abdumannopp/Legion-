@@ -1,0 +1,66 @@
+import { defineMessages, plural } from "../core";
+
+export const acceptInvite = defineMessages({
+  en: {
+    missingToken: "This invitation link is missing its token.",
+    loadFailed: "We couldn't load this invitation.",
+    passwordTooShort: (n: number) => `Choose a password of at least ${n} characters.`,
+    passwordMismatch: "Those passwords don't match.",
+    setupFailed: "We couldn't set up your account.",
+    readyTitle: "Your account is ready",
+    redirecting: "Taking you to the sign-in page…",
+    invalidTitle: "This invitation isn't valid",
+    invalidReason: "It may have expired or already been used.",
+    askAdmin: "Ask an admin on your team to send a new one.",
+    join: (name: string) => `Join ${name}`,
+    /** "Set a password for {email} to finish setting up your {role} account." */
+    intro: {
+      before: "Set a password for ",
+      middle: " to finish setting up your ",
+      after: " account.",
+    },
+    confirmPassword: "Confirm password",
+    submit: "Create my account",
+  },
+  ru: {
+    missingToken: "В ссылке-приглашении нет токена.",
+    loadFailed: "Не удалось загрузить приглашение.",
+    passwordTooShort: (n: number) =>
+      `Пароль должен содержать не менее ${n} ${plural("ru", n, { one: "символа", other: "символов" })}.`,
+    passwordMismatch: "Пароли не совпадают.",
+    setupFailed: "Не удалось настроить ваш аккаунт.",
+    readyTitle: "Ваш аккаунт готов",
+    redirecting: "Переходим на страницу входа…",
+    invalidTitle: "Приглашение недействительно",
+    invalidReason: "Возможно, срок его действия истёк или оно уже использовано.",
+    askAdmin: "Попросите администратора вашей команды отправить новое.",
+    join: (name: string) => `Присоединяйтесь к ${name}`,
+    intro: {
+      before: "Задайте пароль для ",
+      middle: ", чтобы завершить настройку аккаунта с ролью «",
+      after: "».",
+    },
+    confirmPassword: "Повторите пароль",
+    submit: "Создать аккаунт",
+  },
+  uz: {
+    missingToken: "Taklif havolasida token yo'q.",
+    loadFailed: "Taklifni yuklab bo'lmadi.",
+    passwordTooShort: (n: number) => `Kamida ${n} ta belgidan iborat parol tanlang.`,
+    passwordMismatch: "Parollar mos kelmadi.",
+    setupFailed: "Hisobingizni sozlab bo'lmadi.",
+    readyTitle: "Hisobingiz tayyor",
+    redirecting: "Kirish sahifasiga o'tmoqdamiz…",
+    invalidTitle: "Bu taklif yaroqsiz",
+    invalidReason: "Uning muddati tugagan yoki u allaqachon ishlatilgan bo'lishi mumkin.",
+    askAdmin: "Jamoangiz administratoridan yangisini yuborishini so'rang.",
+    join: (name: string) => `${name} jamoasiga qo'shiling`,
+    intro: {
+      before: "",
+      middle: " uchun parol o'rnating va ",
+      after: " rolidagi hisobingizni sozlashni yakunlang.",
+    },
+    confirmPassword: "Parolni takrorlang",
+    submit: "Hisobimni yaratish",
+  },
+});

@@ -8,12 +8,14 @@
   ],
   "scripts": {
     "dev": "concurrently -n API,WEB -c magenta,cyan \"npm run dev -w server\" \"npm run dev -w frontend\"",
-    "build": "npm run build -w server && npm run build -w frontend",
+    "build:agents": "npm run build --prefix packages/agent-identity",
+    "build": "npm run build:agents && npm run build -w server && npm run build -w frontend",
     "start": "concurrently -n API,WEB -c magenta,cyan \"npm run start -w server\" \"npm run start -w frontend\"",
     "check": "npm run check -w server && npm run lint -w frontend",
-    "test": "npm run test -w server",
-    "setup": "npm run setup -w server",
-    "try": "node scripts/try-local.mjs"
+    "test": "npm run test -w server && npm run test -w frontend",
+    "setup": "node server/scripts/setup.mjs",
+    "try": "node scripts/try-local.mjs",
+    "postinstall": "npm run build:agents"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"

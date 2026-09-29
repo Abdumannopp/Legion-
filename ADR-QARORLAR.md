@@ -68,7 +68,15 @@ uchinchisini qo'shish yangi vendor keltirmaydi.
 
 ---
 
-## ADR-003 🔧 Webhook siri qanday saqlanadi?
+## ADR-003 ✅ Webhook siri qanday saqlanadi?
+
+> **Hal qilindi (2026-09-29):** har credential uchun tasodifiy 256-bit sir
+> (`webhook_credentials`), AES-256-GCM bilan shifrlangan; KEK — `WEBHOOK_ENCRYPTION_KEY`
+> env (yo'q bo'lsa `JWT_SECRET`'dan HKDF). Tenant credential'ning o'zidan aniqlanadi
+> (`x-legion-key-id`), imzo = HMAC-SHA256 over `v2.<ts>.<nonce>.<xom tana>`, nonce
+> Postgres'da eslab qolinadi (replay), rotate — overlap bilan, revoke — darhol.
+> Qolgan qism: KEK hali secret manager/KMS'da emas (pastdagi "Tavsiyam" 2-bosqichi).
+> Quyidagi matn qaror qabul qilingan paytdagi holat.
 
 **Bugun kodda:** `HMAC(GLOBAL_SECRET, tenantId)` — ya'ni bitta global sirdan har
 tenant uchun credential hosil qilinadi. Global sirni bilgan odam **istalgan tenant

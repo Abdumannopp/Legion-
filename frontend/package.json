@@ -1,0 +1,29 @@
+{
+  "name": "legion-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -H localhost",
+    "build": "next build",
+    "start": "next start -H localhost -p ${WEB_PORT:-3000}",
+    "lint": "tsc --noEmit && node scripts/check-i18n.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@paddle/paddle-js": "^1.4.2",
+    "lucide-react": "^0.383.0",
+    "next": "^16.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.19",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.4",
+    "typescript": "^5.4.5",
+    "vitest": "^4.1.11"
+  }
+}

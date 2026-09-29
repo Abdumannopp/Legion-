@@ -1,0 +1,56 @@
+{
+  "name": "legion-node-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json && node -e \"require('fs').copyFileSync('src/db/schema.sql','dist/db/schema.sql')\"",
+    "start": "node dist/index.js",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "import:json": "tsx src/scripts/import-json.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:recovery": "vitest run tests/backup-scripts.test.ts tests/disaster-recovery.test.ts",
+    "setup": "node scripts/setup.mjs",
+    "test:security": "vitest run tests/first-admin.test.ts tests/webhook-auth.test.ts tests/tenant-isolation-sweep.test.ts tests/ai-output-is-data.test.ts tests/notification-outbox.test.ts tests/config-safety.test.ts tests/sessions.test.ts tests/mfa.test.ts tests/db-app-role.test.ts tests/agents.test.ts tests/saas-signup-billing.test.ts",
+    "webhook:credential": "tsx src/scripts/webhook-credential.ts",
+    "secrets": "tsx src/scripts/secrets.ts"
+  },
+  "dependencies": {
+    "@legion/agent-identity": "file:../packages/agent-identity",
+    "@types/nodemailer": "^8.0.1",
+    "bcryptjs": "^3.0.2",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "nodemailer": "^9.0.5",
+    "otpauth": "^9.5.1",
+    "pg": "^8.23.0",
+    "rate-limit-redis": "^6.0.1",
+    "redis": "^6.2.1",
+    "ws": "^8.18.3",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.9",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.5",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^22.19.1",
+    "@types/pg": "^8.23.1",
+    "@types/supertest": "^7.2.1",
+    "@types/ws": "^8.18.1",
+    "supertest": "^7.2.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  }
+}

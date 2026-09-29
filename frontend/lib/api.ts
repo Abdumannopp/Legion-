@@ -1,0 +1,680 @@
+import type { Locale } from "./i18n/core";
+import { translations } from "./i18n/translations";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+// WebSocket base. Defaults to NEXT_PUBLIC_API_URL with the http(s) scheme
+// swapped for ws(s), so the socket always follows the API host (:8000) and
+// never the page host (:3000) — that mismatch was the original bug.
+const WS_URL =
+  process.env.NEXT_PUBLIC_WS_URL || API_URL.replace(/^http/, "ws");
+
+export { API_URL, WS_URL };
+
+// The interface language, sent with every request so the API answers in it
+// (error messages, emails it sends, AI explanations). Set by LanguageProvider.
+let apiLocale: Locale = "en";
+export function setApiLocale(locale: Locale) {
+  apiLocale = locale;
+}
+
+/** fetch with the language header, and a readable error when the server is
+ *  unreachable instead of the browser's "Failed to fetch". */
+async function apiFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  headers.set("Accept-Language", apiLocale);
+  try {
+    return await fetch(url, { ...init, headers });
+  } catch {
+    throw new ApiError(translations[apiLocale].common.networkError, 0, "network");
+  }
+}
+
+const failed = () => translations[apiLocale].common.genericError;
+
+export interface Alert {
+  id: string;
+  title: string;
+  severity: "critical" | "high" | "medium" | "low";
+  agent: "Sentinel" | "Hunter" | "Guardian" | "Oracle" | "Executor";
+  status: "open" | "investigating" | "resolved";
+  summary: string;
+  confidence: number;
+  created_at: string;
+  ai_explanation: string | null;
+  explained_at: string | null;
+  source_ip: string | null;
+  target: string | null;
+  mitre_technique: string | null;
+  /** English text of the suggested next steps (kept for API clients). */
+  suggested_actions: string[];
+  /** The same steps as codes, so the dashboard can show them in any language:
+   *  render with `t.common.actions[code]` (block_source_ip takes `ip`). */
+  suggested_action_codes: SuggestedAction[];
+  /** Language the stored ai_explanation was written in. */
+  ai_explanation_locale: Locale | null;
+  /** Who wrote ai_explanation: a model ("ai") or Legion's built-in rules ("local"). */
+  ai_explanation_source?: "ai" | "local" | null;
+  /** True only when a model wrote the stored explanation — show it as a suggestion. */
+  ai_generated?: boolean;
+  /** This alert's version. Per-tenant, bumped by every change, assigned in commit
+   *  order: the basis of live-feed ordering, de-duplication and catch-up. */
+  seq: number;
+  /** The seq the alert was created with. */
+  created_seq: number;
+}
+
+export type SuggestedAction =
+  | { code: "review_timeline" | "validate_ownership" | "reset_credentials" | "escalate" }
+  | { code: "block_source_ip"; ip: string };
+
+export interface AlertStats {
+  total: number;
+  open: number;
+  investigating: number;
+  resolved: number;
+  by_severity: Record<string, number>;
+}
+
+class ApiError extends Error {
+  status: number;
+  /** Machine-readable reason when the API gives one, e.g. "email_unverified". */
+  code?: string;
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+// The real JWT lives in an httpOnly cookie set by the backend (see
+// POST /auth/login) — client JS never sees or stores it, so an XSS bug
+// elsewhere in the app can't exfiltrate it via localStorage. This
+// non-sensitive companion cookie just tells the frontend "you're logged
+// in" so it can decide whether to redirect to /login; it isn't used for
+// authentication server-side.
+const SESSION_FLAG_COOKIE = "legion_session";
+
+function hasSessionFlag(): boolean {
+  if (typeof document === "undefined") return false;
+  return document.cookie
+    .split("; ")
+    .some((c) => c.startsWith(`${SESSION_FLAG_COOKIE}=`));
+}
+
+/**
+ * Refreshes the session.
+ *
+ * Shared so that several requests failing at once trigger exactly one refresh:
+ * a dashboard fires half a dozen calls per page, and without this every one of
+ * them would rotate the token, and all but the winner would be rejected as
+ * replays — logging the user out precisely when the session was still valid.
+ */
+let refreshInFlight: Promise<boolean> | null = null;
+
+function refreshSession(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = apiFetch(`${API_URL}/auth/refresh`, {
+      method: "POST",
+      credentials: "include",
+    })
+      .then((res) => res.ok)
+      .catch(() => false)
+      .finally(() => {
+        // Cleared on the next tick so callers awaiting this promise all see
+        // the same result before a new attempt can start.
+        setTimeout(() => { refreshInFlight = null; }, 0);
+      });
+  }
+  return refreshInFlight;
+}
+
+async function send(path: string, options: RequestInit): Promise<Response> {
+  return apiFetch(`${API_URL}${path}`, {
+    ...options,
+    credentials: "include", // send/receive the httpOnly auth cookie
+    headers: {
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...options.headers,
+    },
+  });
+}
+
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  let res = await send(path, options);
+
+  // The access token is short-lived by design. A 401 usually just means it
+  // expired, so try once to renew and replay the request — the user should
+  // never be bounced to the login screen mid-shift for that.
+  if (res.status === 401 && !path.startsWith("/auth/refresh")) {
+    if (await refreshSession()) {
+      res = await send(path, options);
+    }
+  }
+
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      detail = body.detail || detail;
+    } catch {
+      // response wasn't JSON, keep statusText
+    }
+    throw new ApiError(detail, res.status);
+  }
+
+  if (res.status === 204) return undefined as T;
+  return res.json();
+}
+
+export type DeploymentMode = "self-hosted" | "saas";
+
+/** `setup_required`: a self-hosted install with no administrator yet.
+ *  `deployment_mode`: "saas" means anyone may sign up (hosted service). */
+export async function getSetupStatus(): Promise<{ setup_required: boolean; deployment_mode?: DeploymentMode; trial_days?: number | null }> {
+  const res = await apiFetch(`${API_URL}/auth/setup-status`, { credentials: "include" });
+  if (!res.ok) return { setup_required: false };
+  return res.json();
+}
+
+async function postJson(path: string, body: unknown): Promise<Record<string, unknown>> {
+  const res = await apiFetch(`${API_URL}${path}`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = typeof data.detail === "string" ? data.detail : failed();
+    throw new ApiError(detail, res.status, typeof data.code === "string" ? data.code : undefined);
+  }
+  return data;
+}
+
+/** Hosted sign-up: creates a workspace and emails a confirmation link.
+ *  No session is started until the address is confirmed. */
+export async function signUp(input: { company: string; email: string; password: string }): Promise<void> {
+  await postJson("/auth/register", { tenant_name: input.company, email: input.email, password: input.password });
+}
+
+export async function verifyEmail(token: string): Promise<void> {
+  await postJson("/auth/verify-email", { token });
+}
+
+export async function resendVerification(email: string): Promise<void> {
+  await postJson("/auth/resend-verification", { email });
+}
+
+/** Creates the first administrator. Requires the one-time token the server
+ *  prints on its console at startup. Does not sign in; the caller does that. */
+export async function completeSetup(input: {
+  setupToken: string;
+  organisation: string;
+  email: string;
+  password: string;
+}): Promise<void> {
+  const res = await apiFetch(`${API_URL}/auth/register`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      setup_token: input.setupToken.trim(),
+      tenant_name: input.organisation,
+      email: input.email,
+      password: input.password,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(data.detail || failed(), res.status);
+}
+
+/** Either the session started, or a second factor is required. */
+export type LoginResult =
+  | { mfaRequired: false }
+  | { mfaRequired: true; mfaToken: string };
+
+export async function login(email: string, password: string): Promise<LoginResult> {
+  const body = new URLSearchParams();
+  body.set("username", email);
+  body.set("password", password);
+
+  const res = await apiFetch(`${API_URL}/auth/login`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(data.detail || failed(), res.status, data.code);
+
+  // The password was right but it is only the first factor. No session cookie
+  // has been set; the caller must complete verifyMfa() below.
+  if (data.mfa_required) return { mfaRequired: true, mfaToken: data.mfa_token };
+
+  // The response body also includes an access_token for non-browser API
+  // clients, but the dashboard ignores it — the httpOnly cookie the
+  // response just set is what authenticates subsequent requests.
+  return { mfaRequired: false };
+}
+
+export interface MfaVerifyResult {
+  used_recovery_code: boolean;
+  recovery_codes_remaining: number | null;
+}
+
+/** Second step of login. `code` is a TOTP code; `recoveryCode` is one of the
+ *  single-use backup codes. */
+export async function verifyMfa(
+  mfaToken: string,
+  value: string,
+  kind: "code" | "recovery" = "code"
+): Promise<MfaVerifyResult> {
+  const res = await apiFetch(`${API_URL}/auth/mfa/verify`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      mfa_token: mfaToken,
+      ...(kind === "code" ? { code: value } : { recovery_code: value }),
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(data.detail || failed(), res.status, data.code);
+  return data;
+}
+
+// ---------- MFA management (signed in) ----------
+
+export interface MfaStatus {
+  enabled: boolean;
+  enrolled_at: string | null;
+  recovery_codes_remaining: number;
+}
+
+export function getMfaStatus(): Promise<MfaStatus> {
+  return request<MfaStatus>("/auth/mfa");
+}
+
+export function startMfaSetup(): Promise<{ secret: string; otpauth_uri: string }> {
+  return request<{ secret: string; otpauth_uri: string }>("/auth/mfa/setup", { method: "POST" });
+}
+
+/** Confirms enrolment. The returned recovery codes are shown once and never
+ *  retrievable again — only hashes are stored server-side. */
+export function enableMfa(code: string): Promise<{ enabled: boolean; recovery_codes: string[] }> {
+  return request<{ enabled: boolean; recovery_codes: string[] }>("/auth/mfa/enable", {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  });
+}
+
+export function disableMfa(password: string, code: string): Promise<{ enabled: boolean }> {
+  return request<{ enabled: boolean }>("/auth/mfa/disable", {
+    method: "POST",
+    body: JSON.stringify({ password, code }),
+  });
+}
+
+export function regenerateRecoveryCodes(password: string): Promise<{ recovery_codes: string[] }> {
+  return request<{ recovery_codes: string[] }>("/auth/mfa/recovery-codes", {
+    method: "POST",
+    body: JSON.stringify({ password }),
+  });
+}
+
+export async function logout(): Promise<void> {
+  try {
+    await apiFetch(`${API_URL}/auth/logout`, { method: "POST", credentials: "include" });
+  } catch {
+    // Best-effort — the cookie will simply expire on its own otherwise.
+  }
+}
+
+export function isLoggedIn(): boolean {
+  return hasSessionFlag();
+}
+
+/** Mirrors the backend's AccessState: what this workspace's subscription
+ *  currently permits. */
+export type AccessState = "ok" | "readonly" | "blocked";
+
+export interface CurrentUser {
+  id: string;
+  email: string;
+  role: "admin" | "analyst" | "viewer";
+  status: "active" | "invited" | "disabled";
+  tenant_id: string;
+  tenant_name: string | null;
+  trial_ends_at: string | null;
+  access_state: AccessState;
+}
+
+export function getMe(): Promise<CurrentUser> {
+  return request<CurrentUser>("/auth/me");
+}
+
+/** Emails a reset link if the address has an account; the answer is the same either way. */
+export async function forgotPassword(email: string): Promise<void> {
+  await postJson("/auth/forgot-password", { email });
+}
+
+export function resetPassword(token: string, newPassword: string): Promise<{ message: string }> {
+  return request<{ message: string }>("/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify({ token, new_password: newPassword }),
+  });
+}
+
+export function changePassword(
+  currentPassword: string,
+  newPassword: string
+): Promise<{ message: string }> {
+  return request<{ message: string }>("/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
+}
+
+// ---------- Team invitations ----------
+
+export interface InvitePreview {
+  email: string;
+  role: "admin" | "analyst" | "viewer";
+  tenant_name: string | null;
+}
+
+/** Public: reads an invitation so the accept page can show who it's for. */
+/** POST with the token in the body — never in a URL, where proxies log it. */
+export function getInvite(token: string): Promise<InvitePreview> {
+  return request<InvitePreview>("/auth/invite/preview", { method: "POST", body: JSON.stringify({ token }) });
+}
+
+export function acceptInvite(token: string, password: string): Promise<{ message: string }> {
+  return request<{ message: string }>("/auth/accept-invite", {
+    method: "POST",
+    body: JSON.stringify({ token, password }),
+  });
+}
+
+export function getAlerts(filters?: {
+  severity?: string;
+  status?: string;
+  q?: string;
+}): Promise<Alert[]> {
+  const params = new URLSearchParams();
+  if (filters?.severity) params.set("severity", filters.severity);
+  if (filters?.status) params.set("status", filters.status);
+  if (filters?.q) params.set("q", filters.q);
+  const qs = params.toString();
+  return request<Alert[]>(`/alerts${qs ? `?${qs}` : ""}`);
+}
+
+/**
+ * The alert list together with the cursor it corresponds to, read from one
+ * database snapshot. The live feed needs both: the cursor says exactly which
+ * later changes it is responsible for.
+ */
+export function getAlertFeed(filters?: {
+  severity?: string;
+  status?: string;
+  q?: string;
+}, signal?: AbortSignal): Promise<{ alerts: Alert[]; cursor: number }> {
+  const params = new URLSearchParams();
+  if (filters?.severity) params.set("severity", filters.severity);
+  if (filters?.status) params.set("status", filters.status);
+  if (filters?.q) params.set("q", filters.q);
+  const qs = params.toString();
+  return request<{ alerts: Alert[]; cursor: number }>(`/alerts/feed${qs ? `?${qs}` : ""}`, { signal, cache: "no-store" });
+}
+
+/** Everything that changed after `after`, oldest first (see the server's /alerts/sync). */
+export function getAlertSync(after: number, signal?: AbortSignal): Promise<{ alerts: Alert[]; cursor: number; has_more: boolean; reset: boolean }> {
+  return request(`/alerts/sync?after=${encodeURIComponent(String(after))}&limit=200`, { signal, cache: "no-store" });
+}
+
+export function getAlert(id: string): Promise<Alert> {
+  return request<Alert>(`/alerts/${id}`);
+}
+
+export function getStats(): Promise<AlertStats> {
+  return request<AlertStats>("/alerts/stats");
+}
+
+export function updateAlertStatus(
+  id: string,
+  status: Alert["status"]
+): Promise<Alert> {
+  return request<Alert>(`/alerts/${id}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ status }),
+  });
+}
+
+export function explainAlert(id: string, force = false): Promise<Alert> {
+  return request<Alert>(`/alerts/${id}/explain${force ? "?force=true" : ""}`, {
+    method: "POST",
+  });
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface CopilotReply {
+  reply: string;
+  /** "ai" when a model answered, "local" when Legion's built-in analysis did. */
+  source: "ai" | "local";
+  ai_generated: boolean;
+  /** Always true: nothing in a reply is acted on. */
+  advisory: true;
+}
+
+export function askCopilot(
+  message: string,
+  history: ChatMessage[]
+): Promise<CopilotReply> {
+  return request<CopilotReply>("/copilot/chat", {
+    method: "POST",
+    body: JSON.stringify({ message, history }),
+  });
+}
+
+export interface AiSettings {
+  enabled: boolean;
+  /** The organisation's own choice; null = the server default applies. */
+  tenant_setting: boolean | null;
+  default_enabled: boolean;
+  provider_configured: boolean;
+  provider: string | null;
+  data_mode: "standard" | "strict";
+  circuit: "closed" | "open";
+  advisory: true;
+}
+
+export function getAiSettings(): Promise<AiSettings> {
+  return request<AiSettings>("/ai/settings");
+}
+
+export function updateAiSettings(patch: { enabled?: boolean | null; data_mode?: "standard" | "strict" }): Promise<AiSettings> {
+  return request<AiSettings>("/ai/settings", { method: "PATCH", body: JSON.stringify(patch) });
+}
+
+export interface Asset {
+  id: string;
+  name: string;
+  os: string;
+  ip_address: string | null;
+  risk: "critical" | "high" | "medium" | "low";
+  online: boolean;
+  last_seen: string;
+}
+
+export function getAssets(filters?: {
+  risk?: string;
+  online?: boolean;
+  q?: string;
+}): Promise<Asset[]> {
+  const params = new URLSearchParams();
+  if (filters?.risk) params.set("risk", filters.risk);
+  if (filters?.online !== undefined) params.set("online", String(filters.online));
+  if (filters?.q) params.set("q", filters.q);
+  const qs = params.toString();
+  return request<Asset[]>(`/assets${qs ? `?${qs}` : ""}`);
+}
+
+// ---------- Billing (Paddle) ----------
+
+export interface Subscription {
+  status: "trialing" | "active" | "past_due" | "paused" | "canceled";
+  paddle_price_id: string | null;
+  current_period_end: string | null;
+  cancel_at_period_end: boolean;
+  access_state: AccessState;
+  trial_ends_at: string | null;
+}
+
+/** Returns null (rather than throwing) when the tenant has no
+ * subscription on file yet — that's the expected state for a brand new
+ * tenant, not an error the caller needs to handle specially. */
+export async function getSubscription(): Promise<Subscription | null> {
+  try {
+    return await request<Subscription>("/billing/subscription");
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+export function openBillingPortal(): Promise<{ url: string }> {
+  return request<{ url: string }>("/billing/portal", { method: "POST" });
+}
+
+export function getCheckoutContext(): Promise<{ checkout_token: string }> {
+  return request<{ checkout_token: string }>("/billing/checkout-context", { method: "POST" });
+}
+
+// ---------- Users / RBAC ----------
+
+export interface TeamUser {
+  id: string;
+  email: string;
+  role: "admin" | "analyst" | "viewer";
+  status: "active" | "invited" | "disabled";
+  tenant_id: string;
+  created_at: string;
+}
+
+export function getUsers(): Promise<TeamUser[]> {
+  return request<TeamUser[]>("/users");
+}
+
+/** `invite_url` is only returned when SMTP isn't configured (local setup) —
+ *  production refuses to boot without it, so it can never appear from a
+ *  live server. */
+export interface InviteResult extends TeamUser {
+  email_sent: boolean;
+  invite_url?: string;
+}
+
+export function inviteUser(
+  email: string,
+  role: TeamUser["role"]
+): Promise<InviteResult> {
+  return request<InviteResult>("/users/invite", {
+    method: "POST",
+    body: JSON.stringify({ email, role }),
+  });
+}
+
+export function resendInvite(
+  userId: string
+): Promise<{ email_sent: boolean; invite_url?: string }> {
+  return request<{ email_sent: boolean; invite_url?: string }>(
+    `/users/${userId}/resend-invite`,
+    { method: "POST" }
+  );
+}
+
+/** Deactivates rather than deletes — audit rows must keep resolving to a
+ *  real identity. */
+export function deactivateUser(userId: string): Promise<TeamUser> {
+  return request<TeamUser>(`/users/${userId}`, { method: "DELETE" });
+}
+
+export function updateUserRole(
+  userId: string,
+  role: TeamUser["role"]
+): Promise<TeamUser> {
+  return request<TeamUser>(`/users/${userId}/role`, {
+    method: "PATCH",
+    body: JSON.stringify({ role }),
+  });
+}
+
+// ---------- Audit log ----------
+
+export interface AuditLogEntry {
+  id: string;
+  user_email: string | null;
+  action: string;
+  resource_type: string | null;
+  resource_id: string | null;
+  detail: string | null;
+  ip_address: string | null;
+  created_at: string;
+}
+
+export function getAuditLogs(filters?: {
+  action?: string;
+  resource_id?: string;
+  limit?: number;
+}): Promise<AuditLogEntry[]> {
+  const params = new URLSearchParams();
+  if (filters?.action) params.set("action", filters.action);
+  if (filters?.resource_id) params.set("resource_id", filters.resource_id);
+  if (filters?.limit) params.set("limit", String(filters.limit));
+  const qs = params.toString();
+  return request<AuditLogEntry[]>(`/audit${qs ? `?${qs}` : ""}`);
+}
+
+// ---------- Notification settings ----------
+
+export interface NotificationSettings {
+  /** The confirmed address alert emails go to. */
+  notification_email: string | null;
+  /** A requested address waiting for its owner to confirm it; receives nothing yet. */
+  pending_notification_email?: string | null;
+  /** Whether a confirmation email went out on this save. */
+  confirmation_sent?: boolean;
+  /** Language alert emails are written in. */
+  notification_locale: Locale;
+}
+
+export function getNotificationSettings(): Promise<NotificationSettings> {
+  return request<NotificationSettings>("/notifications/settings");
+}
+
+export function updateNotificationSettings(
+  notification_email: string | null,
+  notification_locale: Locale
+): Promise<NotificationSettings> {
+  return request<NotificationSettings>("/notifications/settings", {
+    method: "PATCH",
+    body: JSON.stringify({ notification_email, notification_locale }),
+  });
+}
+
+/** The recipient of a confirmation email confirms the address (public page). */
+export async function confirmNotificationEmail(token: string): Promise<void> {
+  await postJson("/notifications/confirm", { token });
+}
+
+/** `message` is a human-readable result in the interface language. */
+export function sendTestNotification(): Promise<{ status: string; message?: string }> {
+  return request<{ status: string; message?: string }>("/notifications/test", { method: "POST" });
+}
+
+export { ApiError };

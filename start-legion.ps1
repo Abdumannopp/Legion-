@@ -78,7 +78,9 @@ Write-Host "  Legion:  http://localhost:3000" -ForegroundColor Magenta
 Write-Host "  API:     http://localhost:8000" -ForegroundColor Magenta
 Write-Host ""
 Write-Host "  Brauzerda oching va birinchi administrator" -ForegroundColor Gray
-Write-Host "  hisobini yarating. Shundan keyin ro'yxatdan" -ForegroundColor Gray
+Write-Host "  hisobini yarating. Buning uchun server pastda" -ForegroundColor Gray
+Write-Host "  chiqaradigan bir martalik setup token (lst_...)" -ForegroundColor Gray
+Write-Host "  kerak bo'ladi. Shundan keyin ro'yxatdan" -ForegroundColor Gray
 Write-Host "  o'tish yopiladi — qolganlar taklif bilan." -ForegroundColor Gray
 Write-Host ""
 Write-Host "  To'xtatish: Ctrl+C" -ForegroundColor DarkGray

@@ -1,0 +1,39 @@
+# systemd unit: runs Legion in the background, restarts it if it crashes and
+# starts it again after a reboot. Step-by-step use: DEPLOY-ONLINE.md.
+#
+#   sudo cp deploy/legion.service /etc/systemd/system/legion.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now legion
+#   journalctl -u legion -f            # logs (the first-run setup token is here)
+#
+# Assumes Legion is in /opt/legion, owned by a "legion" system user, and
+# Node.js from NodeSource (/usr/bin/npm). Adjust those three if yours differ.
+# Configuration stays in server/.env and frontend/.env.local.
+
+[Unit]
+Description=Legion security console
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+# A crash loop gives up after 5 tries in a minute instead of spinning forever.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=legion
+Group=legion
+WorkingDirectory=/opt/legion
+Environment=HOME=/opt/legion
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+RestartSec=5
+
+# Sandboxing: the service can write only inside /opt/legion (and its own /tmp).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/legion
+
+[Install]
+WantedBy=multi-user.target
