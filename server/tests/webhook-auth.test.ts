@@ -32,6 +32,7 @@ import * as creds from "../src/webhook-credentials.js";
 import { computeSignature, decryptSecret, digestsEqual, encryptSecret, generateCredential, legacyEncryptForTests, signWebhook } from "../src/webhook-auth.js";
 import { migrateSecretsAtRest } from "../src/secrets-migration.js";
 import type { User } from "../src/types.js";
+import { resetWebhookFailures } from "../src/webhook-guard.js";
 import { freshNonce, issueCredential, nowSeconds, sendSigned, type TestCredential } from "./helpers/webhook.js";
 
 let tenantA: string, tenantB: string;
@@ -515,15 +516,32 @@ describe("malformed requests", () => {
     await post(headers, "plain text", "text/plain").expect(401);
   });
 
-  it("broken JSON is a 400, not a server error and not a stack trace", async () => {
+  it("an UNSIGNED body is never parsed: broken JSON without a valid signature is a 401, not a 400", async () => {
+    // Verification runs over the raw bytes before JSON.parse, so a parse error
+    // can only ever be reached by the holder of the secret.
     const { headers } = base();
-    const res = await post(headers, '{"provider":"wazuh","event":{').expect(400);
-    expect(JSON.stringify(res.body)).not.toMatch(/at |\.ts|SyntaxError|node_modules/);
+    const res = await post(headers, '{"provider":"wazuh","event":{').expect(401);
+    expect(res.body.detail).toMatch(/Invalid webhook credentials/);
+    expect(await nonceCount()).toBe(0);
   });
 
-  it("an oversized body is refused before anything is verified", async () => {
+  it("broken JSON that IS correctly signed is a 400, not a server error and not a stack trace", async () => {
+    const res = await sendSigned(app, credA, '{"provider":"wazuh","event":{').expect(400);
+    expect(JSON.stringify(res.body)).not.toMatch(/at |\.ts|SyntaxError|node_modules/);
+    expect(await alertCount(tenantA)).toBe(0);
+  });
+
+  it("an oversized body (over WEBHOOK_MAX_BODY_BYTES) is refused before anything is verified", async () => {
     const { headers } = base();
-    await post(headers, JSON.stringify({ pad: "x".repeat(300_000) })).expect(413);
+    await post(headers, JSON.stringify({ pad: "x".repeat(config.webhookMaxBodyBytes + 1) })).expect(413);
+    expect(await nonceCount()).toBe(0);
+  });
+
+  it("a large, correctly signed Wazuh event (300 KB full_log) is accepted, not dropped", async () => {
+    const big = event("big-1");
+    big.event.full_log = "L".repeat(300_000);
+    await sendSigned(app, credA, big).expect(202);
+    expect(await alertCount(tenantA)).toBe(1);
   });
 
   it("a signed but empty or odd JSON document is harmless", async () => {
@@ -537,6 +555,48 @@ describe("malformed requests", () => {
   it("repeating a header does not let one request carry two identities", async () => {
     const { raw, headers } = base();
     await post({ ...headers, "x-legion-key-id": `${credA.keyId}, ${credB.keyId}` }, raw).expect(401);
+  });
+});
+
+// --- 9b. unauthenticated flood (audit P1-3) ---------------------------------
+
+describe("unauthenticated traffic is throttled; signed traffic never is", () => {
+  beforeEach(() => { process.env.LEGION_ENFORCE_RATE_LIMITS = "1"; resetWebhookFailures(); });
+  afterEach(() => { delete process.env.LEGION_ENFORCE_RATE_LIMITS; resetWebhookFailures(); });
+  const forged = (xff: string) =>
+    sendSigned(app, credA, event(`f-${randomUUID()}`), { signWithSecret: "whs_" + "x".repeat(43) }).set("X-Forwarded-For", xff);
+
+  it("after WEBHOOK_FAILED_AUTH_PER_MINUTE failures an address is refused with 429, before authentication", async () => {
+    const limit = config.webhookFailedAuthPerMinute;
+    for (let i = 0; i < limit; i++) await forged("203.0.113.7").expect(401);
+    await forged("203.0.113.7").expect(429);
+    // Refused before the credential is even looked at: a CORRECTLY signed
+    // request from the same address is refused too, and leaves no nonce.
+    const nonces = await nonceCount();
+    const res = await sendSigned(app, credA, event("ok-1")).set("X-Forwarded-For", "203.0.113.7").expect(429);
+    expect(res.headers["retry-after"]).toBe("60");
+    expect(await nonceCount()).toBe(nonces);
+    expect(await alertCount(tenantA)).toBe(0);
+    // Other addresses are unaffected.
+    await sendSigned(app, credA, event("ok-2")).set("X-Forwarded-For", "198.51.100.9").expect(202);
+  });
+
+  it("a sensor sending far more signed events than the failure limit is never throttled", async () => {
+    const n = config.webhookFailedAuthPerMinute * 2;
+    for (let i = 0; i < n; i++) {
+      await sendSigned(app, credA, event(`bulk-${i}`)).set("X-Forwarded-For", "192.0.2.50").expect(202);
+    }
+    expect(await alertCount(tenantA)).toBe(n);
+  });
+
+  it("oversized and unparseable unauthenticated bodies count as failures too", async () => {
+    const limit = config.webhookFailedAuthPerMinute;
+    for (let i = 0; i < limit; i++) {
+      await request(app).post("/security-events/webhook").set("X-Forwarded-For", "203.0.113.99")
+        .set("content-type", "application/json").send("x".repeat(config.webhookMaxBodyBytes + 10)).expect(413);
+    }
+    await request(app).post("/security-events/webhook").set("X-Forwarded-For", "203.0.113.99")
+      .set("content-type", "application/json").send("{}").expect(429);
   });
 });
 

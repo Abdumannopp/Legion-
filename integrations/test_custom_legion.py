@@ -153,6 +153,26 @@ class RetryTests(unittest.TestCase):
         self.assertNotIn(reqs[0]["headers"]["x-legion-nonce"], log)
         self.assertNotIn("hunter2", log)
 
+    def test_an_oversized_event_is_trimmed_not_dropped(self):
+        with open(self.alert_file, "w") as f:
+            json.dump({"id": "1700000000.2", "full_log": "X" * (2 * 1024 * 1024),
+                       "rule": {"id": "5712", "level": 10, "description": "huge"}}, f)
+        code, reqs = self.run_with([])
+        self.assertEqual(code, 0)
+        body = reqs[0]["body"]
+        self.assertLessEqual(len(body), self.mod.MAX_PAYLOAD_BYTES)
+        event = json.loads(body)["event"]
+        # Identity and classification are untouched; only the log tail is cut.
+        self.assertEqual(event["id"], "1700000000.2")
+        self.assertEqual(event["rule"]["description"], "huge")
+        self.assertTrue(event["full_log"].endswith("[truncated by custom-legion]"))
+
+    def test_a_normal_event_is_sent_byte_for_byte_unchanged(self):
+        _, reqs = self.run_with([])
+        with open(self.alert_file) as f:
+            original = json.load(f)
+        self.assertEqual(json.loads(reqs[0]["body"])["event"], original)
+
 
 if __name__ == "__main__":
     unittest.main()

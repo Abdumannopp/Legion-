@@ -120,6 +120,13 @@ export const config = {
   /** How long the old credential keeps working after a rotation, unless the
    *  administrator asks for something else (0–168 h). */
   webhookRotationOverlapHours: Math.min(168, Math.max(0, Number(process.env.WEBHOOK_ROTATION_OVERLAP_HOURS ?? 24) || 0)),
+  /** Largest sensor event accepted, in bytes (64 KB–4 MB). The body is held as
+   *  raw bytes and only parsed AFTER its signature checks out. */
+  webhookMaxBodyBytes: Math.min(4 * 1024 * 1024, Math.max(64 * 1024, Math.floor(Number(process.env.WEBHOOK_MAX_BODY_BYTES || 1024 * 1024)) || 1024 * 1024)),
+  /** Failed webhook authentications one client address may make per minute
+   *  before it is refused without any database work. Successful (signed)
+   *  deliveries are never counted, so a busy sensor is never throttled. */
+  webhookFailedAuthPerMinute: Math.max(5, Math.floor(Number(process.env.WEBHOOK_FAILED_AUTH_PER_MINUTE || 60)) || 60),
   /**
    * Encrypts webhook secrets at rest (AES-256-GCM via HKDF). Keep it out of
    * the database and its backups. When unset it falls back to a key derived

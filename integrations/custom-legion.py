@@ -52,6 +52,12 @@ TIMEOUT_SECONDS = 10
 MAX_ATTEMPTS = int(os.environ.get("LEGION_MAX_ATTEMPTS", "4"))
 BACKOFF_BASE_SECONDS = float(os.environ.get("LEGION_BACKOFF_SECONDS", "1"))
 RETRYABLE_STATUS = {408, 429}
+# Legion refuses bodies over WEBHOOK_MAX_BODY_BYTES (1 MB by default) with 413,
+# which is not retryable -- so an oversized event used to be dropped. Legion
+# keeps only the first 4000 characters of full_log anyway, so an event larger
+# than this has its full_log trimmed (never its id, rule or agent) before signing.
+MAX_PAYLOAD_BYTES = int(os.environ.get("LEGION_MAX_PAYLOAD_BYTES", str(900 * 1024)))
+TRIMMED_LOG_CHARS = 64 * 1024
 LOG_FILE = os.environ.get("LEGION_INTEGRATION_LOG", "/var/ossec/logs/integrations.log")
 
 
@@ -99,7 +105,7 @@ def main(argv):
     # Legion reads req.body.event, so wrap the Wazuh alert as-is. Its field
     # names (rule.description, rule.level, rule.mitre.id, full_log,
     # data.srcip, agent.name, id) already match what the webhook expects.
-    payload = json.dumps({"provider": "wazuh", "event": alert}).encode("utf-8")
+    payload = build_payload(alert)
     rule_id = str(alert.get("rule", {}).get("id", "?"))
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -111,6 +117,17 @@ def main(argv):
         time.sleep(BACKOFF_BASE_SECONDS * 2 ** (attempt - 1))
     log(f"ERROR rule={rule_id} not delivered after {attempt} attempt(s)")
     return 1
+
+
+def build_payload(alert):
+    """The signed body. Oversized events keep everything Legion stores; only
+    the tail of full_log, which Legion would discard, is cut."""
+    payload = json.dumps({"provider": "wazuh", "event": alert}).encode("utf-8")
+    if len(payload) <= MAX_PAYLOAD_BYTES or not isinstance(alert.get("full_log"), str):
+        return payload
+    trimmed = dict(alert)
+    trimmed["full_log"] = alert["full_log"][:TRIMMED_LOG_CHARS] + " [truncated by custom-legion]"
+    return json.dumps({"provider": "wazuh", "event": trimmed}).encode("utf-8")
 
 
 def post_once(hook_url, key_id, secret, payload, rule_id, attempt):

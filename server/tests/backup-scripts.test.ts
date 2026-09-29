@@ -181,7 +181,11 @@ describe("automatic restore test", () => {
     const c = new pg.Client({ connectionString: admin_ }); await c.connect();
     // Simulate: the restore target has no way to satisfy the dump — use a role without CREATEDB.
     await c.query("DROP ROLE IF EXISTS legion_bk_nocreate"); await c.query("CREATE ROLE legion_bk_nocreate LOGIN"); await c.end();
-    const r = run("backup.sh", { DATABASE_ADMIN_URL: url("postgres").replace("legion@", "legion_bk_nocreate@"), BACKUP_RESTORE_TEST: "required" });
+    // Swap the user through the URL API: a string replace of "legion@" misses
+    // a URL that carries a password ("legion:secret@", as CI's does), which
+    // silently ran this "must fail" backup as the superuser.
+    const noCreate = new URL(url("postgres")); noCreate.username = "legion_bk_nocreate"; noCreate.password = "";
+    const r = run("backup.sh", { DATABASE_ADMIN_URL: noCreate.toString(), BACKUP_RESTORE_TEST: "required" });
     expect(r.code).toBe(1);
     expect(files(".age")).toEqual([]);
     expect(status().last_failure_stage).toBe("restore-test");

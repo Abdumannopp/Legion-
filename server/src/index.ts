@@ -15,6 +15,7 @@ import { closePool, currentRoleAttributes, migrate, transaction } from "./db/poo
 import { databaseRoleDecision } from "./db/provision.js";
 import { SETUP_LOCK_KEY, consumeSetupToken, ensureSetupToken, removeSetupTokenFile, setupBanner } from "./setup-token.js";
 import { WEBHOOK_REJECTION_DETAIL, isKeyId } from "./webhook-auth.js";
+import { webhookFailureGate } from "./webhook-guard.js";
 import * as webhookCredentials from "./webhook-credentials.js";
 import { hashOneTimeToken, newOneTimeToken } from "./auth-tokens.js";
 import { describeReport, migrateSecretsAtRest } from "./secrets-migration.js";
@@ -48,10 +49,15 @@ app.use(corsMiddleware());
 // Machine endpoints authenticated by signature; they are not browsers.
 app.use(originGuard(/^\/(security-events\/webhook|billing\/webhook)$/));
 // Paddle signs the RAW bytes, so keep a copy before JSON.parse rewrites them.
-app.use(express.json({
+// The sensor webhook is parsed by its own route instead (below): its body is
+// kept as raw bytes and only parsed AFTER the signature over those bytes checks
+// out, so an unauthenticated sender never gets its JSON parsed at all.
+export const WEBHOOK_PATH = "/security-events/webhook";
+const jsonBody = express.json({
   limit: "256kb",
   verify: (req, _res, buf) => { (req as Request & { rawBody?: Buffer }).rawBody = buf; },
-}));
+});
+app.use((req, res, next) => (req.path === WEBHOOK_PATH ? next() : jsonBody(req, res, next)));
 app.use(express.urlencoded({ extended: false, limit: "32kb" }));
 app.use(cookieParser());
 // Error messages and confirmations in the reader's language (Accept-Language).
@@ -1506,13 +1512,19 @@ app.post("/security-events/sync", requireRole("admin"), async (req: AuthedReques
  * history that can never be backfilled. Billing state limits the UI, not the
  * recording of events.
  */
-app.post("/security-events/webhook", async (req, res) => {
+app.post(WEBHOOK_PATH,
+  // Refuses an address that keeps failing BEFORE its body is read.
+  webhookFailureGate,
+  // Raw bytes only, JSON content types only; nothing is parsed yet.
+  express.raw({ type: "application/json", limit: config.webhookMaxBodyBytes }),
+  async (req, res) => {
   // The organisation is whatever the credential belongs to. Nothing the sender
   // types — including the old x-tenant-id header, which is only cross-checked —
   // can choose it. See webhook-auth.ts for the scheme.
+  const rawBody = Buffer.isBuffer(req.body) ? req.body : undefined;
   const auth = await webhookCredentials.authenticateWebhook({
     header: (name) => req.header(name),
-    rawBody: (req as Request & { rawBody?: Buffer }).rawBody,
+    rawBody,
     claimedTenantId: req.header("x-tenant-id"),
   });
   if (!auth.ok) {
@@ -1523,11 +1535,23 @@ app.post("/security-events/webhook", async (req, res) => {
   }
   const tenantId = auth.tenantId;
 
-  const event = req.body.event || req.body;
+  // Only now — the bytes are proven to come from the credential's holder — is
+  // the body parsed. A signed document that is not valid JSON is the sender's
+  // bug: 400, no stack trace.
+  let body: { event?: unknown; provider?: unknown } & Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(rawBody!.toString("utf8"));
+    body = parsed !== null && typeof parsed === "object" ? parsed as typeof body : {};
+  } catch {
+    return res.status(400).json({ detail: "Invalid request" });
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const event: any = body.event || body;
   const description = String(event?.rule?.description || "");
   if (!description) return res.status(202).json({ status: "skipped" });
 
-  const source = String(req.body.provider || "webhook");
+  const source = String(body.provider || "webhook");
   const rawId = String(event.id || JSON.stringify(event));
   const id = `SEC-${createHmac("sha256", config.webhookSecret || "legion-webhook-event-id").update(`${tenantId}:${source}:${rawId}`).digest("hex").slice(0, 16).toUpperCase()}`;
 
@@ -1564,7 +1588,7 @@ app.post("/security-events/webhook", async (req, res) => {
   // primary key instead of creating duplicates.
   if (!alert) return res.status(202).json({ status: "skipped", reason: "duplicate", alert_id: id });
   return res.status(202).json({ status: "ingested", alert_id: id });
-});
+  });
 
 app.use((_req, res) => res.status(404).json({ detail: "Not found" }));
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {

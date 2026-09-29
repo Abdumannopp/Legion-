@@ -60,6 +60,12 @@ export class BoundedCounter {
     return { totalHits: entry.count, resetTime: new Date(entry.resetAt) };
   }
 
+  /** The current count for `key` without counting a hit (0 when unknown or expired). */
+  peek(key: string): number {
+    const entry = this.entries.get(key);
+    return entry && entry.resetAt > this.clock() ? entry.count : 0;
+  }
+
   decrement(key: string): void {
     const entry = this.entries.get(key) ?? this.entries.get(OVERFLOW_KEY);
     if (entry && entry.count > 0) entry.count -= 1;
