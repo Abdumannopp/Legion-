@@ -434,3 +434,18 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS notification_email_token_expires ti
 CREATE UNIQUE INDEX IF NOT EXISTS tenants_notification_token_hash_idx ON tenants (notification_email_token_hash) WHERE notification_email_token_hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS notification_outbox_tenant_kind_created_idx ON notification_outbox (tenant_id, kind, created_at);
 CREATE INDEX IF NOT EXISTS audit_log_tenant_action_created_idx ON audit_log (tenant_id, action, created_at);
+
+-- Devices a user has signed in from (security hardening, 2026-09). Additive.
+-- device_hash is SHA-256 of the user agent with version numbers removed, so a
+-- browser update is not a "new device"; last_network is the coarse /24 or /48.
+-- Used only to tell the owner about a sign-in from somewhere new.
+CREATE TABLE IF NOT EXISTS user_known_devices (
+  user_id      uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  device_hash  text        NOT NULL,
+  last_network text,
+  first_seen   timestamptz NOT NULL DEFAULT now(),
+  last_seen    timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, device_hash)
+);
+-- Failed sign-ins per account (new audit action auth.login_failed).
+CREATE INDEX IF NOT EXISTS audit_log_tenant_action_user_created_idx ON audit_log (tenant_id, action, user_id, created_at);

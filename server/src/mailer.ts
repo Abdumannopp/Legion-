@@ -336,3 +336,49 @@ export function testNotificationEmail(locale: Locale = "en") {
   }[locale];
   return { subject: t.subject, text: `${t.body}\n\n${t.open}: ${config.frontendUrl}` };
 }
+
+export type SecurityNoticeKind = "password_changed" | "mfa_enabled" | "mfa_disabled" | "recovery_codes_regenerated" | "new_device_login";
+
+/**
+ * Tells the account owner that something security-relevant just happened to
+ * their account. The point is the case where it was NOT them: each notice says
+ * what to do then. Carries no link that acts on the account (a phished copy of
+ * this mail must not be a way in) and no secret; `detail` is shown as text.
+ */
+export function securityNoticeEmail(kind: SecurityNoticeKind, params: { when: string; detail?: string; locale?: Locale }) {
+  const locale = params.locale ?? "en";
+  const what: Record<Locale, Record<SecurityNoticeKind, string>> = {
+    en: {
+      password_changed: "The password of your Legion account was changed.",
+      mfa_enabled: "Two-factor authentication was turned on for your Legion account. Every other session was signed out.",
+      mfa_disabled: "Two-factor authentication was turned OFF for your Legion account. Every other session was signed out.",
+      recovery_codes_regenerated: "New two-factor recovery codes were generated for your Legion account. The previous codes no longer work.",
+      new_device_login: "Your Legion account was signed in to from a device or browser it has not been used from before.",
+    },
+    ru: {
+      password_changed: "Пароль вашей учётной записи Legion был изменён.",
+      mfa_enabled: "Для вашей учётной записи Legion включена двухфакторная аутентификация. Все остальные сеансы завершены.",
+      mfa_disabled: "Для вашей учётной записи Legion ОТКЛЮЧЕНА двухфакторная аутентификация. Все остальные сеансы завершены.",
+      recovery_codes_regenerated: "Для вашей учётной записи Legion созданы новые коды восстановления. Прежние коды больше не действуют.",
+      new_device_login: "В вашу учётную запись Legion выполнен вход с устройства или браузера, которые раньше не использовались.",
+    },
+    uz: {
+      password_changed: "Legion hisobingiz paroli o'zgartirildi.",
+      mfa_enabled: "Legion hisobingiz uchun ikki bosqichli autentifikatsiya yoqildi. Boshqa barcha seanslar yakunlandi.",
+      mfa_disabled: "Legion hisobingiz uchun ikki bosqichli autentifikatsiya O'CHIRILDI. Boshqa barcha seanslar yakunlandi.",
+      recovery_codes_regenerated: "Legion hisobingiz uchun yangi tiklash kodlari yaratildi. Oldingi kodlar endi ishlamaydi.",
+      new_device_login: "Legion hisobingizga ilgari ishlatilmagan qurilma yoki brauzerdan kirildi.",
+    },
+  };
+  const t = {
+    en: { subject: "Security notice for your Legion account", title: "Security notice", when: "When", details: "Details", notYou: "If this was you, no action is needed. If it was not, reset your password from the sign-in page right away and tell your Legion administrator." },
+    ru: { subject: "Уведомление безопасности учётной записи Legion", title: "Уведомление безопасности", when: "Когда", details: "Подробности", notYou: "Если это были вы, ничего делать не нужно. Если нет — немедленно сбросьте пароль на странице входа и сообщите администратору Legion." },
+    uz: { subject: "Legion hisobingiz uchun xavfsizlik bildirishnomasi", title: "Xavfsizlik bildirishnomasi", when: "Qachon", details: "Tafsilotlar", notYou: "Agar bu siz bo'lsangiz, hech narsa qilish shart emas. Aks holda darhol kirish sahifasidan parolingizni tiklang va Legion administratoriga xabar bering." },
+  }[locale];
+  const lines = [what[locale][kind], `${t.when}: ${params.when}`, ...(params.detail ? [`${t.details}: ${params.detail}`] : [])];
+  return {
+    subject: t.subject,
+    text: `${lines.join("\n")}\n\n${t.notYou}`,
+    html: layout(t.title, `${lines.map((l) => para(escape(l))).join("\n")}\n${small(t.notYou)}`, locale),
+  };
+}

@@ -328,6 +328,39 @@ export function makeMfaLimiter(whoIs: (req: Request) => string | undefined) {
   });
 }
 
+/**
+ * Step-up checks by a signed-in user (current password to change it or turn
+ * off MFA, a code to turn MFA on). A stolen session must not be a way to
+ * guess the password behind it at the general API rate: failures only, per
+ * user, across instances.
+ */
+export function makeStepUpLimiter(whoIs: (req: Request) => string | undefined) {
+  return makeLimiter({
+    windowMs: 15 * 60_000,
+    limit: config.stepUpFailures,
+    prefix: "stepup-acct",
+    failuresOnly: true,
+    message: "Too many incorrect attempts. Wait a few minutes and try again.",
+    key: (req) => {
+      const user = whoIs(req);
+      return user ? accountKey("stepup", user) : `stepup-ip:${req.ip ?? "unknown"}`;
+    },
+  });
+}
+
+/**
+ * Emails sent to one address on request (password reset, verification
+ * resend). Every request counts, whatever the answer — the answer never says
+ * whether the address exists, so neither does the limit.
+ */
+export const mailPerAddressLimiter = makeLimiter({
+  windowMs: 60 * 60_000,
+  limit: config.mailPerAddressHourly,
+  prefix: "mail-addr",
+  message: "Too many emails requested for this address. Try again later.",
+  key: (req) => accountKey("mail", String((req.body as { email?: unknown } | undefined)?.email ?? "").trim()),
+});
+
 /** Everything else. Generous — a dashboard polling several endpoints must not
  *  trip it — but it caps outright abuse. */
 export const apiLimiter = makeLimiter({

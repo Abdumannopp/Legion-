@@ -304,6 +304,18 @@ export const CATALOG: Record<string, Translation> = {
     ru: "Слишком много неудачных попыток входа в этот аккаунт. Повторите позже.",
     uz: "Bu hisobga kirishda juda ko'p muvaffaqiyatsiz urinish bo'ldi. Keyinroq qayta urinib ko'ring.",
   },
+  "Too many incorrect attempts. Wait a few minutes and try again.": {
+    ru: "Слишком много неверных попыток. Подождите несколько минут и повторите.",
+    uz: "Juda ko'p noto'g'ri urinish. Bir necha daqiqa kutib, qayta urinib ko'ring.",
+  },
+  "Too many emails requested for this address. Try again later.": {
+    ru: "Для этого адреса запрошено слишком много писем. Повторите позже.",
+    uz: "Bu manzil uchun juda ko'p xat so'raldi. Keyinroq qayta urinib ko'ring.",
+  },
+  "Too many failed webhook authentications from this address. Try again later.": {
+    ru: "Слишком много неудачных попыток аутентификации вебхука с этого адреса. Повторите позже.",
+    uz: "Bu manzildan webhook autentifikatsiyasi juda ko'p marta muvaffaqiyatsiz bo'ldi. Keyinroq qayta urinib ko'ring.",
+  },
   "Too many incorrect codes. Sign in again in a few minutes.": {
     ru: "Слишком много неверных кодов. Войдите снова через несколько минут.",
     uz: "Noto'g'ri kodlar juda ko'p kiritildi. Bir necha daqiqadan so'ng qayta kiring.",

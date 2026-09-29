@@ -292,6 +292,10 @@ export const config = {
   rateLimitRedisTimeoutMs: Math.max(50, Math.floor(Number(process.env.RATE_LIMIT_REDIS_TIMEOUT_MS || 250)) || 250),
   /** Failed logins for one account (any address) before it is slowed down, per 15 minutes. */
   loginAccountFailures: Math.max(3, Math.floor(Number(process.env.LOGIN_ACCOUNT_FAILURES || 20)) || 20),
+  /** Wrong current-password / code answers by one signed-in user, per 15 minutes. */
+  stepUpFailures: Math.max(3, Math.floor(Number(process.env.STEP_UP_FAILURES || 10)) || 10),
+  /** Reset / verification emails one address can be sent per hour. */
+  mailPerAddressHourly: Math.max(1, Math.floor(Number(process.env.MAIL_PER_ADDRESS_HOURLY || 5)) || 5),
   /** Wrong second-factor codes for one account before it is slowed down, per 5 minutes. */
   mfaAccountFailures: Math.max(3, Math.floor(Number(process.env.MFA_ACCOUNT_FAILURES || 5)) || 5),
   /**

@@ -1,6 +1,7 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import cookieParser from "cookie-parser";
-import { apiLimiter, authLimiter, closeRateLimitStore, initRateLimitStore, loginAccountLimiter, makeMfaLimiter } from "./ratelimit.js";
+import { apiLimiter, authLimiter, closeRateLimitStore, initRateLimitStore, loginAccountLimiter, mailPerAddressLimiter, makeMfaLimiter, makeStepUpLimiter } from "./ratelimit.js";
+import { hashForComparison, notifyAccountOwner, networkOf, recentLoginFailures, rememberLoginDevice } from "./account-security.js";
 import { backupHealthReport } from "./backup-health.js";
 import { applyTrustedProxies, checkWebSocketOrigin, clientAddress, corsMiddleware, originGuard, securityHeaders, upgradeRateLimited } from "./edge.js";
 import jwt from "jsonwebtoken";
@@ -456,7 +457,7 @@ app.post("/auth/verify-email", authLimiter, async (req, res) => {
 });
 
 /** Always the same answer, so it cannot be used to learn which addresses exist. */
-app.post("/auth/resend-verification", authLimiter, async (req, res) => {
+app.post("/auth/resend-verification", authLimiter, mailPerAddressLimiter, async (req, res) => {
   const email = String(req.body?.email || "").toLowerCase().slice(0, 254);
   const user = email ? await store.findUserByEmail(email) : null;
   if (user && !user.email_verified_at && user.status === "active" && !isSelfHosted()) {
@@ -539,11 +540,20 @@ app.post("/auth/login", authLimiter, loginAccountLimiter, async (req, res) => {
   const body = req.body ?? {};
   const email = String(body.username || "").toLowerCase();
   const user = await store.findUserByEmail(email);
-  // Compare against a dummy hash when the user is unknown so the response time
-  // doesn't reveal whether the address exists.
-  const hash = user?.password_hash || "$2a$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidi";
-  const ok = await bcrypt.compare(String(body.password || ""), hash);
-  if (!user || !ok) return res.status(401).json({ detail: "Invalid email or password" });
+  // Always one full-cost bcrypt comparison: against the user's own hash, or a
+  // real dummy hash when the address is unknown or has no password yet, so
+  // the response time does not reveal whether the address exists.
+  const { hash, real } = hashForComparison(user);
+  const ok = (await bcrypt.compare(String(body.password || "").slice(0, 128), hash)) && real;
+  if (!user || !ok) {
+    // Recorded against a real account only (an unknown address has no tenant
+    // to audit into): the owner's administrators see guessing, and a later
+    // success after many failures is flagged (see completeSignIn).
+    if (user) {
+      await store.audit({ tenant_id: user.tenant_id, user_id: user.id, user_email: user.email, action: "auth.login_failed", resource_type: "user", resource_id: user.id, detail: null, ip_address: req.ip || null }).catch(() => {});
+    }
+    return res.status(401).json({ detail: "Invalid email or password" });
+  }
   if (user.status === "invited") return res.status(403).json({ detail: "Finish setting up your account from the invitation email first" });
   if (user.status !== "active") return res.status(403).json({ detail: "This account has been deactivated" });
   if (!user.email_verified_at && !isSelfHosted()) {
@@ -570,8 +580,31 @@ app.post("/auth/login", authLimiter, loginAccountLimiter, async (req, res) => {
 
   const accessToken = await startSession(req, res, user);
   await store.audit({ tenant_id: user.tenant_id, user_id: user.id, user_email: user.email, action: "auth.login", resource_type: "user", resource_id: user.id, detail: null, ip_address: req.ip || null });
+  await completeSignIn(req, user);
   return res.json({ access_token: accessToken, token_type: "bearer" });
 });
+
+/**
+ * Suspicious sign-in detection, after a sign-in has fully succeeded (both
+ * factors). Flags a device this account has never used, and a success that
+ * follows a burst of failed passwords (a guessed or stuffed credential). A
+ * flagged sign-in is audited and its owner emailed. Never blocks the sign-in:
+ * the second factor is the control, this is the alarm.
+ */
+async function completeSignIn(req: Request, user: User): Promise<void> {
+  try {
+    const newDevice = await rememberLoginDevice(user.id, req);
+    const failures = await recentLoginFailures(user);
+    const reasons = [newDevice ? "new device" : "", failures >= 5 ? `${failures} failed attempts in the previous 15 minutes` : ""].filter(Boolean);
+    if (!reasons.length) return;
+    const network = networkOf(req.ip);
+    const detail = `${reasons.join("; ")}${network ? `; network ${network}` : ""}`;
+    await store.audit({ tenant_id: user.tenant_id, user_id: user.id, user_email: user.email, action: "auth.login_suspicious", resource_type: "user", resource_id: user.id, detail, ip_address: req.ip || null });
+    notifyAccountOwner(user, "new_device_login", req, detail);
+  } catch (error) {
+    console.error("Legion: sign-in risk check failed:", error instanceof Error ? error.message : "unknown error");
+  }
+}
 
 /** Starts a session. One place, so every path that creates one (password
  *  login, MFA completion) stays consistent. */
@@ -601,6 +634,12 @@ const mfaAccountLimiter = makeMfaLimiter((req) => {
   const token = (req.body as { mfa_token?: unknown } | undefined)?.mfa_token;
   const payload = typeof token === "string" ? verifyToken(token) : null;
   return payload?.purpose === "mfa" ? payload.sub : undefined;
+});
+
+/** Wrong current passwords / codes by a signed-in user (ratelimit.ts). */
+const stepUpLimiter = makeStepUpLimiter((req) => {
+  const payload = verifyToken(tokenFrom(req));
+  return payload && !payload.purpose ? payload.sub : undefined;
 });
 
 app.post("/auth/mfa/verify", authLimiter, mfaAccountLimiter, async (req, res) => {
@@ -636,6 +675,7 @@ app.post("/auth/mfa/verify", authLimiter, mfaAccountLimiter, async (req, res) =>
   const accessToken = await startSession(req, res, user);
   const remaining = usedRecovery ? await mfa.countRecoveryCodes(user.id) : null;
   await store.audit({ tenant_id: user.tenant_id, user_id: user.id, user_email: user.email, action: "auth.login", resource_type: "user", resource_id: user.id, detail: usedRecovery ? "mfa:recovery" : "mfa:totp", ip_address: req.ip || null });
+  await completeSignIn(req, user);
   return res.json({
     access_token: accessToken, token_type: "bearer",
     used_recovery_code: usedRecovery,
@@ -671,7 +711,7 @@ app.post("/auth/mfa/setup", auth, async (req: AuthedRequest, res) => {
   });
 });
 
-app.post("/auth/mfa/enable", auth, async (req: AuthedRequest, res) => {
+app.post("/auth/mfa/enable", authLimiter, stepUpLimiter, auth, async (req: AuthedRequest, res) => {
   const body = parse(z.object({ code: z.string().min(6).max(10) }), req.body, res); if (!body) return;
   const user = req.user!;
   if (user.mfa_enabled) return res.status(400).json({ detail: "Two-factor authentication is already enabled" });
@@ -683,15 +723,20 @@ app.post("/auth/mfa/enable", auth, async (req: AuthedRequest, res) => {
     return res.status(400).json({ detail: "That code is not valid — check your authenticator app's clock" });
   }
 
-  await store.updateUser(user.id, { mfa_enabled: true, mfa_enrolled_at: new Date().toISOString() });
+  // Turning MFA on ends every other session — including any opened with the
+  // password alone before it was on — and starts a fresh one for this browser.
+  const enabled = await store.updateUser(user.id, { mfa_enabled: true, mfa_enrolled_at: new Date().toISOString(), bump_token_version: true });
+  await revokeUserEverywhere(user.id);
+  await startSession(req, res, enabled!);
   const recoveryCodes = await mfa.regenerateRecoveryCodes(user.id);
   await log(req, "auth.mfa_enabled", "user", user.id);
+  notifyAccountOwner(user, "mfa_enabled", req);
   // The only time these are readable. Only hashes are stored.
   res.setHeader("Cache-Control", "no-store");
   return res.json({ enabled: true, recovery_codes: recoveryCodes });
 });
 
-app.post("/auth/mfa/disable", auth, async (req: AuthedRequest, res) => {
+app.post("/auth/mfa/disable", authLimiter, stepUpLimiter, auth, async (req: AuthedRequest, res) => {
   const body = parse(z.object({
     password: z.string().min(1).max(128),
     code: z.string().min(6).max(20).optional(),
@@ -710,11 +755,16 @@ app.post("/auth/mfa/disable", auth, async (req: AuthedRequest, res) => {
   if (!codeOk) return res.status(400).json({ detail: "A valid authentication or recovery code is required" });
 
   await mfa.disableMfa(user.id);
+  // Same as enabling: every other session ends, this one continues.
+  const updated = await store.updateUser(user.id, { bump_token_version: true });
+  await revokeUserEverywhere(user.id);
+  await startSession(req, res, updated!);
   await log(req, "auth.mfa_disabled", "user", user.id);
+  notifyAccountOwner(user, "mfa_disabled", req);
   return res.json({ enabled: false });
 });
 
-app.post("/auth/mfa/recovery-codes", auth, async (req: AuthedRequest, res) => {
+app.post("/auth/mfa/recovery-codes", authLimiter, stepUpLimiter, auth, async (req: AuthedRequest, res) => {
   const body = parse(z.object({ password: z.string().min(1).max(128) }), req.body, res); if (!body) return;
   const user = req.user!;
   if (!user.mfa_enabled) return res.status(400).json({ detail: "Two-factor authentication is not enabled" });
@@ -725,6 +775,8 @@ app.post("/auth/mfa/recovery-codes", auth, async (req: AuthedRequest, res) => {
   // have been exposed.
   const recoveryCodes = await mfa.regenerateRecoveryCodes(user.id);
   await log(req, "auth.mfa_recovery_regenerated", "user", user.id);
+  notifyAccountOwner(user, "recovery_codes_regenerated", req);
+  res.setHeader("Cache-Control", "no-store");
   return res.json({ recovery_codes: recoveryCodes });
 });
 
@@ -790,7 +842,7 @@ app.get("/auth/me", auth, async (req: AuthedRequest, res) => {
   });
 });
 
-app.post("/auth/forgot-password", authLimiter, async (req, res) => {
+app.post("/auth/forgot-password", authLimiter, mailPerAddressLimiter, async (req, res) => {
   const email = String(req.body.email || "").toLowerCase();
   const user = await store.findUserByEmail(email);
   if (user && user.status === "active") {
@@ -802,8 +854,12 @@ app.post("/auth/forgot-password", authLimiter, async (req, res) => {
       reset_expires: new Date(Date.now() + 3_600_000).toISOString(),
     });
     const resetUrl = `${config.frontendUrl}/reset-password?token=${token}`;
-    const mail = await sendMail({ to: user.email, ...passwordResetEmail(resetUrl, requestLocale(req)) });
-    if (!mail.sent) logUnsentLink("password reset", resetUrl, mail.reason);
+    // Not awaited: waiting on SMTP only for addresses that exist would let the
+    // response time say which addresses do.
+    const locale = requestLocale(req);
+    void sendMail({ to: user.email, ...passwordResetEmail(resetUrl, locale) })
+      .then((mail) => { if (!mail.sent) logUnsentLink("password reset", resetUrl, mail.reason); })
+      .catch(() => {});
   }
   res.status(202).json({ message: "If that email is registered, a reset link has been generated." });
 });
@@ -819,12 +875,14 @@ app.post("/auth/reset-password", authLimiter, async (req, res) => {
   // token_version kills access tokens; this kills the refresh tokens that
   // would otherwise mint new ones. A password reset must end every session.
   await revokeUserEverywhere(user.id);
+  await store.audit({ tenant_id: user.tenant_id, user_id: user.id, user_email: user.email, action: "auth.password_reset", resource_type: "user", resource_id: user.id, detail: null, ip_address: req.ip || null });
+  notifyAccountOwner(user, "password_changed", req);
   return res.json({ message: "Password updated. Please log in again." });
 });
 
 /** Password change for a signed-in user. Bumps token_version, which signs out
  *  every other session — the point of changing a password under suspicion. */
-app.post("/auth/change-password", auth, async (req: AuthedRequest, res) => {
+app.post("/auth/change-password", authLimiter, stepUpLimiter, auth, async (req: AuthedRequest, res) => {
   const body = parse(z.object({ current_password: z.string().min(1).max(128), new_password: passwordField }), req.body, res); if (!body) return;
   const user = req.user!;
   if (!(await bcrypt.compare(body.current_password, user.password_hash))) {
@@ -836,6 +894,7 @@ app.post("/auth/change-password", auth, async (req: AuthedRequest, res) => {
   });
   await revokeUserEverywhere(user.id);
   await log(req, "auth.password_changed", "user", user.id);
+  notifyAccountOwner(user, "password_changed", req);
   res.clearCookie("legion_token", { path: "/" });
   res.clearCookie("legion_session", { path: "/" });
   return res.json({ message: "Password updated. Please log in again." });
