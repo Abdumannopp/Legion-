@@ -10,13 +10,13 @@
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from "vitest";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import WebSocket from "ws";
 import request from "supertest";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createServer, type AddressInfo, type Socket } from "node:net";
 import { randomUUID } from "node:crypto";
 import { app, httpServer } from "../src/index.js";
+import { mint } from "./helpers/tokens.js";
 import { closePool, migrate, query } from "../src/db/pool.js";
 import { truncateAll } from "../src/seed.js";
 import { config } from "../src/config.js";
@@ -38,7 +38,7 @@ let baseUrl = "";
 const connections = new Set<Socket>();
 const saved = { redisUrl: config.redisUrl, wsHeartbeatSeconds: config.wsHeartbeatSeconds };
 
-const token = (u: User) => jwt.sign({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, config.jwtSecret, { expiresIn: "1h" });
+const token = (u: User) => mint({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, { expiresIn: "1h" });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const until = async (cond: () => boolean | Promise<boolean>, ms = 10_000, what = "condition") => {
   const end = Date.now() + ms;

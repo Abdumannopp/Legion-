@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
 import request from "supertest";
-import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
 import { app } from "../src/index.js";
+import { mint } from "./helpers/tokens.js";
 import { closePool, migrate, query, queryOne } from "../src/db/pool.js";
 import { truncateAll } from "../src/seed.js";
 import * as store from "../src/store.js";
@@ -52,11 +52,7 @@ async function addSubscription(tenantId: string, status: string, paddleSubId = `
 /** Mints a token the same way the server does, so tests don't pay for bcrypt
  *  on every request. Login itself is covered by its own tests. */
 function tokenFor(user: User): string {
-  return jwt.sign(
-    { sub: user.id, tenant_id: user.tenant_id, token_version: user.token_version },
-    config.jwtSecret,
-    { algorithm: "HS256", expiresIn: "1h" }
-  );
+  return mint({ sub: user.id, tenant_id: user.tenant_id, token_version: user.token_version }, { algorithm: "HS256", expiresIn: "1h" });
 }
 const asUser = (user: User) => ["Authorization", `Bearer ${tokenFor(user)}`] as const;
 

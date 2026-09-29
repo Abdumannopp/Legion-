@@ -6,12 +6,12 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
 import request from "supertest";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import * as OTPAuth from "otpauth";
 import { app, httpServer } from "../src/index.js";
+import { mint } from "./helpers/tokens.js";
 import { closePool, migrate, query } from "../src/db/pool.js";
 import { truncateAll } from "../src/seed.js";
 import * as store from "../src/store.js";
@@ -42,7 +42,7 @@ beforeEach(async () => {
   });
 });
 
-const sessionToken = (u: User) => jwt.sign({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, config.jwtSecret, { expiresIn: "1h" });
+const sessionToken = (u: User) => mint({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, { expiresIn: "1h" });
 
 describe("CORS", () => {
   it("allows the configured frontend, with credentials, and nothing broader", async () => {
@@ -237,8 +237,10 @@ describe("brute-force MFA", () => {
     const secret: string = setup.body.secret;
     const totp = (offset = 0) => new OTPAuth.TOTP({ issuer: config.mfaIssuer, label: user.email, algorithm: "SHA1", digits: 6, period: 30, secret: OTPAuth.Secret.fromBase32(secret) })
       .generate({ timestamp: Date.now() + offset * 30_000 });
-    await request(app).post("/auth/mfa/enable").set("Authorization", `Bearer ${sessionToken(user)}`).send({ code: totp() }).expect(200);
+    // Enabling MFA is itself rate-limited per address now; setup uses its own.
+    await request(app).post("/auth/mfa/enable").set("Authorization", `Bearer ${sessionToken(user)}`).set("X-Forwarded-For", fresh()).send({ code: totp() }).expect(200);
     await query("DELETE FROM mfa_used_counters WHERE user_id = $1", [user.id]);
+    user = (await store.findUserById(user.id))!; // enabling MFA rotated its sessions (token_version)
 
     const login = await request(app).post("/auth/login").set("X-Forwarded-For", fresh()).send({ username: user.email, password: PASSWORD }).expect(200);
     const mfaToken: string = login.body.mfa_token;
@@ -303,7 +305,7 @@ describe("WebSocket handshake", () => {
   });
 
   it("an MFA challenge token is not a session", async () => {
-    const mfa = jwt.sign({ sub: user.id, tenant_id: user.tenant_id, token_version: user.token_version, purpose: "mfa" }, config.jwtSecret, { expiresIn: "5m" });
+    const mfa = mint({ sub: user.id, tenant_id: user.tenant_id, token_version: user.token_version, purpose: "mfa" }, { kind: "mfa", expiresIn: "5m" });
     expect((await open(port, { cookie: `legion_token=${mfa}`, origin: FRONT })).status).toBe(401);
   });
 

@@ -15,13 +15,13 @@
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
 import request from "supertest";
-import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import pg from "pg";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { app } from "../src/index.js";
+import { mint } from "./helpers/tokens.js";
 import { closePool, migrate, pool, query } from "../src/db/pool.js";
 import { truncateAll } from "../src/seed.js";
 import { config } from "../src/config.js";
@@ -33,7 +33,7 @@ let tenantA: string, tenantB: string;
 let adminA: User, adminB: User, analystA: User;
 const savedCatchup = config.alertSyncMaxCatchup;
 
-const auth = (u: User) => ["Authorization", `Bearer ${jwt.sign({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, config.jwtSecret, { expiresIn: "1h" })}`] as const;
+const auth = (u: User) => ["Authorization", `Bearer ${mint({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, { expiresIn: "1h" })}`] as const;
 const newAlert = (tenant: string, id: string, over: Partial<Parameters<typeof store.insertAlert>[0]> = {}) => ({
   id, tenant_id: tenant, title: `Alert ${id}`, severity: "high" as const, agent: "Sentinel" as const, status: "open" as const,
   summary: "s", confidence: 50, ai_explanation: null, explained_at: null, source_ip: null, target: null, mitre_technique: null, source: "test", ...over,

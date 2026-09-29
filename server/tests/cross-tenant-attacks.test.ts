@@ -13,7 +13,6 @@
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from "vitest";
 import request from "supertest";
-import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
@@ -21,6 +20,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { app, httpServer, socketGrantsStillValid } from "../src/index.js";
+import { mint } from "./helpers/tokens.js";
+import { verifyTokenOf } from "../src/auth-jwt.js";
 import { closePool, migrate, query, queryOne } from "../src/db/pool.js";
 import { truncateAll } from "../src/seed.js";
 import { config } from "../src/config.js";
@@ -46,7 +47,7 @@ let adminB: User, analystB: User, inviteeB: User;
 let credB: TestCredential;
 
 const token = (u: User, extra: Record<string, unknown> = {}) =>
-  jwt.sign({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version, ...extra }, config.jwtSecret, { algorithm: "HS256", expiresIn: "1h" });
+  mint({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version, ...extra }, { algorithm: "HS256", expiresIn: "1h" });
 const as = (u: User) => ["Authorization", `Bearer ${token(u)}`] as const;
 
 async function newAlert(tenantId: string, id: string, title: string, extra: Record<string, unknown> = {}) {
@@ -164,7 +165,7 @@ describe("tenant A accessing tenant B's alerts", () => {
   });
 
   it("a forged token claiming tenant B (with A's user) is refused everywhere", async () => {
-    const forged = jwt.sign({ sub: adminA.id, tenant_id: tB, token_version: adminA.token_version }, config.jwtSecret, { expiresIn: "1h" });
+    const forged = mint({ sub: adminA.id, tenant_id: tB, token_version: adminA.token_version }, { expiresIn: "1h" });
     for (const path of ["/alerts", "/alerts/B-ONLY-1", "/users", "/audit", "/assets"]) {
       const r = await request(app).get(path).set("Authorization", `Bearer ${forged}`);
       expect(r.status, path).toBe(401);
@@ -403,7 +404,7 @@ describe("tenant A accessing tenant B's WebSocket events", () => {
   });
 
   it("a forged cookie claiming tenant B is refused at the handshake", async () => {
-    const forged = jwt.sign({ sub: adminA.id, tenant_id: tB, token_version: adminA.token_version }, config.jwtSecret, { expiresIn: "1h" });
+    const forged = mint({ sub: adminA.id, tenant_id: tB, token_version: adminA.token_version }, { expiresIn: "1h" });
     expect(await open(forged)).toBe(401);
   });
 
@@ -526,7 +527,7 @@ describe("everything A can list or download is A's only", () => {
 
   it("A's billing context cannot be pointed at B", async () => {
     const ctx = await request(app).post("/billing/checkout-context").set(...as(adminA)).send({ tenant_id: tB }).expect(200);
-    const decoded = jwt.verify(ctx.body.checkout_token, config.jwtSecret) as { tenant_id: string };
+    const decoded = verifyTokenOf("checkout", ctx.body.checkout_token) as { tenant_id: string };
     expect(decoded.tenant_id).toBe(tA);
   });
 });

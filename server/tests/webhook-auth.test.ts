@@ -14,7 +14,6 @@
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from "vitest";
 import request from "supertest";
-import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -24,6 +23,7 @@ import { join } from "node:path";
 import { createHmac, randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { app } from "../src/index.js";
+import { mint } from "./helpers/tokens.js";
 import { closePool, migrate, query } from "../src/db/pool.js";
 import { truncateAll } from "../src/seed.js";
 import { config } from "../src/config.js";
@@ -53,7 +53,7 @@ const event = (id: string, description = "Multiple authentication failures") => 
 const alertCount = async (tenant: string) =>
   Number((await query("SELECT count(*) FROM alerts WHERE tenant_id = $1", [tenant])).rows[0].count);
 const nonceCount = async () => Number((await query("SELECT count(*) FROM webhook_nonces")).rows[0].count);
-const bearer = (u: User) => `Bearer ${jwt.sign({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, config.jwtSecret, { expiresIn: "1h" })}`;
+const bearer = (u: User) => `Bearer ${mint({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, { expiresIn: "1h" })}`;
 
 /** Every console line written during a test. */
 let logged: string[] = [];

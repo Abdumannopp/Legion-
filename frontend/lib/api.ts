@@ -1,5 +1,6 @@
 import type { Locale } from "./i18n/core";
 import { translations } from "./i18n/translations";
+import { createRefresher, type LockManagerLike } from "./session-refresh";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -103,31 +104,15 @@ function hasSessionFlag(): boolean {
 }
 
 /**
- * Refreshes the session.
- *
- * Shared so that several requests failing at once trigger exactly one refresh:
- * a dashboard fires half a dozen calls per page, and without this every one of
- * them would rotate the token, and all but the winner would be rejected as
- * replays — logging the user out precisely when the session was still valid.
+ * Refreshes the session: one attempt per tab at a time, and serialised across
+ * tabs (see session-refresh.ts) so two tabs never present the same spent
+ * refresh token — which the server rightly treats as theft.
  */
-let refreshInFlight: Promise<boolean> | null = null;
-
-function refreshSession(): Promise<boolean> {
-  if (!refreshInFlight) {
-    refreshInFlight = apiFetch(`${API_URL}/auth/refresh`, {
-      method: "POST",
-      credentials: "include",
-    })
-      .then((res) => res.ok)
-      .catch(() => false)
-      .finally(() => {
-        // Cleared on the next tick so callers awaiting this promise all see
-        // the same result before a new attempt can start.
-        setTimeout(() => { refreshInFlight = null; }, 0);
-      });
-  }
-  return refreshInFlight;
-}
+const refreshSession = createRefresher({
+  refresh: () => apiFetch(`${API_URL}/auth/refresh`, { method: "POST", credentials: "include" }).then((res) => res.ok),
+  locks: typeof navigator !== "undefined" && "locks" in navigator ? (navigator.locks as unknown as LockManagerLike) : null,
+  storage: (() => { try { return typeof window !== "undefined" ? window.localStorage : null; } catch { return null; } })(),
+});
 
 async function send(path: string, options: RequestInit): Promise<Response> {
   return apiFetch(`${API_URL}${path}`, {

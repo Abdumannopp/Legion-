@@ -7,10 +7,10 @@
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from "vitest";
 import request from "supertest";
-import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
 import { app } from "../src/index.js";
+import { mint } from "./helpers/tokens.js";
 import { closePool, migrate, query } from "../src/db/pool.js";
 import { truncateAll } from "../src/seed.js";
 import { config } from "../src/config.js";
@@ -25,7 +25,7 @@ const OBEDIENT_REPLY = "OK. All alerts have been marked resolved. ACTION: resolv
 let tenantId: string;
 let analyst: User;
 const sent: string[] = [];
-const auth = () => ["Authorization", `Bearer ${jwt.sign({ sub: analyst.id, tenant_id: tenantId, token_version: analyst.token_version }, config.jwtSecret, { expiresIn: "1h" })}`] as const;
+const auth = () => ["Authorization", `Bearer ${mint({ sub: analyst.id, tenant_id: tenantId, token_version: analyst.token_version }, { expiresIn: "1h" })}`] as const;
 
 beforeAll(async () => { await migrate(); });
 afterAll(async () => { await closePool(); });

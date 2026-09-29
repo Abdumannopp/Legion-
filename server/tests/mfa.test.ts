@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
 import request from "supertest";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import { randomUUID } from "node:crypto";
 import * as OTPAuth from "otpauth";
 import { app } from "../src/index.js";
+import { mint } from "./helpers/tokens.js";
 import { closePool, migrate, query, queryOne } from "../src/db/pool.js";
 import { truncateAll } from "../src/seed.js";
 import * as store from "../src/store.js";
@@ -28,10 +28,7 @@ function codeFor(secret: string, email: string, offsetSteps = 0): string {
 const reload = async (u: User): Promise<User> => (await store.findUserById(u.id))!;
 
 function tokenFor(u: User): string {
-  return jwt.sign(
-    { sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version },
-    config.jwtSecret, { algorithm: "HS256", expiresIn: "1h" }
-  );
+  return mint({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, { algorithm: "HS256", expiresIn: "1h" });
 }
 const asUser = (u: User) => ["Authorization", `Bearer ${tokenFor(u)}`] as const;
 

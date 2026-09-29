@@ -8,10 +8,10 @@
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from "vitest";
 import request from "supertest";
-import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
 import { app } from "../src/index.js";
+import { mint } from "./helpers/tokens.js";
 import { closePool, migrate, query } from "../src/db/pool.js";
 import { truncateAll } from "../src/seed.js";
 import { config } from "../src/config.js";
@@ -22,7 +22,7 @@ import type { User } from "../src/types.js";
 
 const FRONT = "http://localhost:3000";
 let tenantId: string; let admin: User;
-const as = (u: User) => ["Authorization", `Bearer ${jwt.sign({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, config.jwtSecret, { expiresIn: "1h" })}`] as const;
+const as = (u: User) => ["Authorization", `Bearer ${mint({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, { expiresIn: "1h" })}`] as const;
 
 /** Captures every email the app sends (the mailer module is the only exit). */
 const sent: Array<{ to: string; subject: string; text: string }> = [];

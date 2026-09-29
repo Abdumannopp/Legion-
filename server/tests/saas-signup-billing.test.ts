@@ -10,6 +10,7 @@ import request from "supertest";
 import jwt from "jsonwebtoken";
 import { createHmac, randomUUID } from "node:crypto";
 import { app } from "../src/index.js";
+import { mint } from "./helpers/tokens.js";
 import { closePool, migrate, query, queryOne } from "../src/db/pool.js";
 import { truncateAll } from "../src/seed.js";
 import * as store from "../src/store.js";
@@ -173,9 +174,9 @@ describe("Paddle turns a payment into access", () => {
 
   it("a payment Paddle retries hours later still lands (checkout token past its expiry)", async () => {
     const payer = await verifiedAdmin("slow@acme.example");
-    const expired = jwt.sign(
+    const expired = mint(
       { purpose: "paddle_checkout", tenant_id: payer.user.tenant_id, exp: Math.floor(Date.now() / 1000) - 6 * 3600 },
-      config.jwtSecret, { algorithm: "HS256" },
+      { kind: "checkout" },
     );
     const res = await paddleEvent(subscriptionEvent("subscription.created", { custom_data: { checkout_token: expired } }));
     expect(res.body.status).toBe("processed");
@@ -197,6 +198,33 @@ describe("Paddle turns a payment into access", () => {
     const session = payer.bearer.slice("Bearer ".length);
     vi.spyOn(console, "error").mockImplementation(() => {});
     const res = await paddleEvent(subscriptionEvent("subscription.created", { custom_data: { checkout_token: session } }));
+    expect(res.body.status).toBe("skipped");
+  });
+
+  it("a checkout token is honoured for 8 days after it was minted, and never after", async () => {
+    const payer = await verifiedAdmin("aged@acme.example");
+    const now = Math.floor(Date.now() / 1000);
+    const nineDaysOld = mint({ purpose: "paddle_checkout", tenant_id: payer.user.tenant_id, iat: now - 9 * 86_400, exp: now - 9 * 86_400 + 3600 }, { kind: "checkout" });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await paddleEvent(subscriptionEvent("subscription.created", { id: "sub_aged", custom_data: { checkout_token: nineDaysOld } }));
+    expect(res.body.status).toBe("skipped");
+    expect(await store.getSubscription(payer.user.tenant_id)).toBeNull();
+  });
+
+  it("a checkout token minted before per-purpose keys (raw JWT_SECRET) still attributes a recent payment", async () => {
+    const payer = await verifiedAdmin("legacy@acme.example");
+    const legacy = jwt.sign({ purpose: "paddle_checkout", tenant_id: payer.user.tenant_id }, config.jwtSecret, { algorithm: "HS256", expiresIn: "1h" });
+    const res = await paddleEvent(subscriptionEvent("subscription.created", { id: "sub_legacy", custom_data: { checkout_token: legacy } }));
+    expect(res.body.status).toBe("processed");
+    // …but a legacy-format token cannot be a SESSION: the access key is different.
+    await request(app).get("/auth/me").set("Authorization", `Bearer ${legacy}`).expect(401);
+  });
+
+  it("an MFA challenge token is not a checkout token either", async () => {
+    const payer = await verifiedAdmin("mfa-mix@acme.example");
+    const challenge = mint({ sub: payer.user.id, tenant_id: payer.user.tenant_id, token_version: 0, purpose: "paddle_checkout" }, { kind: "mfa", expiresIn: "5m" });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const res = await paddleEvent(subscriptionEvent("subscription.created", { id: "sub_mfa_mix", custom_data: { checkout_token: challenge } }));
     expect(res.body.status).toBe("skipped");
   });
 

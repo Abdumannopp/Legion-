@@ -8,10 +8,10 @@
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
 import request from "supertest";
-import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
 import { app } from "../src/index.js";
+import { mint } from "./helpers/tokens.js";
 import { closePool, migrate, query } from "../src/db/pool.js";
 import { truncateAll } from "../src/seed.js";
 import { config } from "../src/config.js";
@@ -190,7 +190,7 @@ describe("tenant isolation", () => {
   it("an administrator sees only their own organisation's deliveries", async () => {
     await outbox.insertAlertAndNotify(alert(tenantA, "A-1"));
     await outbox.insertAlertAndNotify(alert(tenantB, "B-1"));
-    const tok = (u: User) => `Bearer ${jwt.sign({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, config.jwtSecret, { expiresIn: "1h" })}`;
+    const tok = (u: User) => `Bearer ${mint({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, { expiresIn: "1h" })}`;
     const a = await request(app).get("/notifications/deliveries").set("Authorization", tok(adminA)).expect(200);
     expect(a.body.deliveries.map((d: { subject_id: string }) => d.subject_id)).toEqual(["A-1"]);
     expect(JSON.stringify(a.body)).not.toContain("soc@b.io");

@@ -9,10 +9,10 @@
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from "vitest";
 import request from "supertest";
-import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
 import { app } from "../src/index.js";
+import { mint } from "./helpers/tokens.js";
 import { closePool, migrate, query } from "../src/db/pool.js";
 import { truncateAll } from "../src/seed.js";
 import { config } from "../src/config.js";
@@ -49,7 +49,7 @@ function installProvider() {
   });
 }
 
-const bearer = (u: User) => ["Authorization", `Bearer ${jwt.sign({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, config.jwtSecret, { expiresIn: "1h" })}`] as const;
+const bearer = (u: User) => ["Authorization", `Bearer ${mint({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, { expiresIn: "1h" })}`] as const;
 const explain = (u: User, id: string, force = true) => request(app).post(`/alerts/${id}/explain${force ? "?force=true" : ""}`).set(...bearer(u));
 const copilot = (u: User, message: string, history: unknown[] = []) => request(app).post("/copilot/chat").set(...bearer(u)).send({ message, history });
 const statuses = async () => (await query("SELECT id, status FROM alerts WHERE tenant_id = $1 ORDER BY id", [tenant])).rows;

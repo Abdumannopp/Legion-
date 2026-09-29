@@ -24,6 +24,7 @@ import WebSocket from "ws";
 import pg from "pg";
 import { randomUUID, randomBytes } from "node:crypto";
 import * as OTPAuth from "otpauth";
+import { mint } from "./helpers/tokens.js";
 import { app } from "../src/index.js";
 import { migrate, closePool, query } from "../src/db/pool.js";
 import { truncateAll } from "../src/seed.js";
@@ -160,7 +161,7 @@ describe("disaster recovery drill", () => {
       });
     }
     // MFA, enrolled the way a user does it — the seed is stored sealed.
-    const tok = (u: { id: string; tenant_id?: string }) => ["Authorization", `Bearer ${require("jsonwebtoken").sign({ sub: u.id, tenant_id: seeded.tenantA, token_version: 0 }, config.jwtSecret, { expiresIn: "1h" })}`] as const;
+    const tok = (u: { id: string; tenant_id?: string }) => ["Authorization", `Bearer ${mint({ sub: u.id, tenant_id: seeded.tenantA, token_version: 0 }, { expiresIn: "1h" })}`] as const;
     const setup = await request(app).post("/auth/mfa/setup").set(...tok(mfaUser)).expect(200);
     seeded.mfaSecret = setup.body.secret;
     await request(app).post("/auth/mfa/enable").set(...tok(mfaUser)).send({ code: totp(seeded.mfaSecret, mfaUser.email) }).expect(200);

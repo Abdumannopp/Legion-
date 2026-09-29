@@ -4,7 +4,7 @@ import { apiLimiter, authLimiter, closeRateLimitStore, initRateLimitStore, login
 import { hashForComparison, notifyAccountOwner, networkOf, recentLoginFailures, rememberLoginDevice } from "./account-security.js";
 import { backupHealthReport } from "./backup-health.js";
 import { applyTrustedProxies, checkWebSocketOrigin, clientAddress, corsMiddleware, originGuard, securityHeaders, upgradeRateLimited } from "./edge.js";
-import jwt from "jsonwebtoken";
+import { signToken, verifyLegacyCheckoutToken, verifyTokenOf } from "./auth-jwt.js";
 import bcrypt from "bcryptjs";
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
@@ -101,11 +101,8 @@ type Token = { sub: string; tenant_id: string; token_version: number; purpose?: 
 type AuthedRequest = Request & { user?: User };
 
 function sign(user: User): string {
-  return jwt.sign(
-    { sub: user.id, tenant_id: user.tenant_id, token_version: user.token_version },
-    config.jwtSecret,
-    { algorithm: "HS256", expiresIn: `${config.accessTokenMinutes}m` }
-  );
+  // Per-purpose key, issuer, audience and key id: see auth-jwt.ts.
+  return signToken("access", { sub: user.id, tenant_id: user.tenant_id, token_version: user.token_version }, `${config.accessTokenMinutes}m`);
 }
 
 const ACCESS_COOKIE_MS = () => config.accessTokenMinutes * 60_000;
@@ -153,8 +150,9 @@ function tokenFrom(req: Request): string | undefined {
 
 function verifyToken(raw?: string): Token | null {
   if (!raw) return null;
-  try { return jwt.verify(raw, config.jwtSecret, { algorithms: ["HS256"] }) as Token; }
-  catch { return null; }
+  // Access tokens only. An MFA challenge or checkout token is signed with a
+  // different key for a different audience and does not verify here at all.
+  return verifyTokenOf<Token & { iat?: number }>("access", raw) as Token | null;
 }
 
 /** Constant-time compare for secrets that arrive from a request. */
@@ -570,11 +568,7 @@ app.post("/auth/login", authLimiter, loginAccountLimiter, async (req, res) => {
     await store.audit({ tenant_id: user.tenant_id, user_id: user.id, user_email: user.email, action: "auth.mfa_challenged", resource_type: "user", resource_id: user.id, detail: null, ip_address: req.ip || null });
     return res.json({
       mfa_required: true,
-      mfa_token: jwt.sign(
-        { sub: user.id, tenant_id: user.tenant_id, token_version: user.token_version, purpose: "mfa" },
-        config.jwtSecret,
-        { algorithm: "HS256", expiresIn: "5m" }
-      ),
+      mfa_token: signToken("mfa", { sub: user.id, tenant_id: user.tenant_id, token_version: user.token_version, purpose: "mfa" }, "5m"),
     });
   }
 
@@ -622,7 +616,7 @@ async function startSession(req: Request, res: Response, user: User): Promise<st
 
 /** Validates an MFA challenge token and returns the user it belongs to. */
 async function userFromMfaToken(raw: string): Promise<User | null> {
-  const payload = verifyToken(raw);
+  const payload = verifyTokenOf<Token>("mfa", raw);
   if (!payload || payload.purpose !== "mfa") return null;
   const user = await store.findUserById(payload.sub);
   if (!user || user.token_version !== payload.token_version || user.status !== "active") return null;
@@ -632,7 +626,7 @@ async function userFromMfaToken(raw: string): Promise<User | null> {
 /** Second step of login: exchange the challenge token for a real session. */
 const mfaAccountLimiter = makeMfaLimiter((req) => {
   const token = (req.body as { mfa_token?: unknown } | undefined)?.mfa_token;
-  const payload = typeof token === "string" ? verifyToken(token) : null;
+  const payload = typeof token === "string" ? verifyTokenOf<Token>("mfa", token) : null;
   return payload?.purpose === "mfa" ? payload.sub : undefined;
 });
 
@@ -1373,7 +1367,7 @@ app.get("/billing/subscription", auth, async (req: AuthedRequest, res) => {
   return res.json({ ...sub, access_state: state, trial_ends_at: tenant?.trial_ends_at || null });
 });
 
-app.post("/billing/checkout-context", requireRole("admin"), (req: AuthedRequest, res) => res.json({ checkout_token: jwt.sign({ purpose: "paddle_checkout", tenant_id: req.user!.tenant_id }, config.jwtSecret, { algorithm: "HS256", expiresIn: "1h" }) }));
+app.post("/billing/checkout-context", requireRole("admin"), (req: AuthedRequest, res) => res.json({ checkout_token: signToken("checkout", { purpose: "paddle_checkout", tenant_id: req.user!.tenant_id }, "1h") }));
 
 app.post("/billing/portal", requireRole("admin"), async (req: AuthedRequest, res) => {
   if (!paddleConfigured()) return res.status(503).json({ detail: "Paddle is not configured" });
@@ -1411,19 +1405,20 @@ const subscriptionStatuses = new Set<Subscription["status"]>([
 function tenantFromCustomData(customData: Record<string, unknown> | null | undefined): string | null {
   const raw = customData?.["checkout_token"];
   if (typeof raw !== "string") return null;
-  try {
-    // Expiry is deliberately ignored here. The token only has to prove which
-    // tenant opened the checkout (our signature, our purpose); the event itself
-    // is proven genuine by Paddle's signature. If Legion was down when the
-    // customer paid, Paddle retries for hours — an expired token must not
-    // turn a real payment into an unassigned one.
-    const claims = jwt.verify(raw, config.jwtSecret, { algorithms: ["HS256"], ignoreExpiration: true }) as Token;
-    if (claims.purpose !== "paddle_checkout") return null;
-    return claims.tenant_id || null;
-  } catch {
-    return null;
-  }
+  // Expiry is relaxed here, but no longer ignored outright. The token only has
+  // to prove which tenant opened the checkout (our key, our audience, our
+  // purpose); the event itself is proven genuine by Paddle's signature. If
+  // Legion was down when the customer paid, Paddle retries for up to ~3 days —
+  // so a token is honoured for CHECKOUT_TOKEN_MAX_AGE after it was minted, and
+  // never after that.
+  const claims = verifyTokenOf<Token>("checkout", raw, { ignoreExpiration: true, maxAge: CHECKOUT_TOKEN_MAX_AGE })
+    ?? verifyLegacyCheckoutToken(raw, CHECKOUT_TOKEN_MAX_AGE);
+  if (!claims || claims.purpose !== "paddle_checkout") return null;
+  return typeof claims.tenant_id === "string" ? claims.tenant_id : null;
 }
+
+/** How long after it was issued a checkout token can still attribute a payment. */
+export const CHECKOUT_TOKEN_MAX_AGE = "8d";
 
 app.post("/billing/webhook", async (req, res) => {
   const check = verifyPaddleSignature(

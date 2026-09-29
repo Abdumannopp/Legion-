@@ -54,6 +54,9 @@ export const config = {
   bindAddress: process.env.LEGION_BIND_ADDRESS || "127.0.0.1",
   frontendUrl: process.env.FRONTEND_URL || "http://localhost:3000",
   jwtSecret: process.env.JWT_SECRET || "local-development-secret-change-me-please",
+  /** Earlier JWT_SECRET values, comma-separated, accepted for VERIFICATION only
+   *  while their tokens run out — rotation without signing everyone out. */
+  jwtPreviousSecrets: (process.env.JWT_PREVIOUS_SECRETS || "").split(",").map((s) => s.trim()).filter(Boolean),
   cookieSecure: process.env.COOKIE_SECURE === "true",
   /**
    * How this installation is run.
@@ -101,6 +104,18 @@ export const config = {
   // the refresh token below is the revocable half.
   accessTokenMinutes: Number(process.env.ACCESS_TOKEN_MINUTES || 15),
   refreshTokenDays: Number(process.env.REFRESH_TOKEN_DAYS || 30),
+  /** Hard ceiling on one login's life, however actively it is used (1–365 days). */
+  sessionAbsoluteDays: Math.min(365, Math.max(1, Math.floor(Number(process.env.SESSION_ABSOLUTE_DAYS || 30)) || 30)),
+  /**
+   * OFF by default (0). When set (1–60 s), a just-rotated refresh token that the
+   * same browser presents again within this window is accepted once instead of
+   * revoking the session. That tolerates tabs racing on clients without the
+   * dashboard's cross-tab lock — but a thief who replays within the window with
+   * a copied user agent is then not detected. The dashboard serialises refresh
+   * across tabs itself (frontend/lib/api.ts), so the default keeps strict
+   * reuse detection.
+   */
+  refreshReuseGraceSeconds: Math.min(60, Math.max(0, Math.floor(Number(process.env.REFRESH_REUSE_GRACE_SECONDS ?? 0)) || 0)),
   /** Legacy JSON store, read only by the one-shot import script. */
   dataFile: process.env.DATA_FILE || "./data/legion.json",
   /**
@@ -394,6 +409,11 @@ const copiedTemplate = TEMPLATE_SECRET.test(config.jwtSecret) && config.jwtSecre
 const weakSecretTolerated =
   process.env.NODE_ENV === "test" ||
   (process.env.NODE_ENV === "development" && loopbackBind && !copiedTemplate);
+// A previous secret is still a verification key: a weak one would let anyone
+// forge tokens for as long as it is listed.
+if (config.jwtPreviousSecrets.some(isWeakJwtSecret) && !weakSecretTolerated) {
+  throw new Error("Refusing to start: JWT_PREVIOUS_SECRETS contains a weak or placeholder value. List only real, previously used secrets.");
+}
 if (usingPlaceholderSecret && !weakSecretTolerated) {
   throw new Error(
     "Refusing to start: JWT_SECRET is unset, too weak, or a placeholder copied from an example file.\n" +

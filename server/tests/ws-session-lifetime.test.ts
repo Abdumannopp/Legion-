@@ -8,12 +8,12 @@
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import request from "supertest";
-import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { app, httpServer, socketGrantsStillValid } from "../src/index.js";
+import { mint } from "./helpers/tokens.js";
 import { closePool, migrate, query } from "../src/db/pool.js";
 import { truncateAll } from "../src/seed.js";
 import { config } from "../src/config.js";
@@ -26,7 +26,7 @@ let user: User;
 let server: ReturnType<typeof httpServer.listen>; let port = 0;
 
 const tokenFor = (u: User, seconds: number) =>
-  jwt.sign({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, config.jwtSecret, { algorithm: "HS256", expiresIn: seconds });
+  mint({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, { algorithm: "HS256", expiresIn: seconds });
 
 type Tap = { ws: WebSocket; closed: Promise<number> };
 const open = (tok: string) => new Promise<Tap | number>((resolve) => {
@@ -63,7 +63,7 @@ describe("socket lifetime", () => {
 
   it("logout closes the sockets opened with that browser's token — and not the user's other devices", async () => {
     const laptop = tokenFor(user, 900);
-    const phone = jwt.sign({ sub: user.id, tenant_id: user.tenant_id, token_version: user.token_version, d: "phone" }, config.jwtSecret, { algorithm: "HS256", expiresIn: 900 });
+    const phone = mint({ sub: user.id, tenant_id: user.tenant_id, token_version: user.token_version, d: "phone" }, { algorithm: "HS256", expiresIn: 900 });
     const a = await open(laptop) as Tap;
     const b = await open(phone) as Tap;
     await request(app).post("/auth/logout").set("Cookie", `legion_token=${laptop}`).set("Origin", FRONT).expect(204);
@@ -73,7 +73,7 @@ describe("socket lifetime", () => {
   });
 
   it("a token that has already expired cannot open one", async () => {
-    const expired = jwt.sign({ sub: user.id, tenant_id: user.tenant_id, token_version: user.token_version, exp: Math.floor(Date.now() / 1000) - 5 }, config.jwtSecret, { algorithm: "HS256" });
+    const expired = mint({ sub: user.id, tenant_id: user.tenant_id, token_version: user.token_version, exp: Math.floor(Date.now() / 1000) - 5 }, { algorithm: "HS256" });
     expect(await open(expired)).toBe(401);
   });
 

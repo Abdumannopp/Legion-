@@ -7,10 +7,10 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import request from "supertest";
-import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
 import { app } from "../src/index.js";
+import { mint } from "./helpers/tokens.js";
 import { closePool, migrate, query } from "../src/db/pool.js";
 import * as store from "../src/store.js";
 import { config } from "../src/config.js";
@@ -22,7 +22,7 @@ let hash = "";
 
 const bearer = (t: string) => ["Authorization", `Bearer ${t}`] as const;
 const tokenFor = (u: User, extra: Record<string, unknown> = {}) =>
-  jwt.sign({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version, ...extra }, config.jwtSecret, { algorithm: "HS256", expiresIn: "1h" });
+  mint({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version, ...extra }, { algorithm: "HS256", expiresIn: "1h" });
 const asUser = (u: User) => bearer(tokenFor(u));
 
 async function tenant(): Promise<string> {

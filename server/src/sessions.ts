@@ -19,8 +19,16 @@ export interface RefreshRecord {
   user_id: string;
   family_id: string;
   expires_at: string;
+  created_at: string;
   rotated_at: string | null;
   revoked_at: string | null;
+  /** When the login that started this family happened. NULL on rows from
+   *  before the absolute lifetime existed: the row's own created_at stands in. */
+  family_started_at: string | null;
+  /** Set when this (already rotated) token was accepted once more inside the
+   *  reuse grace window. A second such reuse is treated as theft. */
+  grace_used_at: string | null;
+  user_agent: string | null;
 }
 
 /**
@@ -39,7 +47,16 @@ function newToken(): string {
   return randomBytes(32).toString("base64url");
 }
 
-const expiryDate = (): Date => new Date(Date.now() + config.refreshTokenDays * 86_400_000);
+/**
+ * Idle expiry (REFRESH_TOKEN_DAYS from the last use) capped by the absolute
+ * lifetime (SESSION_ABSOLUTE_DAYS from the login). Before the cap, every
+ * rotation pushed the end 30 days further out, so a session that kept being
+ * used never ended at all.
+ */
+const expiryDate = (familyStarted: Date = new Date()): Date => new Date(Math.min(
+  Date.now() + config.refreshTokenDays * 86_400_000,
+  familyStarted.getTime() + config.sessionAbsoluteDays * 86_400_000,
+));
 
 /** Starts a new session family — one per login. */
 export async function issue(
@@ -48,8 +65,8 @@ export async function issue(
 ): Promise<string> {
   const token = newToken();
   await query(
-    `INSERT INTO refresh_tokens (id, user_id, token_hash, family_id, expires_at, user_agent, ip_address)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    `INSERT INTO refresh_tokens (id, user_id, token_hash, family_id, expires_at, user_agent, ip_address, family_started_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, now())`,
     [
       randomUUID(), userId, hash(token), randomUUID(), expiryDate(),
       meta.userAgent?.slice(0, 300) || null, meta.ip || null,
@@ -90,28 +107,41 @@ export async function rotate(
 
     if (record.revoked_at) return { ok: false, reason: "revoked" as const };
 
+    const familyStarted = new Date(record.family_started_at ?? record.created_at);
+    const pastAbsolute = Date.now() >= familyStarted.getTime() + config.sessionAbsoluteDays * 86_400_000;
+
     if (record.rotated_at) {
-      // Replay of a spent token: assume compromise and kill the family.
-      await client.query(
-        "UPDATE refresh_tokens SET revoked_at = now() WHERE family_id = $1 AND revoked_at IS NULL",
-        [record.family_id]
-      );
-      return { ok: false, reason: "reused" as const };
+      // Two tabs of the same browser refreshing at the same moment present the
+      // same token twice: the second one is not theft. It is let through ONCE,
+      // only within REFRESH_REUSE_GRACE_SECONDS of the rotation, and only for
+      // the browser (user agent) the token was issued to. Everything
+      // else — a later replay, a second reuse, another client — is treated as
+      // what it most likely is, and the whole family is revoked.
+      const rotatedAgo = (Date.now() - new Date(record.rotated_at).getTime()) / 1000;
+      const sameBrowser = (meta.userAgent?.slice(0, 300) || null) === record.user_agent;
+      const withinGrace = config.refreshReuseGraceSeconds > 0 && rotatedAgo <= config.refreshReuseGraceSeconds;
+      if (!withinGrace || !sameBrowser || record.grace_used_at || pastAbsolute) {
+        await client.query(
+          "UPDATE refresh_tokens SET revoked_at = now() WHERE family_id = $1 AND revoked_at IS NULL",
+          [record.family_id]
+        );
+        return { ok: false, reason: "reused" as const };
+      }
+      await client.query("UPDATE refresh_tokens SET grace_used_at = now() WHERE id = $1", [record.id]);
+    } else {
+      if (new Date(record.expires_at) <= new Date() || pastAbsolute) {
+        return { ok: false, reason: "expired" as const };
+      }
+      await client.query("UPDATE refresh_tokens SET rotated_at = now() WHERE id = $1", [record.id]);
     }
-
-    if (new Date(record.expires_at) <= new Date()) {
-      return { ok: false, reason: "expired" as const };
-    }
-
-    await client.query("UPDATE refresh_tokens SET rotated_at = now() WHERE id = $1", [record.id]);
 
     const token = newToken();
     await client.query(
-      `INSERT INTO refresh_tokens (id, user_id, token_hash, family_id, expires_at, user_agent, ip_address)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      `INSERT INTO refresh_tokens (id, user_id, token_hash, family_id, expires_at, user_agent, ip_address, family_started_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
-        randomUUID(), record.user_id, hash(token), record.family_id, expiryDate(),
-        meta.userAgent?.slice(0, 300) || null, meta.ip || null,
+        randomUUID(), record.user_id, hash(token), record.family_id, expiryDate(familyStarted),
+        meta.userAgent?.slice(0, 300) || null, meta.ip || null, familyStarted,
       ]
     );
 

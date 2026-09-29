@@ -449,3 +449,8 @@ CREATE TABLE IF NOT EXISTS user_known_devices (
 );
 -- Failed sign-ins per account (new audit action auth.login_failed).
 CREATE INDEX IF NOT EXISTS audit_log_tenant_action_user_created_idx ON audit_log (tenant_id, action, user_id, created_at);
+-- Refresh sessions: absolute lifetime and the multi-tab reuse allowance.
+-- Nullable, no default: metadata-only ALTERs, no table rewrite. Existing rows
+-- (family_started_at NULL) use their own created_at as the start.
+ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS family_started_at timestamptz;
+ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS grace_used_at timestamptz;

@@ -14,12 +14,12 @@
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from "vitest";
 import request from "supertest";
-import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createServer, type AddressInfo } from "node:net";
 import { app } from "../src/index.js";
+import { mint } from "./helpers/tokens.js";
 import { closePool, migrate, query } from "../src/db/pool.js";
 import { truncateAll } from "../src/seed.js";
 import { config } from "../src/config.js";
@@ -390,7 +390,7 @@ describe("retry and dead-letter", () => {
     expect(await alertCount()).toBe(1);
 
     // Dead letters are visible to the organisation's administrator…
-    const tok = `Bearer ${jwt.sign({ sub: admin.id, tenant_id: tenant, token_version: admin.token_version }, config.jwtSecret, { expiresIn: "1h" })}`;
+    const tok = `Bearer ${mint({ sub: admin.id, tenant_id: tenant, token_version: admin.token_version }, { expiresIn: "1h" })}`;
     const list = await request(app).get("/notifications/deliveries").set("Authorization", tok).expect(200);
     expect(list.body.deliveries.filter((d: { status: string }) => d.status === "dead")).toHaveLength(2);
     // …and the payload is not in that listing.
@@ -501,7 +501,7 @@ describe("queue health metrics", () => {
 
   it("an administrator sees only their own organisation's queue", async () => {
     await post(wazuh("iso-1"), otherTenant).expect(202);
-    const tok = `Bearer ${jwt.sign({ sub: admin.id, tenant_id: tenant, token_version: admin.token_version }, config.jwtSecret, { expiresIn: "1h" })}`;
+    const tok = `Bearer ${mint({ sub: admin.id, tenant_id: tenant, token_version: admin.token_version }, { expiresIn: "1h" })}`;
     const res = await request(app).get("/notifications/health").set("Authorization", tok).expect(200);
     expect(res.body).toMatchObject({ pending: 0, dead: 0 });
     expect((await outbox.queueMetrics()).pending).toBe(2);

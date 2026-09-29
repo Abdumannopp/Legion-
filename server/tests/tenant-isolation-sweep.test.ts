@@ -11,12 +11,12 @@
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from "vitest";
 import request from "supertest";
-import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { app, httpServer } from "../src/index.js";
+import { mint } from "./helpers/tokens.js";
 import { closePool, migrate, query } from "../src/db/pool.js";
 import { truncateAll } from "../src/seed.js";
 import { config } from "../src/config.js";
@@ -31,7 +31,7 @@ const A_MARKERS = ["ALPHA-CORP", "alpha-secret-host", "LGN-ALPHA-1", "admin@alph
 let tenantA: string, tenantB: string;
 let adminA: User, analystA: User, adminB: User;
 
-const token = (u: User) => jwt.sign({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, config.jwtSecret, { expiresIn: "1h" });
+const token = (u: User) => mint({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, { expiresIn: "1h" });
 const as = (u: User) => ["Authorization", `Bearer ${token(u)}`] as const;
 const leaks = (body: unknown) => A_MARKERS.filter((m) => JSON.stringify(body ?? "").includes(m));
 
@@ -118,7 +118,7 @@ describe("company B's administrator, aimed at company A", () => {
   });
 
   it("a forged token claiming A's tenant with B's user id is refused", async () => {
-    const forged = jwt.sign({ sub: adminB.id, tenant_id: tenantA, token_version: adminB.token_version }, config.jwtSecret, { expiresIn: "1h" });
+    const forged = mint({ sub: adminB.id, tenant_id: tenantA, token_version: adminB.token_version }, { expiresIn: "1h" });
     const res = await request(app).get("/alerts").set("Authorization", `Bearer ${forged}`);
     expect(res.status).toBe(401);
     expect(leaks(res.body)).toEqual([]);

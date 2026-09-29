@@ -13,13 +13,13 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from "vitest";
 import request from "supertest";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import pg from "pg";
 import * as OTPAuth from "otpauth";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { app } from "../src/index.js";
+import { mint } from "./helpers/tokens.js";
 import { closePool, migrate, query } from "../src/db/pool.js";
 import { truncateAll } from "../src/seed.js";
 import { config } from "../src/config.js";
@@ -40,7 +40,7 @@ let tenant: string;
 let admin: User, member: User;
 let passwordHash = "";
 
-const bearer = (u: User) => ["Authorization", `Bearer ${jwt.sign({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, config.jwtSecret, { expiresIn: "1h" })}`] as const;
+const bearer = (u: User) => ["Authorization", `Bearer ${mint({ sub: u.id, tenant_id: u.tenant_id, token_version: u.token_version }, { expiresIn: "1h" })}`] as const;
 const reload = async (u: User) => (await store.findUserById(u.id))!;
 /** Every column of a user row as one string: what a database dump would show. */
 const rowText = async (id: string) => JSON.stringify((await query("SELECT * FROM users WHERE id = $1", [id])).rows[0]);
