@@ -405,6 +405,22 @@ app.get("/health/backup", async (req, res) => {
 
 const passwordField = z.string().min(8).max(128);
 
+/** A path id that is not a UUID cannot name a user: 404 without a query
+ *  (Postgres would otherwise reject the cast with a 500). */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * List endpoints' query strings. `limit=abc` used to become LIMIT NaN — a
+ * Postgres error and a 500 — and `offset` was unbounded (deep scans).
+ */
+const listQuery = z.object({
+  severity: z.string().max(20).optional(),
+  status: z.string().max(20).optional(),
+  q: z.string().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+  offset: z.coerce.number().int().min(0).max(10_000).optional(),
+});
+
 const registerSchema = z.object({
   email: z.string().email().max(254).transform((v) => v.toLowerCase()),
   password: passwordField,
@@ -925,13 +941,8 @@ app.get("/alerts/stats", auth, async (req: AuthedRequest, res) => {
 });
 
 app.get("/alerts", auth, async (req: AuthedRequest, res) => {
-  const alerts = await store.listAlerts(req.user!.tenant_id, {
-    severity: req.query.severity ? String(req.query.severity) : undefined,
-    status: req.query.status ? String(req.query.status) : undefined,
-    q: req.query.q ? String(req.query.q) : undefined,
-    limit: req.query.limit ? Number(req.query.limit) : undefined,
-    offset: req.query.offset ? Number(req.query.offset) : undefined,
-  });
+  const q = parse(listQuery, req.query, res); if (!q) return;
+  const alerts = await store.listAlerts(req.user!.tenant_id, q);
   res.json(alerts.map(outputAlert));
 });
 
@@ -944,13 +955,8 @@ app.get("/alerts", auth, async (req: AuthedRequest, res) => {
 
 app.get("/alerts/feed", auth, async (req: AuthedRequest, res) => {
   res.setHeader("Cache-Control", "no-store");
-  const { alerts, cursor } = await store.listAlertsWithCursor(req.user!.tenant_id, {
-    severity: req.query.severity ? String(req.query.severity) : undefined,
-    status: req.query.status ? String(req.query.status) : undefined,
-    q: req.query.q ? String(req.query.q) : undefined,
-    limit: req.query.limit ? Number(req.query.limit) : undefined,
-    offset: req.query.offset ? Number(req.query.offset) : undefined,
-  });
+  const q = parse(listQuery, req.query, res); if (!q) return;
+  const { alerts, cursor } = await store.listAlertsWithCursor(req.user!.tenant_id, q);
   res.json({ alerts: alerts.map(outputAlert), cursor });
 });
 
@@ -1034,10 +1040,14 @@ app.post("/alerts/:id/explain", requireRole("analyst"), async (req: AuthedReques
 });
 
 app.get("/assets", auth, async (req: AuthedRequest, res) => {
+  const q = parse(z.object({
+    risk: z.string().max(20).optional(),
+    online: z.enum(["true", "false"]).optional(),
+    q: z.string().max(200).optional(),
+    limit: z.coerce.number().int().min(1).max(5_000).optional(),
+  }), req.query, res); if (!q) return;
   res.json(await store.listAssets(req.user!.tenant_id, {
-    risk: req.query.risk ? String(req.query.risk) : undefined,
-    online: req.query.online === undefined ? undefined : req.query.online === "true",
-    q: req.query.q ? String(req.query.q) : undefined,
+    risk: q.risk, online: q.online === undefined ? undefined : q.online === "true", q: q.q, limit: q.limit,
   }));
 });
 
@@ -1167,6 +1177,7 @@ app.post("/users/invite", requireRole("admin"), async (req: AuthedRequest, res) 
 });
 
 app.post("/users/:id/resend-invite", requireRole("admin"), async (req: AuthedRequest, res) => {
+  if (!UUID_RE.test(String(req.params.id))) return res.status(404).json({ detail: "User not found" });
   const user = await store.findUserInTenant(req.user!.tenant_id, String(req.params.id));
   if (!user) return res.status(404).json({ detail: "User not found" });
   if (user.status !== "invited") return res.status(400).json({ detail: "That user has already accepted their invitation" });
@@ -1194,43 +1205,51 @@ app.post("/users/:id/resend-invite", requireRole("admin"), async (req: AuthedReq
 });
 
 app.patch("/users/:id/role", requireRole("admin"), async (req: AuthedRequest, res) => {
+  if (!UUID_RE.test(String(req.params.id))) return res.status(404).json({ detail: "User not found" });
   const body = parse(z.object({ role: z.enum(["admin", "analyst", "viewer"]) }), req.body, res); if (!body) return;
-  const user = await store.findUserInTenant(req.user!.tenant_id, String(req.params.id));
-  if (!user) return res.status(404).json({ detail: "User not found" });
-  if (user.role === "admin" && body.role !== "admin" && (await store.countOtherActiveAdmins(user.tenant_id, user.id)) === 0) {
-    return res.status(400).json({ detail: "A tenant must keep at least one admin" });
+  const userId = String(req.params.id);
+  // Check "a tenant keeps at least one admin" and change the role atomically
+  // (store.updateUserKeepingAnAdmin): two admins demoting each other at once
+  // can no longer leave the tenant with none.
+  const result = await store.updateUserKeepingAnAdmin(req.user!.tenant_id, userId, { role: body.role, bump_token_version: true }, () => body.role !== "admin");
+  if (!result.ok) {
+    return result.reason === "not_found"
+      ? res.status(404).json({ detail: "User not found" })
+      : res.status(400).json({ detail: "A tenant must keep at least one admin" });
   }
-  const updated = await store.updateUser(user.id, { role: body.role, bump_token_version: true });
   // Otherwise the user keeps their old permissions until the refresh token
   // expires, which for a demotion is exactly the wrong way round.
-  await revokeUserEverywhere(user.id);
-  await log(req, "user.role_updated", "user", user.id, body.role);
-  return res.json(publicUser(updated!));
+  await revokeUserEverywhere(userId);
+  await log(req, "user.role_updated", "user", userId, body.role);
+  return res.json(publicUser(result.user));
 });
 
 /** Deactivation, not deletion: audit rows reference this user and must keep
  *  resolving to a real identity. Bumping token_version kills live sessions. */
 app.delete("/users/:id", requireRole("admin"), async (req: AuthedRequest, res) => {
-  const user = await store.findUserInTenant(req.user!.tenant_id, String(req.params.id));
-  if (!user) return res.status(404).json({ detail: "User not found" });
-  if (user.id === req.user!.id) return res.status(400).json({ detail: "You cannot deactivate your own account" });
-  if (user.role === "admin" && (await store.countOtherActiveAdmins(user.tenant_id, user.id)) === 0) {
-    return res.status(400).json({ detail: "A tenant must keep at least one admin" });
-  }
-  const updated = await store.updateUser(user.id, {
+  if (!UUID_RE.test(String(req.params.id))) return res.status(404).json({ detail: "User not found" });
+  const userId = String(req.params.id);
+  if (userId === req.user!.id) return res.status(400).json({ detail: "You cannot deactivate your own account" });
+  const result = await store.updateUserKeepingAnAdmin(req.user!.tenant_id, userId, {
     status: "disabled", invite_token_hash: null, invite_expires: null, reset_token_hash: null, reset_expires: null, bump_token_version: true,
-  });
-  await revokeUserEverywhere(user.id);
-  await log(req, "user.deactivated", "user", user.id, user.email);
-  return res.json(publicUser(updated!));
+  }, () => true);
+  if (!result.ok) {
+    return result.reason === "not_found"
+      ? res.status(404).json({ detail: "User not found" })
+      : res.status(400).json({ detail: "A tenant must keep at least one admin" });
+  }
+  await revokeUserEverywhere(userId);
+  await log(req, "user.deactivated", "user", userId, result.user.email);
+  return res.json(publicUser(result.user));
 });
 
 app.get("/audit", requireRole("admin"), async (req: AuthedRequest, res) => {
-  res.json(await store.listAudit(req.user!.tenant_id, {
-    action: req.query.action ? String(req.query.action) : undefined,
-    resource_id: req.query.resource_id ? String(req.query.resource_id) : undefined,
-    limit: req.query.limit ? Number(req.query.limit) : undefined,
-  }));
+  const q = parse(z.object({
+    action: z.string().max(100).optional(),
+    resource_id: z.string().max(200).optional(),
+    limit: z.coerce.number().int().min(1).max(500).optional(),
+  }), req.query, res); if (!q) return;
+  res.json(await store.listAudit(req.user!.tenant_id, q));
 });
 
 /** Delivery state of this organisation's notifications — including the ones

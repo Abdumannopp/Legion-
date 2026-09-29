@@ -164,7 +164,64 @@ export function createAgentLayer(deps: AgentLayerDeps, opts: { withModel: boolea
 
 type Identity = ReturnType<typeof createAgentIdentity>;
 
+/** Where the agent layer lives. Every one of these is behind subscriptionGate. */
+export const AGENT_SURFACE = /^\/(agent\/v1|agents|service-accounts|audit\/principal-events|firewall|prompt-guard|tools|behavior|kill-switch|a2a|skills)(\/|$)/;
+
+/**
+ * Actions that STOP agents. Always allowed, whatever the subscription says: a
+ * customer whose card expired must still be able to pull the plug on an agent
+ * that is misbehaving. Nothing here starts, grants or spends anything.
+ */
+const STOP_ACTIONS: Array<[method: string, path: RegExp]> = [
+  ["POST", /^\/kill-switch\/(agents\/[^/]+|all)$/],
+  ["POST", /^\/(agents|service-accounts)\/[^/]+\/(suspend|revoke)$/],
+  ["DELETE", /^\/(agents|service-accounts)\/[^/]+\/credentials\/[^/]+$/],
+  ["DELETE", /^\/firewall\/delegations\/[^/]+$/],
+  ["DELETE", /^\/skills\/assignments\/[^/]+\/[^/]+$/],
+  ["POST", /^\/agent\/v1\/token\/revoke$/],
+];
+const READ = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/**
+ * The subscription rules the dashboard's own routes follow (index.ts
+ * enforceAccess), applied to the agent layer, which the package mounts with
+ * guards of its own that know nothing about billing. Without this a
+ * trial-expired or cancelled workspace kept creating agents, minting tokens
+ * and running AI-backed skills on the operator's account (audit P1-6).
+ *
+ *   ok        everything
+ *   readonly  reads, and stopping agents          (unpaid invoice)
+ *   blocked   stopping agents only                (no subscription)
+ *
+ * Unauthenticated requests pass through untouched: the routers answer those
+ * with their own 401, and /agent/v1/token authenticates the credential itself
+ * (a token it issues is still refused here on its first use).
+ */
+export function subscriptionGate(deps: Pick<AgentLayerDeps, "accessState">) {
+  return async (req: Request, res: import("express").Response, next: import("express").NextFunction) => {
+    const path = req.path;
+    if (!AGENT_SURFACE.test(path)) return next();
+    const tenantId = req.principal?.tenantId;
+    if (!tenantId || req.principal?.type === "external_system") return next();
+    if (STOP_ACTIONS.some(([m, re]) => m === req.method && re.test(path))) return next();
+    try {
+      const state = await deps.accessState(tenantId);
+      if (state === "ok" || (state === "readonly" && READ.has(req.method))) return next();
+      return res.status(402).json({
+        detail: state === "readonly"
+          ? "Your subscription payment is past due. Legion is read-only until it is settled."
+          : "This workspace does not have an active Legion subscription.",
+        access_state: state,
+        error: { code: "subscription_inactive", message: "This workspace does not have an active Legion subscription.", access_state: state },
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+}
+
 function mount(app: Application, identity: Identity, deps: AgentLayerDeps): void {
+  app.use(subscriptionGate(deps));
   app.use("/agent/v1", identity.agentApi);
   app.use("/agent/v1", agentRoutes(identity, deps));
   app.use("/agents", identity.agents);

@@ -275,6 +275,38 @@ export async function countOtherActiveAdmins(
   return Number(row?.count ?? 0);
 }
 
+/**
+ * Changes a user in a way that may remove an administrator (demotion or
+ * deactivation) without ever leaving the tenant with none.
+ *
+ * The check and the change happen in ONE transaction that first locks every
+ * active admin row of the tenant. Checking and then updating separately let
+ * two admins demote each other at the same moment: both saw "one other admin
+ * left" and the tenant ended up with zero.
+ */
+export async function updateUserKeepingAnAdmin(
+  tenantId: string, userId: string, patch: UserPatch, removesAdmin: (u: User) => boolean,
+): Promise<{ ok: true; user: User } | { ok: false; reason: "not_found" | "last_admin" }> {
+  return transaction(async (client) => {
+    const admins = await client.query<{ id: string }>(
+      "SELECT id FROM users WHERE tenant_id = $1 AND role = 'admin' AND status = 'active' ORDER BY id FOR UPDATE",
+      [tenantId],
+    );
+    const row = (await client.query("SELECT * FROM users WHERE id = $1 AND tenant_id = $2 FOR UPDATE", [userId, tenantId])).rows[0];
+    if (!row) return { ok: false as const, reason: "not_found" as const };
+    const current = toUser(row);
+    if (current.role === "admin" && current.status === "active" && removesAdmin(current)
+      && admins.rows.filter((a) => a.id !== userId).length === 0) {
+      return { ok: false as const, reason: "last_admin" as const };
+    }
+    const { sets, params } = userPatchSql(userId, patch);
+    const updated = sets.length
+      ? (await client.query(`UPDATE users SET ${sets.join(", ")} WHERE id = $1 RETURNING *`, params)).rows[0]
+      : row;
+    return { ok: true as const, user: toUser(updated) };
+  });
+}
+
 export interface NewUser {
   email: string;
   password_hash: string;
@@ -356,10 +388,9 @@ export type UserPatch = Partial<Record<UserColumn, unknown>> & {
   bump_token_version?: boolean;
 };
 
-export async function updateUser(id: string, patch: UserPatch): Promise<User | null> {
+function userPatchSql(id: string, patch: UserPatch): { sets: string[]; params: unknown[] } {
   const sets: string[] = [];
   const params: unknown[] = [id];
-
   for (const column of USER_COLUMNS) {
     if (!(column in patch)) continue;
     params.push(patch[column]);
@@ -368,6 +399,11 @@ export async function updateUser(id: string, patch: UserPatch): Promise<User | n
   // Incremented in SQL rather than read-modify-write, so two concurrent
   // revocations can't overwrite each other and leave a token still valid.
   if (patch.bump_token_version) sets.push("token_version = token_version + 1");
+  return { sets, params };
+}
+
+export async function updateUser(id: string, patch: UserPatch): Promise<User | null> {
+  const { sets, params } = userPatchSql(id, patch);
   if (!sets.length) return findUserById(id);
 
   const row = await queryOne(
@@ -621,7 +657,11 @@ export async function alertStats(tenantId: string): Promise<AlertStats> {
 
 // --- Assets ------------------------------------------------------------------
 
-export interface AssetFilters { risk?: string; online?: boolean; q?: string }
+export interface AssetFilters { risk?: string; online?: boolean; q?: string; limit?: number }
+
+/** Always an integer 1–5000 (it is interpolated): default 1000. */
+const assetLimit = (n: number | undefined): number =>
+  Number.isFinite(n) ? Math.min(Math.max(Math.floor(n!), 1), 5_000) : 1_000;
 
 export async function listAssets(tenantId: string, filters: AssetFilters = {}): Promise<Asset[]> {
   const params: unknown[] = [tenantId];
@@ -631,7 +671,7 @@ export async function listAssets(tenantId: string, filters: AssetFilters = {}): 
   if (filters.q) { params.push(`%${filters.q.toLowerCase()}%`); where.push(`lower(name) LIKE $${params.length}`); }
 
   const rows = await queryAll(
-    `SELECT * FROM assets WHERE ${where.join(" AND ")} ORDER BY last_seen DESC`,
+    `SELECT * FROM assets WHERE ${where.join(" AND ")} ORDER BY last_seen DESC LIMIT ${assetLimit(filters.limit)}`,
     params
   );
   return rows.map(toAsset);
