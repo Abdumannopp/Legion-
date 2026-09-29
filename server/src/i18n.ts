@@ -304,6 +304,10 @@ export const CATALOG: Record<string, Translation> = {
     ru: "Слишком много неудачных попыток входа в этот аккаунт. Повторите позже.",
     uz: "Bu hisobga kirishda juda ko'p muvaffaqiyatsiz urinish bo'ldi. Keyinroq qayta urinib ko'ring.",
   },
+  "Could not reach the billing provider. Try again later.": {
+    ru: "Не удалось связаться с платёжным провайдером. Повторите позже.",
+    uz: "To'lov provayderi bilan bog'lanib bo'lmadi. Keyinroq qayta urinib ko'ring.",
+  },
   "Too many incorrect attempts. Wait a few minutes and try again.": {
     ru: "Слишком много неверных попыток. Подождите несколько минут и повторите.",
     uz: "Juda ko'p noto'g'ri urinish. Bir necha daqiqa kutib, qayta urinib ko'ring.",

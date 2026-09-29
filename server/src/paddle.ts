@@ -66,6 +66,10 @@ async function paddleRequest<T>(
         "Content-Type": "application/json",
       },
       body: init.body === undefined ? undefined : JSON.stringify(init.body),
+      // The API key rides in the Authorization header: never follow a redirect
+      // with it, and never wait on the billing API indefinitely.
+      redirect: "error",
+      signal: AbortSignal.timeout(15_000),
     });
     const payload = (await response.json().catch(() => ({}))) as {
       data?: T;
@@ -80,8 +84,10 @@ async function paddleRequest<T>(
     }
     return { ok: true, data: payload.data as T };
   } catch (error) {
-    const detail = error instanceof Error ? error.message : "unknown error";
-    return { ok: false, status: 502, detail: `Could not reach Paddle: ${detail}` };
+    // Transport errors name hosts, addresses and TLS details: they go to the
+    // server log, and the tenant administrator gets a fixed sentence.
+    console.error("Legion: Paddle API request failed:", error instanceof Error ? error.name : "unknown error");
+    return { ok: false, status: 502, detail: "Could not reach the billing provider. Try again later." };
   }
 }
 

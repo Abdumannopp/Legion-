@@ -1,37 +1,13 @@
 // Security headers for the dashboard.
 //
-// The CSP is built from NEXT_PUBLIC_API_URL / NEXT_PUBLIC_WS_URL because those
-// are the only places the browser may talk to besides itself (and Paddle, for
-// checkout). 'unsafe-inline' for scripts/styles is what Next.js's own inline
-// bootstrap requires without per-request nonces; everything else is closed:
-// no objects, no framing of us, no base-tag or form hijacking, no foreign
-// script hosts.
+// The Content-Security-Policy is NOT set here: it carries a fresh nonce per
+// page, so proxy.ts builds it for every request (lib/csp.ts). A second, static
+// policy here would be intersected with it by the browser and would only make
+// maintenance harder. Everything else is static and set below.
 const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-const wsUrl = process.env.NEXT_PUBLIC_WS_URL || apiUrl.replace(/^http/, "ws");
 const isDev = process.env.NODE_ENV !== "production";
 
-const originOf = (u) => { try { return new URL(u).origin; } catch { return ""; } };
-const apiOrigin = originOf(apiUrl);
-const wsOrigin = originOf(wsUrl.replace(/^ws/, "http")).replace(/^http/, "ws");
-
-const paddle = ["https://cdn.paddle.com", "https://*.paddle.com"];
-
-const csp = [
-  "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""} ${paddle.join(" ")}`,
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https://*.paddle.com",
-  "font-src 'self' data:",
-  `connect-src 'self' ${[apiOrigin, wsOrigin].filter(Boolean).join(" ")} ${paddle.join(" ")}${isDev ? " ws://localhost:* ws://127.0.0.1:*" : ""}`,
-  `frame-src ${paddle.join(" ")}`,
-  "frame-ancestors 'none'",
-  "object-src 'none'",
-  "base-uri 'self'",
-  "form-action 'self'",
-].join("; ");
-
 const headers = [
-  { key: "Content-Security-Policy", value: csp },
   { key: "X-Frame-Options", value: "DENY" },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },

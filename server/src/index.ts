@@ -346,25 +346,49 @@ function broadcast(tenantId: string, payload: unknown): void {
  *  Redis outage or a crash right after commit delays it rather than losing it. */
 const newAlertFrame = (alert: Alert) => ({ type: "new_alert", alert: outputAlert(alert) });
 
-app.get("/health", async (_req, res) => {
+/**
+ * May this caller see deployment details (version, mode, AI provider)? Only an
+ * operator: a request straight from this machine that did not come through a
+ * proxy (`curl localhost:8000/health`, as INSTALL.md says), or one carrying
+ * HEALTH_METRICS_TOKEN. The public — including anyone going through nginx —
+ * learns only whether the service and its database are up: the version and
+ * the AI vendor are fingerprinting material, not health.
+ */
+function isOperator(req: Request): boolean {
+  const peer = req.socket.remoteAddress ?? "";
+  const local = ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(peer) && req.headers["x-forwarded-for"] === undefined && req.headers["forwarded"] === undefined;
+  if (local) return true;
+  const expected = config.healthMetricsToken;
+  const given = (req.header("authorization") || "").replace(/^Bearer\s+/i, "");
+  return Boolean(expected) && safeEqual(given, expected);
+}
+
+/** One database probe per second at most, however hard /health is hit: it is
+ *  public and unthrottled (load balancers poll it), so it must stay cheap. */
+let healthProbe: { at: number; ok: Promise<boolean> } | null = null;
+function databaseUp(): Promise<boolean> {
+  if (!healthProbe || Date.now() - healthProbe.at > 1_000) {
+    healthProbe = { at: Date.now(), ok: store.getTenant("00000000-0000-0000-0000-000000000000").then(() => true, () => false) };
+  }
+  return healthProbe.ok;
+}
+
+app.get("/health", async (req, res) => {
   // A health check that doesn't touch the database will happily report "ok"
   // while every request 500s.
-  try {
-    await store.getTenant("00000000-0000-0000-0000-000000000000");
-    return res.json({
-      status: "ok",
-      runtime: "node",
-      version: config.version,
-      mode: config.deploymentMode,
-      database: "up",
-      ai: aiEnabled(),
-      // Names the third party that sees alert text, or null when none does.
-      // An operator should be able to confirm this without reading .env.
-      ai_provider: aiProviderName(),
-    });
-  } catch {
-    return res.status(503).json({ status: "degraded", database: "down" });
-  }
+  if (!(await databaseUp())) return res.status(503).json({ status: "degraded", database: "down" });
+  if (!isOperator(req)) return res.json({ status: "ok", database: "up" });
+  return res.json({
+    status: "ok",
+    runtime: "node",
+    version: config.version,
+    mode: config.deploymentMode,
+    database: "up",
+    ai: aiEnabled(),
+    // Names the third party that sees alert text, or null when none does.
+    // An operator should be able to confirm this without reading .env.
+    ai_provider: aiProviderName(),
+  });
 });
 
 /**
@@ -1707,6 +1731,9 @@ httpServer.on("upgrade", (request, socket, head) => {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       return socket.destroy();
     }
+    // One user (or one tenant) cannot hold an unbounded number of sockets.
+    const open = realtime.connectionCounts(user!.tenant_id, user!.id);
+    if (open.user >= config.wsMaxPerUser || open.tenant >= config.wsMaxPerTenant) return refuse("429 Too Many Requests");
     wss.handleUpgrade(request, socket, head, (ws) => {
       (ws as WebSocket & { tenantId?: string; grant?: realtime.SocketGrant }).tenantId = user!.tenant_id;
       // The tenant comes from the user record, never from the request; the
@@ -1795,6 +1822,8 @@ if (process.env.NODE_ENV !== "test") {
   // Live sockets are re-authorized on the same cadence: a user deactivated or a
   // tenant blocked on ANY instance stops receiving events within one interval.
   realtime.startRevalidation(socketGrantsStillValid, config.wsHeartbeatSeconds * 1000);
+  // Dead connections (client gone without closing) are found and dropped.
+  realtime.startLiveness(30_000);
 
   // Delivers queued alert emails and retries failed ones (outbox.ts).
   outbox.startOutboxWorker();
@@ -1845,6 +1874,7 @@ if (process.env.NODE_ENV !== "test") {
       outbox.stopOutboxWorker(); // undelivered rows stay queued for the next start
       realtime.stopHeartbeat();
       realtime.stopRevalidation();
+      realtime.stopLiveness();
       stopAgentJobs();
       httpServer.close(() => {
         Promise.allSettled([closePool(), closeRateLimitStore(), realtime.closeRealtime()])

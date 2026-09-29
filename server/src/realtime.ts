@@ -185,6 +185,8 @@ export const CLOSE_SESSION_REVOKED = 4401;
 export function register(tenantId: string, socket: WebSocket, grant?: SocketGrant): void {
   if (!local.has(tenantId)) local.set(tenantId, new Set());
   local.get(tenantId)!.add(socket);
+  alive.set(socket, true);
+  socket.on?.("pong", () => alive.set(socket, true));
   if (grant) {
     grants.set(socket, grant);
     if (grant.expiresAt !== undefined) {
@@ -315,11 +317,73 @@ export function stopHeartbeat(): void {
   heartbeatTimer = null;
 }
 
+/**
+ * Most bytes a socket may have queued and unsent. A client that stops reading
+ * (a frozen tab, a deliberately slow reader) would otherwise make this process
+ * buffer every frame for it, without limit. Past this it is disconnected; it
+ * reconnects and catches up from Postgres (/alerts/sync), so nothing is lost.
+ */
+export const MAX_BUFFERED_BYTES = 1024 * 1024;
+
 /** Sends to the sockets this process owns. */
 function deliver(tenantId: string, message: string): void {
   for (const socket of local.get(tenantId) || []) {
-    if (socket.readyState === WebSocket.OPEN) socket.send(message);
+    if (socket.readyState !== WebSocket.OPEN) continue;
+    if (socket.bufferedAmount + Buffer.byteLength(message) > MAX_BUFFERED_BYTES) {
+      unregister(tenantId, socket);
+      try { socket.terminate(); } catch { /* already gone */ }
+      continue;
+    }
+    socket.send(message);
   }
+}
+
+// --- connection limits and liveness ----------------------------------------------------
+
+/** Open sockets this process holds for one user, and for one tenant. */
+export function connectionCounts(tenantId: string, userId: string): { user: number; tenant: number } {
+  const set = local.get(tenantId);
+  if (!set) return { user: 0, tenant: 0 };
+  let user = 0;
+  for (const socket of set) if (grants.get(socket)?.userId === userId) user++;
+  return { user, tenant: set.size };
+}
+
+const alive = new WeakMap<WebSocket, boolean>();
+
+/**
+ * One liveness round: a socket that did not answer the previous ping is
+ * terminated; every other one is pinged. Without this, a connection whose
+ * client vanished (laptop lid closed, network gone) stays registered —
+ * holding memory and a slot of its user's connection cap — until a send
+ * happens to fail.
+ */
+export function livenessOnce(): number {
+  let terminated = 0;
+  for (const [tenantId, set] of [...local]) {
+    for (const socket of [...set]) {
+      if (alive.get(socket) === false) {
+        unregister(tenantId, socket);
+        try { socket.terminate(); } catch { /* already gone */ }
+        terminated++;
+        continue;
+      }
+      alive.set(socket, false);
+      try { socket.ping(); } catch { /* the next round terminates it */ }
+    }
+  }
+  return terminated;
+}
+
+let livenessTimer: NodeJS.Timeout | null = null;
+export function startLiveness(intervalMs: number): void {
+  stopLiveness();
+  livenessTimer = setInterval(() => void livenessOnce(), intervalMs);
+  livenessTimer.unref();
+}
+export function stopLiveness(): void {
+  if (livenessTimer) clearInterval(livenessTimer);
+  livenessTimer = null;
 }
 
 /**

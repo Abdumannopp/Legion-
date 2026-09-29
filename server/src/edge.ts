@@ -116,17 +116,29 @@ const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
  */
 export function originGuard(exempt: RegExp): RequestHandler {
   return (req: Request, res: Response, next: NextFunction) => {
+    if (SAFE_METHODS.has(req.method) || exempt.test(req.path)) return next();
+    // Fetch metadata: every current browser labels a request another site
+    // started, even in the cases where it leaves Origin out. Such a request
+    // never changes state here, whatever else it carries.
+    if (req.headers["sec-fetch-site"] === "cross-site") {
+      return res.status(403).json({ detail: "Cross-origin request refused" });
+    }
     const origin = req.headers.origin;
-    if (origin === undefined || SAFE_METHODS.has(req.method) || exempt.test(req.path)) return next();
-    if (allowed().has(origin)) return next();
+    if (origin === undefined || allowed().has(origin)) return next();
     return res.status(403).json({ detail: "Cross-origin request refused" });
   };
 }
 
 // --- Response headers ---------------------------------------------------------
 
+/**
+ * HSTS whenever the deployment is HTTPS with secure cookies — not only when
+ * NODE_ENV=production, which a self-hosted install behind nginx + certbot
+ * never sets, so those installs never sent it. Over plain HTTP the header is
+ * ignored by browsers anyway, and an http:// FRONTEND_URL never gets it.
+ */
 export function hstsEnabled(): boolean {
-  return config.isProduction && config.cookieSecure && config.frontendUrl.startsWith("https://");
+  return config.cookieSecure && config.frontendUrl.startsWith("https://");
 }
 
 /**

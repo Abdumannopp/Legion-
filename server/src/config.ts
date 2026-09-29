@@ -177,6 +177,9 @@ export const config = {
   /** How often each connected socket is sent the tenant's current cursor, read
    *  from Postgres. A client that has fallen behind (a dropped frame, a Redis
    *  outage) notices within one interval and catches up. 5–120 s. */
+  /** Concurrent live-alert sockets one user / one tenant may hold per instance. */
+  wsMaxPerUser: Math.max(1, Math.floor(Number(process.env.WS_MAX_PER_USER || 20)) || 20),
+  wsMaxPerTenant: Math.max(1, Math.floor(Number(process.env.WS_MAX_PER_TENANT || 1000)) || 1000),
   wsHeartbeatSeconds: Math.min(120, Math.max(5, Math.floor(Number(process.env.WS_HEARTBEAT_SECONDS || 20)) || 20)),
 
   // --- AI safety limits (ai.ts) ---
@@ -472,6 +475,59 @@ export function unsafeConfigProblems(input: SafetyInputs): string[] {
   }
 
   return problems;
+}
+
+/**
+ * Settings whose raw value must be well-formed. Before this, a typo was read
+ * silently: DEPLOYMENT_MODE=selfhosted is not "self-hosted", so a customer's
+ * private install switched to the hosted behaviour — open public sign-up —
+ * and ACCESS_TOKEN_MINUTES=15m became NaN, an invalid token lifetime.
+ */
+const INTEGER_SETTINGS: Record<string, [min: number, max: number]> = {
+  PORT: [1, 65_535],
+  ACCESS_TOKEN_MINUTES: [1, 60],
+  REFRESH_TOKEN_DAYS: [1, 365],
+  TRIAL_DAYS: [0, 365],
+  INVITE_DAYS: [1, 30],
+  DB_POOL_MAX: [1, 200],
+  AUTH_RATE_LIMIT: [1, 10_000],
+  API_RATE_LIMIT: [1, 1_000_000],
+  SMTP_PORT: [1, 65_535],
+};
+
+export function settingProblems(env: Record<string, string | undefined>): string[] {
+  const problems: string[] = [];
+  const mode = env.DEPLOYMENT_MODE;
+  if (mode !== undefined && mode !== "" && mode !== "self-hosted" && mode !== "saas") {
+    problems.push(`DEPLOYMENT_MODE must be "self-hosted" or "saas" (got "${mode.slice(0, 40)}")`);
+  }
+  for (const [name, [min, max]] of Object.entries(INTEGER_SETTINGS)) {
+    const raw = env[name];
+    if (raw === undefined || raw === "") continue;
+    const n = Number(raw);
+    if (!/^\d+$/.test(raw.trim()) || !Number.isInteger(n) || n < min || n > max) {
+      problems.push(`${name} must be a whole number from ${min} to ${max} (got "${raw.slice(0, 40)}")`);
+    }
+  }
+  // The billing API key is sent to this base URL: https only (a loopback stub
+  // for tests and local development is the one exception).
+  if (env.PADDLE_API_BASE) {
+    let u: URL | null = null;
+    try { u = new URL(env.PADDLE_API_BASE); } catch { u = null; }
+    const loopbackStub = u?.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(u.hostname);
+    if (!u || (u.protocol !== "https:" && !loopbackStub) || u.username || u.password) {
+      problems.push("PADDLE_API_BASE must be an https:// URL without credentials");
+    }
+  }
+  if (env.ALERT_EMAIL_MIN_SEVERITY && !["critical", "high", "medium", "low", "off"].includes(env.ALERT_EMAIL_MIN_SEVERITY)) {
+    problems.push("ALERT_EMAIL_MIN_SEVERITY must be one of critical, high, medium, low, off");
+  }
+  return problems;
+}
+
+{
+  const malformed = settingProblems(process.env);
+  if (malformed.length) throw new Error(`Refusing to start with malformed settings:\n  - ${malformed.join("\n  - ")}`);
 }
 
 const alwaysWrong = unsafeConfigProblems(config);

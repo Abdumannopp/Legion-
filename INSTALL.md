@@ -398,6 +398,9 @@ curl http://localhost:8000/health
 
 `"ai_provider"` names the third party, or is `null` when nothing is sent
 anywhere. The server also states this once in its log at startup.
+(Run this on the server itself: through nginx, or from any other machine,
+`/health` answers only `{"status":"ok","database":"up"}` unless the request
+carries `Authorization: Bearer <HEALTH_METRICS_TOKEN>`.)
 
 **What changes when you turn this on.** Alert titles, descriptions, hostnames,
 and IP addresses are sent to that provider for analysis. That is a third-party
