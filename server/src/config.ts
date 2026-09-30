@@ -333,7 +333,35 @@ export const config = {
    * Ignored in production.
    */
   devLogAuthLinks: !isProduction && process.env.DEV_LOG_AUTH_LINKS === "true",
+
+  // --- Global SaaS (GLOBAL-SAAS-ARCHITECTURE.md) --------------------------------
+  /**
+   * The data region this deployment serves (e.g. "eu-central", "us-east").
+   * New workspaces are created in it; a request or event for a workspace
+   * whose data lives in another region is refused with a pointer to it
+   * (data residency). Workspaces from before regions belong to whichever
+   * deployment holds them.
+   */
+  region: (process.env.LEGION_REGION || "default").trim().toLowerCase(),
+  /** Public base URL per region, for pointing a client at a workspace's home ("eu-central=https://eu.legion.example,…"). */
+  regionUrls: parseRegionUrls(process.env.LEGION_REGION_URLS || ""),
+  /** Currency a new workspace is billed in, and the ones offered. */
+  defaultCurrency: (process.env.DEFAULT_CURRENCY || "USD").trim().toUpperCase(),
+  supportedCurrencies: (process.env.SUPPORTED_CURRENCIES || "USD,EUR").split(",").map((c) => c.trim().toUpperCase()).filter(Boolean),
+  /** Workspaces one person may create or belong to. */
+  maxWorkspacesPerUser: Math.max(1, Math.floor(Number(process.env.MAX_WORKSPACES_PER_USER || 20)) || 20),
+  /** This process's name in health output and job leases (defaults to host:pid). */
+  instanceId: (process.env.LEGION_INSTANCE_ID || "").trim(),
 };
+
+function parseRegionUrls(raw: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const part of raw.split(",")) {
+    const [k, v] = part.split("=").map((x) => x?.trim() ?? "");
+    if (k && v && /^https:\/\//.test(v)) out[k.toLowerCase()] = v.replace(/\/+$/, "");
+  }
+  return out;
+}
 
 /**
  * The signing key must never be the shipped placeholder.
@@ -500,6 +528,13 @@ const INTEGER_SETTINGS: Record<string, [min: number, max: number]> = {
 
 export function settingProblems(env: Record<string, string | undefined>): string[] {
   const problems: string[] = [];
+  if (env.LEGION_REGION !== undefined && env.LEGION_REGION !== "" && !/^[a-z][a-z0-9-]{1,31}$/.test(env.LEGION_REGION.trim().toLowerCase())) {
+    problems.push("LEGION_REGION must be a short region name: lowercase letters, digits and dashes (e.g. eu-central)");
+  }
+  const currencies = (env.SUPPORTED_CURRENCIES || "USD,EUR").split(",").map((c) => c.trim().toUpperCase()).filter(Boolean);
+  if (!currencies.every((c) => /^[A-Z]{3}$/.test(c))) problems.push("SUPPORTED_CURRENCIES must be ISO 4217 codes separated by commas (e.g. USD,EUR)");
+  const currency = (env.DEFAULT_CURRENCY || "USD").trim().toUpperCase();
+  if (!currencies.includes(currency)) problems.push(`DEFAULT_CURRENCY (${currency.slice(0, 8)}) must be one of SUPPORTED_CURRENCIES`);
   const mode = env.DEPLOYMENT_MODE;
   if (mode !== undefined && mode !== "" && mode !== "self-hosted" && mode !== "saas") {
     problems.push(`DEPLOYMENT_MODE must be "self-hosted" or "saas" (got "${mode.slice(0, 40)}")`);

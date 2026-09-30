@@ -29,6 +29,8 @@ export interface RefreshRecord {
    *  reuse grace window. A second such reuse is treated as theft. */
   grace_used_at: string | null;
   user_agent: string | null;
+  /** The workspace this session belongs to; null on sessions from before workspaces (home). */
+  tenant_id?: string | null;
 }
 
 /**
@@ -58,25 +60,27 @@ const expiryDate = (familyStarted: Date = new Date()): Date => new Date(Math.min
   familyStarted.getTime() + config.sessionAbsoluteDays * 86_400_000,
 ));
 
-/** Starts a new session family — one per login. */
+/** Starts a new session family — one per login (or workspace switch).
+ *  A session belongs to one workspace: refreshing it never moves it. */
 export async function issue(
   userId: string,
-  meta: { userAgent?: string | null; ip?: string | null } = {}
+  meta: { userAgent?: string | null; ip?: string | null } = {},
+  tenantId: string | null = null,
 ): Promise<string> {
   const token = newToken();
   await query(
-    `INSERT INTO refresh_tokens (id, user_id, token_hash, family_id, expires_at, user_agent, ip_address, family_started_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, now())`,
+    `INSERT INTO refresh_tokens (id, user_id, token_hash, family_id, expires_at, user_agent, ip_address, family_started_at, tenant_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $8)`,
     [
       randomUUID(), userId, hash(token), randomUUID(), expiryDate(),
-      meta.userAgent?.slice(0, 300) || null, meta.ip || null,
+      meta.userAgent?.slice(0, 300) || null, meta.ip || null, tenantId,
     ]
   );
   return token;
 }
 
 export type RotateResult =
-  | { ok: true; token: string; userId: string }
+  | { ok: true; token: string; userId: string; /** null: a session from before workspaces (the home workspace). */ tenantId: string | null }
   | { ok: false; reason: "unknown" | "expired" | "revoked" | "reused" };
 
 /**
@@ -137,16 +141,28 @@ export async function rotate(
 
     const token = newToken();
     await client.query(
-      `INSERT INTO refresh_tokens (id, user_id, token_hash, family_id, expires_at, user_agent, ip_address, family_started_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      `INSERT INTO refresh_tokens (id, user_id, token_hash, family_id, expires_at, user_agent, ip_address, family_started_at, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
         randomUUID(), record.user_id, hash(token), record.family_id, expiryDate(familyStarted),
-        meta.userAgent?.slice(0, 300) || null, meta.ip || null, familyStarted,
+        meta.userAgent?.slice(0, 300) || null, meta.ip || null, familyStarted, record.tenant_id ?? null,
       ]
     );
 
-    return { ok: true, token, userId: record.user_id };
+    return { ok: true, token, userId: record.user_id, tenantId: record.tenant_id ?? null };
   });
+}
+
+/** Ends a person's sessions in ONE workspace (their membership there changed
+ *  or ended); sessions in their other workspaces are untouched. Legacy
+ *  sessions (tenant_id NULL) belong to the home workspace. */
+export async function revokeForUserInWorkspace(userId: string, tenantId: string): Promise<void> {
+  await query(
+    `UPDATE refresh_tokens r SET revoked_at = now()
+      WHERE r.user_id = $1 AND r.revoked_at IS NULL
+        AND (r.tenant_id = $2 OR (r.tenant_id IS NULL AND EXISTS (SELECT 1 FROM users u WHERE u.id = $1 AND u.tenant_id = $2)))`,
+    [userId, tenantId],
+  );
 }
 
 /** Revokes one token and everything else from the same login. */

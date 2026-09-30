@@ -31,6 +31,14 @@ export interface Tenant {
   /** "strict" swaps IPs, e-mail addresses and hostnames for placeholders
    *  before anything reaches the provider. */
   ai_data_mode: "standard" | "strict";
+  /** Where this workspace's data lives (null: created before regions — this deployment's). */
+  region: string | null;
+  timezone: string;
+  locale: string;
+  /** ISO 4217; what the workspace is billed in. */
+  currency: string;
+  date_format: string;
+  time_format: string;
 }
 
 export interface User {
@@ -61,6 +69,17 @@ export interface User {
   /** Null until the owner of the address follows the emailed link (hosted
    *  sign-up only; invited and first-run accounts are verified on creation). */
   email_verified_at: string | null;
+  /** The workspace that created this account (users.tenant_id). `tenant_id`
+   *  and `role` are the ACTIVE workspace's once the request is authenticated
+   *  (workspaces.ts); for a user loaded straight from the table they are the
+   *  home workspace's. */
+  home_tenant_id?: string;
+  /** The workspace a sign-in lands in; null = home. */
+  default_workspace_id?: string | null;
+  timezone?: string | null;
+  locale?: string | null;
+  date_format?: string | null;
+  time_format?: string | null;
 }
 
 export interface Alert { id: string; tenant_id: string; title: string; severity: Severity; agent: Agent; status: AlertStatus; summary: string; confidence: number; created_at: string; ai_explanation: string | null; ai_explanation_locale: Locale | null; /** Written by a model, or by Legion's deterministic fallback. Null: predates this field. */ ai_explanation_source: "ai" | "local" | null; explained_at: string | null; /** This alert's version: per-tenant, bumped by every change, assigned in commit order. */ seq: number; /** The seq it was created with; a change with created_seq above a client's baseline is an alert that client has not seen. */ created_seq: number; source_ip: string | null; target: string | null; mitre_technique: string | null; source: string; /** When the event happened at its source (the sensor's own timestamp), if it said; created_at is when Legion stored it. They differ when a sensor re-sends after an outage. */ occurred_at: string | null }

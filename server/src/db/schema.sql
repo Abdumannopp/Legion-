@@ -459,3 +459,114 @@ ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS grace_used_at timestamptz;
 -- when Legion stored it; the two differ when a sensor re-sends from its spool
 -- after an outage. Nullable, no default: a metadata-only ALTER.
 ALTER TABLE alerts ADD COLUMN IF NOT EXISTS occurred_at timestamptz;
+
+-- =============================================================================
+-- Global SaaS architecture (2026-09-30). All additive; see
+-- GLOBAL-SAAS-ARCHITECTURE.md for the model and the migration plan.
+-- =============================================================================
+
+-- Workspaces ------------------------------------------------------------------
+-- A workspace is a tenant (the table keeps its name: every tenant_id column in
+-- the schema already means "workspace"). A person can belong to several.
+--
+-- workspace_memberships is the source of truth for (workspace, role, status)
+-- on every request. users.tenant_id / role / status remain the person's HOME
+-- workspace — the one that created the account — and the trigger below keeps
+-- the home membership identical to them, so every existing code path that
+-- writes users keeps working unchanged.
+CREATE TABLE IF NOT EXISTS workspace_memberships (
+  tenant_id         uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  user_id           uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role              text        NOT NULL CHECK (role IN ('admin', 'analyst', 'viewer')),
+  status            text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'invited', 'disabled')),
+  invited_by        uuid,
+  -- Invitations of people who already have an account (SHA-256 only, like every one-time token).
+  invite_token_hash text,
+  invite_expires    timestamptz,
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  updated_at        timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS workspace_memberships_user_idx ON workspace_memberships (user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS workspace_memberships_invite_idx
+  ON workspace_memberships (invite_token_hash) WHERE invite_token_hash IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION legion_sync_home_membership() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO workspace_memberships (tenant_id, user_id, role, status, invited_by, created_at)
+  VALUES (NEW.tenant_id, NEW.id, NEW.role, NEW.status, NEW.invited_by, NEW.created_at)
+  ON CONFLICT (tenant_id, user_id) DO UPDATE
+    SET role = EXCLUDED.role, status = EXCLUDED.status, updated_at = now()
+    WHERE workspace_memberships.role IS DISTINCT FROM EXCLUDED.role
+       OR workspace_memberships.status IS DISTINCT FROM EXCLUDED.status;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS users_home_membership ON users;
+CREATE TRIGGER users_home_membership AFTER INSERT OR UPDATE OF tenant_id, role, status ON users
+  FOR EACH ROW EXECUTE FUNCTION legion_sync_home_membership();
+-- Backfill: every existing account's home membership (idempotent).
+INSERT INTO workspace_memberships (tenant_id, user_id, role, status, invited_by, created_at)
+  SELECT tenant_id, id, role, status, invited_by, created_at FROM users
+  ON CONFLICT (tenant_id, user_id) DO NOTHING;
+
+-- The workspace a sign-in lands in (NULL: the home workspace).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS default_workspace_id uuid;
+-- A session belongs to one workspace. NULL: issued before workspaces, i.e. home.
+ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS tenant_id uuid;
+
+-- Global readiness -----------------------------------------------------------
+-- region: where the workspace's data lives. NULL = created before regions,
+-- i.e. the region of the deployment that holds it (see config.region).
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS region text;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS timezone text NOT NULL DEFAULT 'UTC';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS locale text NOT NULL DEFAULT 'en';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS currency text NOT NULL DEFAULT 'USD' CHECK (currency ~ '^[A-Z]{3}$');
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS date_format text NOT NULL DEFAULT 'YYYY-MM-DD';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS time_format text NOT NULL DEFAULT '24h';
+-- Personal overrides (NULL: the workspace's setting).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS timezone text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS locale text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS date_format text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS time_format text;
+
+-- Shared counters ------------------------------------------------------------
+-- Per-workspace metering that must hold across every instance (the AI quota;
+-- later: usage-based billing). One row per (workspace, meter, window).
+CREATE TABLE IF NOT EXISTS usage_counters (
+  tenant_id    uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  meter        text        NOT NULL,
+  window_start timestamptz NOT NULL,
+  count        integer     NOT NULL DEFAULT 0,
+  PRIMARY KEY (tenant_id, meter, window_start)
+);
+
+-- Integrations ---------------------------------------------------------------
+-- One row per configured connection of an integration adapter
+-- (src/integrations). Wazuh keeps its own credentials table
+-- (webhook_credentials); pull integrations (cloud security findings,
+-- Microsoft 365, GitHub…) are scheduled from here by any instance.
+CREATE TABLE IF NOT EXISTS integration_connections (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  kind            text        NOT NULL CHECK (kind ~ '^[a-z][a-z0-9_]{1,40}$'),
+  name            text        NOT NULL CHECK (length(name) BETWEEN 1 AND 100),
+  status          text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'error', 'disabled')),
+  -- Non-secret settings, validated by the adapter's schema.
+  config          jsonb       NOT NULL DEFAULT '{}',
+  -- Secrets sealed with the secret box (AES-256-GCM, keyring); never returned.
+  secrets_enc     text,
+  -- Where the next poll resumes (the adapter's own opaque cursor).
+  cursor          jsonb,
+  poll_seconds    integer     NOT NULL DEFAULT 300 CHECK (poll_seconds BETWEEN 60 AND 86400),
+  next_poll_at    timestamptz NOT NULL DEFAULT now(),
+  lease_until     timestamptz,
+  lease_owner     text,
+  failures        integer     NOT NULL DEFAULT 0,
+  last_success_at timestamptz,
+  last_error      text,
+  created_by      uuid,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS integration_connections_tenant_idx ON integration_connections (tenant_id, created_at);
+CREATE INDEX IF NOT EXISTS integration_connections_due_idx ON integration_connections (next_poll_at) WHERE status = 'active';

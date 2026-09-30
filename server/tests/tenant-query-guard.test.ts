@@ -48,6 +48,8 @@ const REVIEWED: Exception[] = [
     reason: "touch on use (after signature verification) / rotate after a tenant-scoped SELECT … FOR UPDATE" },
   // --- maintenance, not request paths
   { file: "secrets-migration.ts", table: "users", reason: "boot-time re-encryption of MFA seeds across all rows; no data leaves the process" },
+  { file: "workspaces.ts", table: "users", match: /^UPDATE users SET default_workspace_id = (NULL|\$2) WHERE id = \$1/i,
+    reason: "the signed-in person's own landing workspace, by their user id; the workspace was checked to be an active membership of theirs" },
   { file: "secrets-migration.ts", table: "webhook_credentials", reason: "boot-time re-encryption across all rows" },
   { file: "seed.ts", table: "tenants", reason: "demo seeding" },
   { file: "setup-token.ts", table: "tenants", reason: "first-run probe" },

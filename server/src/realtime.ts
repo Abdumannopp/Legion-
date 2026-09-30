@@ -216,9 +216,10 @@ export function closeTokenSockets(tokenHash: string): number {
 }
 
 /** Closes this process's sockets for one user at once (deactivation, role change, password reset). */
-export function closeUserSockets(userId: string): number {
+export function closeUserSockets(userId: string, onlyTenantId?: string): number {
   let closed = 0;
   for (const [tenantId, set] of local) {
+    if (onlyTenantId && tenantId !== onlyTenantId) continue;
     for (const socket of [...set]) {
       if (grants.get(socket)?.userId === userId) { revoke(tenantId, socket); closed++; }
     }

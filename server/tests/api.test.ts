@@ -231,11 +231,23 @@ describe("team invitations", () => {
     expect(res.body.invite_url).toContain("/accept-invite?token=");
   });
 
-  it("refuses to invite an email that already exists", async () => {
-    await request(app)
+  it("an address that already has an account gets a workspace invitation, answered like any other", async () => {
+    const res = await request(app)
       .post("/users/invite")
       .set(...asUser(adminA))
       .send({ email: "admin-b@example.com", role: "viewer" })
+      .expect(201);
+    expect(res.body).toMatchObject({ status: "invited", tenant_id: tenantA, role: "viewer" });
+    // Their account and home workspace are untouched until they accept.
+    const account = (await store.findUserByEmail("admin-b@example.com"))!;
+    expect(account).toMatchObject({ tenant_id: tenantB, role: "admin", status: "active" });
+  });
+
+  it("refuses to invite someone who is already a member here", async () => {
+    await request(app)
+      .post("/users/invite")
+      .set(...asUser(adminA))
+      .send({ email: "admin-a@example.com", role: "viewer" })
       .expect(400);
   });
 

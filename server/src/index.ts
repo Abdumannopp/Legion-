@@ -12,6 +12,8 @@ import { WebSocketServer, WebSocket } from "ws";
 import { z } from "zod";
 import { config, saasWarnings } from "./config.js";
 import * as store from "./store.js";
+import * as workspaces from "./workspaces.js";
+import { effectiveSettings, isTimeZone, regionOf } from "./regional.js";
 import { closePool, currentRoleAttributes, migrate, transaction } from "./db/pool.js";
 import { databaseRoleDecision } from "./db/provision.js";
 import { SETUP_LOCK_KEY, consumeSetupToken, ensureSetupToken, removeSetupTokenFile, setupBanner } from "./setup-token.js";
@@ -25,7 +27,7 @@ import * as outbox from "./outbox.js";
 import { startSensorMonitor, stopSensorMonitor } from "./sensor-monitor.js";
 import { seedDemoIfEmpty } from "./seed.js";
 import { inviteEmail, mailEnabled, notificationConfirmEmail, passwordResetEmail, sendMail, testNotificationEmail, verifyEmailEmail, verifyMail } from "./mailer.js";
-import { actionText, copilotFallback, isLocale, localExplanation, localizeResponses, requestLocale, suggestedActions, validationMessage, type Locale } from "./i18n.js";
+import { LOCALES, actionText, copilotFallback, isLocale, localExplanation, localizeResponses, requestLocale, suggestedActions, validationMessage, type Locale } from "./i18n.js";
 import { createPortalSession, paddleConfigured, verifyPaddleSignature } from "./paddle.js";
 import { aiCircuit, aiConfigWarnings, aiEnabled, aiProviderName, copilotAnswerSafe, explainAlertSafe } from "./ai.js";
 import { aiAuditDetail, aiPolicy, consumeAiQuota, type AiWhy } from "./ai-policy.js";
@@ -186,7 +188,9 @@ async function checkTotp(user: User, code: string): Promise<"ok" | "wrong" | "un
 // --- Subscription access control ---------------------------------------------
 // Paths that must stay reachable no matter what the subscription says: a tenant
 // that cannot log in or open the billing portal can never start paying again.
-const ACCESS_EXEMPT = /^\/(auth|billing|health)(\/|$)/;
+// /workspaces: a person whose trial ended in one workspace can still reach
+// their others (list, switch, accept, leave).
+const ACCESS_EXEMPT = /^\/(auth|billing|health|workspaces)(\/|$)/;
 
 export const isSelfHosted = (): boolean => config.deploymentMode === "self-hosted";
 
@@ -234,9 +238,21 @@ async function enforceAccess(req: AuthedRequest, res: Response): Promise<boolean
 async function resolveSessionUser(req: Request): Promise<User | null> {
   const payload = verifyToken(tokenFrom(req));
   if (!payload || payload.purpose) return null;
-  const user = await store.findUserById(payload.sub);
-  if (!user || payload.tenant_id !== user.tenant_id || payload.token_version !== user.token_version) return null;
-  return user.status === "active" ? user : null;
+  return activeMember(payload);
+}
+
+/**
+ * The person behind an access token, AS A MEMBER of the workspace the token
+ * was issued for (workspaces.ts): tenant_id and role are that workspace's.
+ * Null unless the account and that membership are both active and the token
+ * is current. Checked on every request, so a membership that is changed or
+ * ended takes effect at once, in every instance.
+ */
+async function activeMember(payload: Token): Promise<User | null> {
+  if (typeof payload.tenant_id !== "string" || !UUID_RE.test(payload.tenant_id)) return null;
+  const member = await workspaces.memberView(payload.sub, payload.tenant_id);
+  if (!member || payload.token_version !== member.token_version) return null;
+  return member.status === "active" ? member : null;
 }
 
 async function authenticate(req: AuthedRequest, res: Response): Promise<boolean> {
@@ -249,18 +265,18 @@ async function authenticate(req: AuthedRequest, res: Response): Promise<boolean>
     res.status(401).json({ detail: "Authentication required" });
     return false;
   }
-  const user = payload ? await store.findUserById(payload.sub) : null;
-  if (!user || payload?.tenant_id !== user.tenant_id || payload.token_version !== user.token_version) {
+  const member = payload ? await workspaces.memberView(payload.sub, payload.tenant_id) : null;
+  if (!member || payload?.token_version !== member.token_version) {
     res.status(401).json({ detail: "Authentication required" });
     return false;
   }
-  // An invited-but-not-accepted or deactivated account holds no access, even
-  // if it is somehow presenting a structurally valid token.
-  if (user.status !== "active") {
+  // An invited-but-not-accepted or deactivated account — or membership of
+  // this workspace — holds no access, even with a structurally valid token.
+  if (member.status !== "active") {
     res.status(401).json({ detail: "This account is not active" });
     return false;
   }
-  req.user = user;
+  req.user = member;
   return enforceAccess(req, res);
 }
 
@@ -314,17 +330,26 @@ async function log(req: AuthedRequest, action: string, resource_type: string | n
  * Postgres so every instance reaches the same answer.
  */
 export async function socketGrantsStillValid(checks: realtime.GrantCheck[]): Promise<Set<string>> {
-  const users = new Map((await store.userAuthStates([...new Set(checks.map((c) => c.userId))])).map((u) => [u.id, u]));
+  const pairs = [...new Map(checks.map((c) => [`${c.userId}:${c.tenantId}`, { userId: c.userId, tenantId: c.tenantId }])).values()];
+  const users = new Map((await store.memberAuthStates(pairs)).map((u) => [`${u.id}:${u.tenant_id}`, u]));
   const access = new Map<string, AccessState>();
   const ok = new Set<string>();
   for (const c of checks) {
-    const u = users.get(c.userId);
+    const u = users.get(`${c.userId}:${c.tenantId}`);
     if (!u || u.status !== "active" || u.tenant_id !== c.tenantId || u.token_version !== c.tokenVersion) continue;
     if (!access.has(c.tenantId)) access.set(c.tenantId, await accessState(c.tenantId));
     if (access.get(c.tenantId) === "blocked") continue;
     ok.add(realtime.grantKey(c.tenantId, c));
   }
   return ok;
+}
+
+/** A membership changed: in the home workspace (which owns the account) every
+ *  session ends, as before; elsewhere only that workspace's. */
+async function revokeMemberSessions(userId: string, tenantId: string, home: boolean): Promise<void> {
+  if (home) return revokeUserEverywhere(userId);
+  await sessions.revokeForUserInWorkspace(userId, tenantId);
+  realtime.closeUserSockets(userId, tenantId);
 }
 
 /** Ends every session of a user: refresh tokens everywhere, and this instance's
@@ -644,12 +669,15 @@ async function completeSignIn(req: Request, user: User): Promise<void> {
 
 /** Starts a session. One place, so every path that creates one (password
  *  login, MFA completion) stays consistent. */
-async function startSession(req: Request, res: Response, user: User): Promise<string> {
-  const accessToken = sign(user);
-  const refreshToken = await sessions.issue(user.id, {
+async function startSession(req: Request, res: Response, user: User, workspace?: User): Promise<string> {
+  // Lands in the chosen default workspace, else the home one (workspaces.ts).
+  const member = workspace ?? await workspaces.landingMember(user);
+  if (!member) throw Object.assign(new Error("no active workspace"), { status: 403, expose: true });
+  const accessToken = sign(member);
+  const refreshToken = await sessions.issue(member.id, {
     userAgent: req.header("user-agent"),
     ip: req.ip || null,
-  });
+  }, member.tenant_id);
   setSessionCookies(res, accessToken, refreshToken);
   return accessToken;
 }
@@ -853,18 +881,96 @@ app.post("/auth/refresh", async (req, res) => {
     return res.status(401).json({ detail: "Session expired. Please log in again." });
   }
 
-  const user = await store.findUserById(result.userId);
+  const account = await store.findUserById(result.userId);
   // A password change, role change or deactivation since the token was issued
   // must not be survivable by refreshing.
-  if (!user || user.status !== "active") {
+  if (!account || account.status !== "active") {
     await revokeUserEverywhere(result.userId);
     clearSessionCookies(res);
     return res.status(401).json({ detail: "This account is no longer active" });
+  }
+  // The session's own workspace, never another: a membership that ended ends
+  // this session (and only this one).
+  const user = await workspaces.memberView(account.id, result.tenantId ?? account.tenant_id);
+  if (!user || user.status !== "active") {
+    await sessions.revokeForUserInWorkspace(account.id, result.tenantId ?? account.tenant_id);
+    clearSessionCookies(res);
+    return res.status(401).json({ detail: "You are no longer a member of this workspace" });
   }
 
   const accessToken = sign(user);
   setSessionCookies(res, accessToken, result.token);
   return res.json({ access_token: accessToken, token_type: "bearer" });
+});
+
+// --- Workspaces --------------------------------------------------------------
+// One person, several workspaces (workspaces.ts). Every other route acts on
+// the workspace the session was issued for; switching issues a new session.
+
+const workspaceId = z.string().regex(UUID_RE);
+
+app.get("/workspaces", auth, async (req: AuthedRequest, res) => {
+  res.json({ current: req.user!.tenant_id, default: req.user!.default_workspace_id ?? null, workspaces: await workspaces.listForUser(req.user!.id) });
+});
+
+app.post("/workspaces", auth, async (req: AuthedRequest, res) => {
+  const body = parse(z.object({
+    name: z.string().trim().min(1).max(100),
+    currency: z.string().trim().toUpperCase().refine((c) => config.supportedCurrencies.includes(c), "unsupported currency").optional(),
+    timezone: z.string().refine(isTimeZone, "unknown time zone").optional(),
+    locale: z.enum(LOCALES as unknown as [Locale, ...Locale[]]).optional(),
+  }), req.body ?? {}, res); if (!body) return;
+  // Hosted: any verified account may start a workspace (it gets its own trial).
+  // Self-hosted: administrators only — the installation is the operator's.
+  if (isSelfHosted() && req.user!.role !== "admin") return res.status(403).json({ detail: "Only administrators can create workspaces on this installation" });
+  if (!isSelfHosted() && !req.user!.email_verified_at) return res.status(403).json({ detail: "Confirm your email address first" });
+  if ((await workspaces.countForUser(req.user!.id)) >= config.maxWorkspacesPerUser) {
+    return res.status(429).json({ detail: `You can belong to at most ${config.maxWorkspacesPerUser} workspaces` });
+  }
+  const created = await workspaces.create(req.user!, body.name, { currency: body.currency, timezone: body.timezone, locale: body.locale });
+  await store.audit({ tenant_id: created.id, user_id: req.user!.id, user_email: req.user!.email, action: "workspace.created", resource_type: "workspace", resource_id: created.id, detail: body.name, ip_address: req.ip || null });
+  return res.status(201).json({ id: created.id, name: created.name, role: "admin", region: config.region });
+});
+
+app.post("/workspaces/switch", auth, async (req: AuthedRequest, res) => {
+  const body = parse(z.object({ workspace_id: workspaceId }), req.body ?? {}, res); if (!body) return;
+  const member = await workspaces.memberView(req.user!.id, body.workspace_id);
+  // Not a member and not active are answered the same: no probing for workspace ids.
+  if (!member || member.status !== "active") return res.status(404).json({ detail: "Workspace not found" });
+  const accessToken = await startSession(req, res, member, member);
+  await store.audit({ tenant_id: member.tenant_id, user_id: member.id, user_email: member.email, action: "workspace.switched", resource_type: "workspace", resource_id: member.tenant_id, detail: null, ip_address: req.ip || null });
+  const tenant = await store.getTenant(member.tenant_id);
+  return res.json({ access_token: accessToken, token_type: "bearer", workspace: { id: member.tenant_id, name: tenant?.name ?? null, role: member.role } });
+});
+
+app.post("/workspaces/invitations/accept", authLimiter, auth, async (req: AuthedRequest, res) => {
+  const body = parse(z.object({ token: z.string().min(20).max(200) }), req.body ?? {}, res); if (!body) return;
+  const accepted = await workspaces.acceptInvite(hashOneTimeToken(body.token), req.user!.id);
+  // Someone else's invitation, a used one and an expired one look alike.
+  if (!accepted) return res.status(400).json({ detail: "This invitation is invalid, has expired, or was sent to another account" });
+  await store.audit({ tenant_id: accepted.tenantId, user_id: req.user!.id, user_email: req.user!.email, action: "user.invite_accepted", resource_type: "user", resource_id: req.user!.id, detail: `${accepted.role} (existing account)`, ip_address: req.ip || null });
+  return res.json({ workspace_id: accepted.tenantId, role: accepted.role });
+});
+
+app.post("/workspaces/leave", auth, async (req: AuthedRequest, res) => {
+  const body = parse(z.object({ workspace_id: workspaceId }), req.body ?? {}, res); if (!body) return;
+  const outcome = await workspaces.leave(body.workspace_id, req.user!.id);
+  if (outcome === "not_member") return res.status(404).json({ detail: "Workspace not found" });
+  if (outcome === "home") return res.status(400).json({ detail: "This is the workspace your account belongs to; it cannot be left" });
+  if (outcome === "last_admin") return res.status(400).json({ detail: "A workspace must keep at least one admin" });
+  await revokeMemberSessions(req.user!.id, body.workspace_id, false);
+  await store.audit({ tenant_id: body.workspace_id, user_id: req.user!.id, user_email: req.user!.email, action: "workspace.left", resource_type: "user", resource_id: req.user!.id, detail: null, ip_address: req.ip || null });
+  return res.json({ status: "left" });
+});
+
+app.put("/workspaces/default", auth, async (req: AuthedRequest, res) => {
+  const body = parse(z.object({ workspace_id: workspaceId.nullable() }), req.body ?? {}, res); if (!body) return;
+  if (body.workspace_id) {
+    const member = await workspaces.memberView(req.user!.id, body.workspace_id);
+    if (!member || member.status !== "active") return res.status(404).json({ detail: "Workspace not found" });
+  }
+  await workspaces.setDefault(req.user!.id, body.workspace_id);
+  return res.json({ default: body.workspace_id });
 });
 
 app.get("/auth/me", auth, async (req: AuthedRequest, res) => {
@@ -875,6 +981,11 @@ app.get("/auth/me", auth, async (req: AuthedRequest, res) => {
     trial_ends_at: tenant?.trial_ends_at || null,
     access_state: await accessState(req.user!.tenant_id),
     deployment_mode: config.deploymentMode,
+    // The workspace this session acts in, and how to present time and money
+    // to this person (their own choice where made, else the workspace's).
+    workspace: tenant ? { id: tenant.id, name: tenant.name, role: req.user!.role, region: regionOf(tenant), currency: tenant.currency } : null,
+    home_workspace_id: req.user!.home_tenant_id ?? req.user!.tenant_id,
+    settings: tenant ? effectiveSettings(tenant, req.user!) : null,
   });
 });
 
@@ -943,7 +1054,15 @@ app.post("/auth/accept-invite", authLimiter, async (req, res) => {
   const body = parse(z.object({ token: z.string().min(20), password: passwordField }), req.body, res); if (!body) return;
   const passwordHash = await bcrypt.hash(body.password, 12);
   const user = await store.consumeInviteToken(hashOneTimeToken(body.token), passwordHash);
-  if (!user) return res.status(400).json({ detail: "This invitation is invalid or has expired" });
+  if (!user) {
+    // An invitation to join another workspace, sent to someone who already
+    // has an account, is accepted by signing in — never by choosing a
+    // password here, which would let the link take over the account.
+    if (await workspaces.findInvite(hashOneTimeToken(body.token))) {
+      return res.status(409).json({ detail: "You already have a Legion account. Sign in to accept this invitation.", existing_account: true });
+    }
+    return res.status(400).json({ detail: "This invitation is invalid or has expired" });
+  }
   await store.audit({ tenant_id: user.tenant_id, user_id: user.id, user_email: user.email, action: "user.invite_accepted", resource_type: "user", resource_id: user.id, detail: user.role, ip_address: req.ip || null });
   return res.json({ message: "Your account is ready. Please log in." });
 });
@@ -955,9 +1074,13 @@ app.post("/auth/accept-invite", authLimiter, async (req, res) => {
 app.post("/auth/invite/preview", authLimiter, async (req, res) => {
   const body = parse(z.object({ token: z.string().min(20).max(200) }), req.body ?? {}, res); if (!body) return;
   const user = await store.findUserByInviteTokenHash(hashOneTimeToken(body.token));
-  if (!user) return res.status(404).json({ detail: "This invitation is invalid or has expired" });
+  if (!user) {
+    const invite = await workspaces.findInvite(hashOneTimeToken(body.token));
+    if (!invite) return res.status(404).json({ detail: "This invitation is invalid or has expired" });
+    return res.json({ email: invite.email, role: invite.role, tenant_name: invite.tenantName, existing_account: true });
+  }
   const tenant = await store.getTenant(user.tenant_id);
-  return res.json({ email: user.email, role: user.role, tenant_name: tenant?.name || null });
+  return res.json({ email: user.email, role: user.role, tenant_name: tenant?.name || null, existing_account: false });
 });
 
 // --- Alerts ------------------------------------------------------------------
@@ -1162,24 +1285,40 @@ app.post("/users/invite", requireRole("admin"), async (req: AuthedRequest, res) 
   const invitesThisHour = (await store.recentAuditCount(req.user!.tenant_id, "user.invited")) + (await store.recentAuditCount(req.user!.tenant_id, "user.invite_resent"));
   if (invitesThisHour >= config.inviteHourlyCap) return res.status(429).json({ detail: "Too many invitations. Try again later." });
   const { token: inviteToken, hash: inviteHash } = newOneTimeToken();
+  const inviteExpires = new Date(Date.now() + config.inviteDays * 86_400_000);
   let user: User;
-  try {
-    user = await store.insertUser({
-      email: body.email, password_hash: "", tenant_id: req.user!.tenant_id,
-      role: body.role, status: "invited", invite_token_hash: inviteHash,
-      invite_expires: new Date(Date.now() + config.inviteDays * 86_400_000).toISOString(),
-      invited_by: req.user!.id,
-    });
-  } catch (error) {
-    // Email is the login identifier, so it has to be unique across all tenants.
-    if (store.isUniqueViolation(error)) {
-      return res.status(400).json({ detail: "That email address is already in use" });
+  // Someone who already has a Legion account (in another workspace) joins
+  // this one through a membership invitation, accepted while signed in.
+  const existing = await store.findUserByEmail(body.email);
+  if (existing) {
+    const current = await store.findUserInTenant(req.user!.tenant_id, existing.id);
+    if (current && current.status === "active") return res.status(400).json({ detail: "That person is already a member of this workspace" });
+    // Answered exactly like an invitation of a new address — same status,
+    // same shape, nothing in the audit trail — so an administrator cannot use
+    // invitations to learn which addresses have accounts elsewhere. (A
+    // disabled account's invitation is simply never usable.)
+    const invited = await workspaces.inviteExisting(req.user!.tenant_id, existing.id, body.role, req.user!.id, inviteHash, inviteExpires);
+    if (!invited) return res.status(400).json({ detail: "That person is already a member of this workspace" });
+    user = (await store.findUserInTenant(req.user!.tenant_id, existing.id))!;
+  } else {
+    try {
+      user = await store.insertUser({
+        email: body.email, password_hash: "", tenant_id: req.user!.tenant_id,
+        role: body.role, status: "invited", invite_token_hash: inviteHash,
+        invite_expires: inviteExpires.toISOString(),
+        invited_by: req.user!.id,
+      });
+    } catch (error) {
+      // Email is the login identifier, so it has to be unique across all tenants.
+      if (store.isUniqueViolation(error)) {
+        return res.status(400).json({ detail: "That email address is already in use" });
+      }
+      throw error;
     }
-    throw error;
   }
 
   await log(req, "user.invited", "user", user.id, `${user.email} as ${user.role}`);
-  const tenant = await store.getTenant(user.tenant_id);
+  const tenant = await store.getTenant(req.user!.tenant_id);
   const inviteUrl = `${config.frontendUrl}/accept-invite?token=${inviteToken}`;
   const mail = await sendMail({
     to: user.email,
@@ -1213,13 +1352,14 @@ app.post("/users/:id/resend-invite", requireRole("admin"), async (req: AuthedReq
   // Fresh token: the previous link stops working, which is what you want if
   // the first one went to the wrong inbox.
   const { token: inviteToken, hash: inviteHash } = newOneTimeToken();
-  await store.updateUser(user.id, {
-    invite_token_hash: inviteHash,
-    invite_expires: new Date(Date.now() + config.inviteDays * 86_400_000).toISOString(),
-  });
+  const inviteExpires = new Date(Date.now() + config.inviteDays * 86_400_000);
+  // Existing account invited here: the invitation lives on the membership.
+  if (!(await workspaces.refreshInvite(req.user!.tenant_id, user.id, inviteHash, inviteExpires))) {
+    await store.updateUser(user.id, { invite_token_hash: inviteHash, invite_expires: inviteExpires.toISOString() });
+  }
   await log(req, "user.invite_resent", "user", user.id, user.email);
 
-  const tenant = await store.getTenant(user.tenant_id);
+  const tenant = await store.getTenant(req.user!.tenant_id);
   const inviteUrl = `${config.frontendUrl}/accept-invite?token=${inviteToken}`;
   const mail = await sendMail({
     to: user.email,
@@ -1244,8 +1384,10 @@ app.patch("/users/:id/role", requireRole("admin"), async (req: AuthedRequest, re
       : res.status(400).json({ detail: "A tenant must keep at least one admin" });
   }
   // Otherwise the user keeps their old permissions until the refresh token
-  // expires, which for a demotion is exactly the wrong way round.
-  await revokeUserEverywhere(userId);
+  // expires, which for a demotion is exactly the wrong way round. (The role
+  // is read from the membership on every request anyway; this also drops
+  // live sockets.) Outside their home workspace, only this workspace's sessions.
+  await revokeMemberSessions(userId, req.user!.tenant_id, result.home);
   await log(req, "user.role_updated", "user", userId, body.role);
   return res.json(publicUser(result.user));
 });
@@ -1264,8 +1406,8 @@ app.delete("/users/:id", requireRole("admin"), async (req: AuthedRequest, res) =
       ? res.status(404).json({ detail: "User not found" })
       : res.status(400).json({ detail: "A tenant must keep at least one admin" });
   }
-  await revokeUserEverywhere(userId);
-  await log(req, "user.deactivated", "user", userId, result.user.email);
+  await revokeMemberSessions(userId, req.user!.tenant_id, result.home);
+  await log(req, "user.deactivated", "user", userId, `${result.user.email}${result.home ? "" : " (membership)"}`);
   return res.json(publicUser(result.user));
 });
 
@@ -1780,13 +1922,10 @@ httpServer.on("upgrade", (request, socket, head) => {
     const cookieToken = request.headers.cookie?.split(";").map((x) => x.trim()).find((x) => x.startsWith("legion_token="))?.split("=").slice(1).join("=");
     const payload = verifyToken(cookieToken);
     // A purpose-scoped token (the MFA challenge) is not a session.
-    const user = payload && !payload.purpose ? await store.findUserById(payload.sub) : null;
+    // The workspace the token was issued for, as a member (workspaces.ts).
+    const user = payload && !payload.purpose ? await activeMember(payload) : null;
 
-    const valid = user
-      && payload!.tenant_id === user.tenant_id
-      && payload!.token_version === user.token_version
-      && user.status === "active"
-      && (await accessState(user.tenant_id)) !== "blocked";
+    const valid = user && (await accessState(user.tenant_id)) !== "blocked";
 
     if (!valid) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");

@@ -220,9 +220,16 @@ describe("tenant A accessing tenant B's users", () => {
     const planted = await request(app).post("/users/invite").set(...as(adminA)).send({ email: "new-hire@alpha.io", role: "admin", tenant_id: tB });
     expect(planted.status).toBe(201);
     expect((await store.findUserByEmail("new-hire@alpha.io"))!.tenant_id).toBe(tA);
+    // B's analyst can be invited to A (people belong to several workspaces),
+    // but that plants nothing in B, changes nothing of theirs there, and the
+    // answer is the same as for a brand-new address: no way to learn that the
+    // address has an account, or anything about B.
     const taken = await request(app).post("/users/invite").set(...as(adminA)).send({ email: "b-analyst@bravo.io", role: "admin" });
-    expect(taken.status).toBe(400);
-    expect(JSON.stringify(taken.body)).not.toMatch(/BRAVO|bravo-corp|role|tenant/i);
+    expect(taken.status).toBe(201);
+    expect(Object.keys(taken.body).sort()).toEqual(Object.keys(planted.body).sort());
+    expect(taken.body).toMatchObject({ status: "invited", tenant_id: tA, role: "admin" });
+    expect(Date.now() - new Date(taken.body.created_at).getTime()).toBeLessThan(60_000);
+    expect(JSON.stringify(taken.body).replaceAll("b-analyst@bravo.io", "")).not.toMatch(/BRAVO|bravo-corp/i);
     expect(await snapshotB()).toBe(before);
   });
 

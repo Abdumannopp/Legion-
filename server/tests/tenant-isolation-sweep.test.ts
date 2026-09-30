@@ -66,6 +66,22 @@ beforeEach(async () => {
 });
 
 describe("company B's administrator, aimed at company A", () => {
+  it("inviting A's analyst to B leaves A untouched and grants nothing until they accept", async () => {
+    const before = await snapshotA();
+    const res = await request(app).post("/users/invite").set(...as(adminB)).send({ email: "analyst@alpha.io", role: "admin" });
+    expect(res.status).toBe(201);
+    // Only what B typed comes back; nothing of A (name, role there, account age).
+    expect(leaks(res.body).filter((m) => m !== "analyst@alpha.io")).toEqual([]);
+    expect(res.body).toMatchObject({ status: "invited", tenant_id: tenantB, role: "admin" });
+    expect(JSON.stringify(res.body)).not.toMatch(/analyst"|ALPHA/);
+    expect(await snapshotA()).toBe(before);
+    // A's session is still A's; B cannot be entered before accepting.
+    const toB = await request(app).post("/workspaces/switch").set(...as(analystA)).send({ workspace_id: tenantB });
+    expect(toB.status).toBe(404);
+    const stolen = mint({ sub: analystA.id, tenant_id: tenantB, token_version: analystA.token_version }, { expiresIn: "1h" });
+    expect((await request(app).get("/alerts").set("Authorization", `Bearer ${stolen}`)).status).toBe(401);
+  });
+
   it("every endpoint: nothing of A in the response, nothing of A changed", async () => {
     const before = await snapshotA();
     const A = { alert: "LGN-ALPHA-1", user: analystA.id, admin: adminA.id };
@@ -83,7 +99,6 @@ describe("company B's administrator, aimed at company A", () => {
       ["POST /users/:id/resend-invite", () => request(app).post(`/users/${A.user}/resend-invite`).set(...as(adminB))],
       ["PATCH /users/:id/role", () => request(app).patch(`/users/${A.user}/role`).set(...as(adminB)).send({ role: "viewer" })],
       ["DELETE /users/:id", () => request(app).delete(`/users/${A.admin}`).set(...as(adminB))],
-      ["POST /users/invite (A's email)", () => request(app).post("/users/invite").set(...as(adminB)).send({ email: "analyst@alpha.io", role: "admin" })],
       ["GET /audit", () => request(app).get("/audit").set(...as(adminB))],
       ["GET /notifications/settings", () => request(app).get("/notifications/settings").set(...as(adminB))],
       ["PATCH /notifications/settings", () => request(app).patch("/notifications/settings").set(...as(adminB)).send({ notification_email: "attacker@evil.io" })],

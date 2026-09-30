@@ -38,6 +38,8 @@ const toTenant = (r: any): Tenant => ({
   trial_ends_at: iso(r.trial_ends_at), created_at: isoRequired(r.created_at),
   ai_enabled: typeof r.ai_enabled === "boolean" ? r.ai_enabled : null,
   ai_data_mode: r.ai_data_mode === "strict" ? "strict" : "standard",
+  region: r.region ?? null, timezone: r.timezone ?? "UTC", locale: r.locale ?? "en", currency: r.currency ?? "USD",
+  date_format: r.date_format ?? "YYYY-MM-DD", time_format: r.time_format ?? "24h",
 });
 
 const toUser = (r: any): User => ({
@@ -50,7 +52,26 @@ const toUser = (r: any): User => ({
   mfa_secret_enc: r.mfa_secret_enc ?? null, mfa_secret_legacy: r.mfa_secret ?? null,
   mfa_enrolled_at: iso(r.mfa_enrolled_at),
   email_verified_at: iso(r.email_verified_at),
+  home_tenant_id: r.tenant_id,
+  default_workspace_id: r.default_workspace_id ?? null,
+  timezone: r.timezone ?? null, locale: r.locale ?? null, date_format: r.date_format ?? null, time_format: r.time_format ?? null,
 });
+
+/**
+ * A user as a member of one workspace: the account (password, MFA, token
+ * version) with tenant_id / role / status taken from the membership. The
+ * account's own status still wins when it is disabled: a disabled account is
+ * out of every workspace.
+ */
+export const MEMBER_SELECT = `SELECT u.*, m.tenant_id AS m_tenant_id, m.role AS m_role, m.status AS m_status, m.created_at AS m_created_at
+  FROM workspace_memberships m JOIN users u ON u.id = m.user_id`;
+export const toMember = (r: any): User => {
+  const u = toUser(r);
+  const status: UserStatus = u.status === "disabled" ? "disabled" : r.m_status !== "active" ? (r.m_status as UserStatus) : u.status;
+  // created_at is when they joined THIS workspace: the account's own age is
+  // not another workspace's business (and would reveal an existing account).
+  return { ...u, tenant_id: r.m_tenant_id, role: r.m_role as Role, status, created_at: r.m_created_at ? isoRequired(r.m_created_at) : u.created_at };
+};
 
 const toAlert = (r: any): Alert => ({
   id: r.id, tenant_id: r.tenant_id, title: r.title, severity: r.severity as Severity,
@@ -240,70 +261,91 @@ export async function findUserByVerifyTokenHash(hash: string): Promise<User | nu
 }
 
 
-/** Minimal user state for re-authorizing live connections in bulk. */
-export async function userAuthStates(ids: string[]): Promise<Array<{ id: string; tenant_id: string; token_version: number; status: string }>> {
-  if (ids.length === 0) return [];
-  return queryAll("SELECT id, tenant_id, token_version, status FROM users WHERE id = ANY($1::uuid[])", [ids]) as Promise<Array<{ id: string; tenant_id: string; token_version: number; status: string }>>;
-}
-
-export async function listUsers(tenantId: string): Promise<User[]> {
+/** Minimal member state for re-authorizing live connections in bulk: one row
+ *  per (user, workspace) pair asked about that is still a membership. */
+export async function memberAuthStates(pairs: Array<{ userId: string; tenantId: string }>): Promise<Array<{ id: string; tenant_id: string; token_version: number; status: string }>> {
+  if (pairs.length === 0) return [];
   const rows = await queryAll(
-    "SELECT * FROM users WHERE tenant_id = $1 ORDER BY created_at ASC",
-    [tenantId]
+    `${MEMBER_SELECT} WHERE (m.user_id, m.tenant_id) IN (SELECT * FROM unnest($1::uuid[], $2::uuid[]))`,
+    [pairs.map((p) => p.userId), pairs.map((p) => p.tenantId)],
   );
-  return rows.map(toUser);
+  return rows.map(toMember).map((m) => ({ id: m.id, tenant_id: m.tenant_id, token_version: m.token_version, status: m.status }));
 }
 
+/** Everyone in the workspace (active, invited or deactivated), with their role there. */
+export async function listUsers(tenantId: string): Promise<User[]> {
+  const rows = await queryAll(`${MEMBER_SELECT} WHERE m.tenant_id = $1 ORDER BY m.created_at ASC, u.created_at ASC`, [tenantId]);
+  return rows.map(toMember);
+}
+
+/** A person as a member of this workspace, or null if they are not one. */
 export async function findUserInTenant(tenantId: string, userId: string): Promise<User | null> {
-  const row = await queryOne("SELECT * FROM users WHERE id = $1 AND tenant_id = $2", [
-    userId, tenantId,
-  ]);
-  return row ? toUser(row) : null;
+  const row = await queryOne(`${MEMBER_SELECT} WHERE m.user_id = $1 AND m.tenant_id = $2`, [userId, tenantId]);
+  return row ? toMember(row) : null;
 }
 
-/** Active admins in the tenant other than `excludeUserId`. Guards the
- *  "a tenant must keep at least one admin" rule. */
+/** Active admins in the workspace other than `excludeUserId`. Guards the
+ *  "a workspace must keep at least one admin" rule. */
 export async function countOtherActiveAdmins(
   tenantId: string,
   excludeUserId: string
 ): Promise<number> {
   const row = await queryOne<{ count: number }>(
-    `SELECT count(*)::bigint AS count FROM users
-     WHERE tenant_id = $1 AND id <> $2 AND role = 'admin' AND status = 'active'`,
+    `SELECT count(*)::bigint AS count FROM workspace_memberships m JOIN users u ON u.id = m.user_id
+     WHERE m.tenant_id = $1 AND m.user_id <> $2 AND m.role = 'admin' AND m.status = 'active' AND u.status = 'active'`,
     [tenantId, excludeUserId]
   );
   return Number(row?.count ?? 0);
 }
 
 /**
- * Changes a user in a way that may remove an administrator (demotion or
- * deactivation) without ever leaving the tenant with none.
+ * Changes a member in a way that may remove an administrator (demotion or
+ * deactivation) without ever leaving the workspace with none.
  *
  * The check and the change happen in ONE transaction that first locks every
- * active admin row of the tenant. Checking and then updating separately let
- * two admins demote each other at the same moment: both saw "one other admin
- * left" and the tenant ended up with zero.
+ * active admin membership of the workspace. Checking and then updating
+ * separately let two admins demote each other at the same moment: both saw
+ * "one other admin left" and the workspace ended up with zero.
+ *
+ * In the member's HOME workspace the account row is changed (as before
+ * workspaces existed; the trigger keeps the membership in step), so a
+ * deactivation there disables the account. In any other workspace only the
+ * membership changes: role and status, nothing about the account.
  */
 export async function updateUserKeepingAnAdmin(
   tenantId: string, userId: string, patch: UserPatch, removesAdmin: (u: User) => boolean,
-): Promise<{ ok: true; user: User } | { ok: false; reason: "not_found" | "last_admin" }> {
+): Promise<{ ok: true; user: User; home: boolean } | { ok: false; reason: "not_found" | "last_admin" }> {
   return transaction(async (client) => {
-    const admins = await client.query<{ id: string }>(
-      "SELECT id FROM users WHERE tenant_id = $1 AND role = 'admin' AND status = 'active' ORDER BY id FOR UPDATE",
+    const admins = await client.query<{ user_id: string }>(
+      `SELECT m.user_id FROM workspace_memberships m JOIN users u ON u.id = m.user_id
+        WHERE m.tenant_id = $1 AND m.role = 'admin' AND m.status = 'active' AND u.status = 'active'
+        ORDER BY m.user_id FOR UPDATE OF m`,
       [tenantId],
     );
-    const row = (await client.query("SELECT * FROM users WHERE id = $1 AND tenant_id = $2 FOR UPDATE", [userId, tenantId])).rows[0];
+    const row = (await client.query(`${MEMBER_SELECT} WHERE m.user_id = $1 AND m.tenant_id = $2 FOR UPDATE OF m`, [userId, tenantId])).rows[0];
     if (!row) return { ok: false as const, reason: "not_found" as const };
-    const current = toUser(row);
+    const current = toMember(row);
     if (current.role === "admin" && current.status === "active" && removesAdmin(current)
-      && admins.rows.filter((a) => a.id !== userId).length === 0) {
+      && admins.rows.filter((a) => a.user_id !== userId).length === 0) {
       return { ok: false as const, reason: "last_admin" as const };
     }
-    const { sets, params } = userPatchSql(userId, patch);
-    const updated = sets.length
-      ? (await client.query(`UPDATE users SET ${sets.join(", ")} WHERE id = $1 RETURNING *`, params)).rows[0]
-      : row;
-    return { ok: true as const, user: toUser(updated) };
+    const home = row.tenant_id === tenantId;
+    if (home) {
+      const { sets, params } = userPatchSql(userId, patch);
+      if (sets.length) await client.query(`UPDATE users SET ${sets.join(", ")} WHERE id = $1`, params);
+    } else {
+      const sets: string[] = [];
+      const params: unknown[] = [tenantId, userId];
+      if (patch.role !== undefined) { params.push(patch.role); sets.push(`role = $${params.length}`); }
+      if (patch.status !== undefined) { params.push(patch.status); sets.push(`status = $${params.length}`); }
+      if ("invite_token_hash" in patch) { params.push(patch.invite_token_hash); sets.push(`invite_token_hash = $${params.length}`); }
+      if ("invite_expires" in patch) { params.push(patch.invite_expires); sets.push(`invite_expires = $${params.length}`); }
+      if (sets.length) {
+        await client.query(`UPDATE workspace_memberships SET ${sets.join(", ")}, updated_at = now() WHERE tenant_id = $1 AND user_id = $2`, params);
+      }
+    }
+    const updated = (await client.query(`${MEMBER_SELECT} WHERE m.user_id = $1 AND m.tenant_id = $2`, [userId, tenantId])).rows[0];
+    return { ok: true as const, user: toMember(updated), home };
   });
 }
 
