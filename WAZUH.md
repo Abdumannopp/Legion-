@@ -183,3 +183,27 @@ API: `GET/POST /security-events/credentials`, `POST …/:id/rotate`, `DELETE …
    ketadi — uni revoke qiling.
 5. `http://` orqali yuborilsa, tana ochiq ko'rinadi (imzo uni yashirmaydi).
    Production'da HTTPS shart.
+
+---
+
+## Legion unreachable: nothing is lost (spool)
+
+When Legion cannot be reached (restart, outage, network) or answers 5xx/429,
+`custom-legion.py` retries a few times and then **keeps the event on disk**
+in `/var/ossec/tmp/legion-spool/<key id>/` (owner-only permissions; the secret
+is never written). The next alert re-sends the backlog first, oldest first,
+signed afresh. Legion de-duplicates by event id, so a re-send is never a
+second alert, and the original Wazuh `timestamp` is kept as the alert's
+`occurred_at`.
+
+For quiet periods, run the drain every minute on the manager:
+`deploy/wazuh-legion-drain.service` + `.timer` (instructions inside).
+
+- Each credential has its own spool: one organisation's backlog is never sent
+  with another organisation's credential.
+- An event Legion **refuses** (401/403 — e.g. a revoked credential — or 400)
+  is kept in `<key id>/dead/`, not retried. After rotating a credential,
+  re-send what the old one could not deliver:
+  `custom-legion.py --drain <new KEY_ID:SECRET> <hook_url> --from <old key id>`
+- The spool holds at most `LEGION_SPOOL_MAX_FILES` events (50 000); beyond
+  that the oldest are dropped and the integration log says so.

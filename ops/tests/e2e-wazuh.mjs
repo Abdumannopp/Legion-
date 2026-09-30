@@ -116,7 +116,7 @@ const ALERTS = [
 
 function runIntegration(alertFile, apiKey) {
   const r = spawnSync("python3", [join(REPO, "integrations", "custom-legion.py"), alertFile, apiKey, `${BASE}/security-events/webhook`], {
-    env: { ...process.env, LEGION_INTEGRATION_LOG: INTEGRATION_LOG }, encoding: "utf8", timeout: 30_000,
+    env: { ...process.env, LEGION_INTEGRATION_LOG: INTEGRATION_LOG, LEGION_SPOOL_DIR: join(WORK, "spool") }, encoding: "utf8", timeout: 30_000,
   });
   return r.status;
 }
