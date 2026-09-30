@@ -230,6 +230,69 @@ describe("dead-lettered notifications can be requeued", () => {
   });
 });
 
+// --- the worker loses the database mid-batch ---------------------------------------------------------
+
+describe("a worker that loses the database in the middle of a batch", () => {
+  async function queueEmails(n: number) {
+    config.smtpHost = "smtp.test.invalid";
+    for (let i = 0; i < n; i++) {
+      await outbox.insertAlertAndNotify({
+        id: `W-${i}`, tenant_id: tenant, title: `t${i}`, severity: "critical", agent: "Sentinel", status: "open", summary: "s",
+        confidence: 90, ai_explanation: null, explained_at: null, source_ip: null, target: null, mitre_technique: null, source: "wazuh",
+      });
+    }
+  }
+  const statuses = async () => (await query("SELECT status, count(*)::int AS n FROM notification_outbox WHERE kind = 'alert_email' GROUP BY status")).rows
+    .reduce((m, r) => ({ ...m, [r.status]: r.n }), {} as Record<string, number>);
+  /** Makes the next statement matching `pattern` fail as if the database had gone away. */
+  function failNext(pattern: RegExp) {
+    const real = pool.query.bind(pool);
+    let armed = true;
+    return vi.spyOn(pool, "query").mockImplementation(((text: unknown, params?: unknown) => {
+      if (armed && typeof text === "string" && pattern.test(text)) {
+        armed = false;
+        return Promise.reject(Object.assign(new Error("Connection terminated unexpectedly"), { code: "ECONNRESET" }));
+      }
+      return real(text as string, params as unknown[]);
+    }) as never);
+  }
+
+  it("an email accepted by the mail server whose 'sent' could not be written is NOT sent again", async () => {
+    await queueEmails(1);
+    const sent: string[] = [];
+    const sender = async (m: { messageId?: string }) => { sent.push(m.messageId ?? ""); return { sent: true as const }; };
+    failNext(/SET status = 'sent'/);
+    await expect(outbox.deliverDue({ kind: "alert_email", send: sender })).rejects.toThrow(/Connection terminated/);
+    expect(sent).toHaveLength(1);
+    expect(outbox.heldOutcomes().unrecorded).toBe(1);
+    vi.restoreAllMocks();
+    // The database is back: the known outcome is written, nothing is re-sent.
+    await outbox.deliverDue({ kind: "alert_email", send: sender });
+    await query("UPDATE notification_outbox SET locked_until = now() - interval '1 second', next_attempt_at = now()");
+    await outbox.deliverDue({ kind: "alert_email", send: sender });
+    expect(sent).toHaveLength(1);
+    expect(await statuses()).toEqual({ sent: 1 });
+    expect(outbox.heldOutcomes()).toEqual({ unrecorded: 0, untouched: 0 });
+  });
+
+  it("jobs claimed but never attempted are handed back at once — not after the 120 s lease — with the attempt not counted", async () => {
+    await queueEmails(3);
+    const sent: string[] = [];
+    const sender = async (m: { to: string }) => { sent.push(m.to); return { sent: true as const }; };
+    failNext(/SET locked_until = now\(\) \+ make_interval/); // the lease renewal before the first attempt
+    await expect(outbox.deliverDue({ kind: "alert_email", send: sender })).rejects.toThrow();
+    expect(await statuses()).toEqual({ sending: 3 });            // claimed, stranded under a lease
+    expect(outbox.heldOutcomes().untouched).toBe(3);
+    vi.restoreAllMocks();
+    await outbox.deliverDue({ kind: "alert_email", send: sender }); // gives them back…
+    await outbox.deliverDue({ kind: "alert_email", send: sender }); // …and delivers them, no lease wait
+    expect(sent).toHaveLength(3);
+    expect(await statuses()).toEqual({ sent: 3 });
+    const attempts = (await query("SELECT max(attempts)::int AS a FROM notification_outbox")).rows[0].a;
+    expect(attempts).toBe(1);
+  });
+});
+
 // --- queue health --------------------------------------------------------------------------------------
 
 describe("queue health includes the worker's liveness", () => {

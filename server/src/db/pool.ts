@@ -64,6 +64,19 @@ pool.on("error", (error) => {
   console.error("Postgres idle client error:", error.message);
 });
 
+// …and the same is true of a client that is CHECKED OUT when its connection
+// dies — mid-transaction during a database restart or failover. The pool only
+// listens for errors on idle clients, so that 'error' event had no listener
+// and crashed the whole API on every database restart (found by the
+// failure-injection tests). Every connection gets a permanent listener: the
+// query in flight still fails (and the caller answers 503), and the pool
+// discards the dead client when it is released.
+pool.on("connect", (client) => {
+  client.on("error", (error) => {
+    console.error("Postgres connection lost:", error.message);
+  });
+});
+
 export type QueryParams = ReadonlyArray<unknown>;
 
 export async function query<T extends pg.QueryResultRow = pg.QueryResultRow>(
@@ -101,6 +114,7 @@ export async function transaction<T>(
   fn: (client: pg.PoolClient) => Promise<T>
 ): Promise<T> {
   const client = await pool.connect();
+  let broken = false;
   try {
     await client.query("BEGIN");
     const result = await fn(client);
@@ -108,11 +122,12 @@ export async function transaction<T>(
     return result;
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {
-      // The connection is already broken; the pool discards it below.
+      // The connection is broken: make sure it is not handed out again.
+      broken = true;
     });
     throw error;
   } finally {
-    client.release();
+    client.release(broken || undefined);
   }
 }
 

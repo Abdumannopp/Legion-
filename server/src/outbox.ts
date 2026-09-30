@@ -273,16 +273,68 @@ export interface DeliverOptions {
   attemptTimeoutMs?: number;
 }
 
+/**
+ * What this process knows but could not write because the database went away
+ * in the middle of a batch (a restart, a failover). Kept in memory and
+ * settled at the start of the next pass that can reach the database:
+ *
+ *  - unrecorded: the attempt HAPPENED and its outcome is known (e.g. the mail
+ *    server accepted the message) but the row could not be updated. Writing
+ *    the outcome later — fenced by the attempt number, like every outcome —
+ *    avoids re-sending an email that was already delivered once the lease
+ *    ran out (the duplicate this outbox otherwise accepts).
+ *  - untouched: claimed, but the attempt never started. Handed straight back
+ *    (with the attempt not counted) instead of sitting out the 120 s lease.
+ *
+ * Both are fenced: if another worker has since taken the row, nothing is
+ * written. A process that dies holding these simply falls back to the lease.
+ */
+const unrecorded = new Map<string, { row: OutboxRow; sql: string; params: unknown[]; counts: keyof DeliveryReport | null }>();
+const untouched = new Map<string, OutboxRow>();
+
+/** Tests only: what the worker is holding. */
+export function heldOutcomes(): { unrecorded: number; untouched: number } {
+  return { unrecorded: unrecorded.size, untouched: untouched.size };
+}
+
+async function settleHeld(report: DeliveryReport): Promise<void> {
+  for (const [id, h] of [...unrecorded]) {
+    const res = await query(`${h.sql} WHERE id = $1 AND status = 'sending' AND attempts = $2`, [h.row.id, h.row.attempts, ...h.params]);
+    unrecorded.delete(id);
+    if ((res.rowCount ?? 0) === 1 && h.counts) report[h.counts]++;
+  }
+  for (const [id, row] of [...untouched]) {
+    await query(
+      `UPDATE notification_outbox SET status = 'pending', attempts = attempts - 1, locked_until = NULL, next_attempt_at = now()
+        WHERE id = $1 AND status = 'sending' AND attempts = $2`,
+      [row.id, row.attempts],
+    );
+    untouched.delete(id);
+  }
+}
+
 /** Delivers what is due now. Safe to run from several instances at once. */
 export async function deliverDue(opts: DeliverOptions = {}): Promise<DeliveryReport> {
   const send = opts.send ?? sendMail;
   const publish = opts.publish ?? publishOrThrow;
   const kind = opts.kind ?? null;
   const report: DeliveryReport = { sent: 0, retrying: 0, dead: 0 };
+  await settleHeld(report);
   report.dead += await deadLetterAbandoned(kind);
 
-  for (const row of await claim(opts.limit ?? 50, kind)) {
-    if (!(await renewLease(row))) continue;
+  const rows = await claim(opts.limit ?? 50, kind);
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
+    let leased: boolean;
+    try {
+      leased = await renewLease(row);
+    } catch (error) {
+      // The database went away before this row was attempted: hold it and
+      // every row after it for give-back, and stop the batch.
+      for (const r of rows.slice(i)) untouched.set(r.id, r);
+      throw error;
+    }
+    if (!leased) continue;
 
     let outcome: Outcome;
     try {
@@ -291,29 +343,31 @@ export async function deliverDue(opts: DeliverOptions = {}): Promise<DeliveryRep
       outcome = { ok: false, detail: error instanceof Error ? error.message : String(error) };
     }
 
+    let sql: string; let params: unknown[]; let counts: keyof DeliveryReport | null;
     if (outcome.ok) {
-      if (await complete(row, "UPDATE notification_outbox SET status = 'sent', sent_at = now(), locked_until = NULL, last_error = NULL", [])) {
-        report.sent++;
-      }
-      continue;
-    }
-
-    const reason = sanitizeError(outcome.detail);
-    if (row.attempts >= row.max_attempts) {
-      if (await complete(row, "UPDATE notification_outbox SET status = 'dead', locked_until = NULL, last_error = $3", [reason])) {
-        console.error(`Legion: notification ${row.id} (${row.kind}) gave up after ${row.attempts} attempts: ${reason}`);
-        report.dead++;
-      }
+      sql = "UPDATE notification_outbox SET status = 'sent', sent_at = now(), locked_until = NULL, last_error = NULL";
+      params = []; counts = "sent";
     } else {
-      const base = row.kind === "realtime_alert" ? config.realtimeRetryBaseSeconds : config.notifyRetryBaseSeconds;
-      if (await complete(
-        row,
-        `UPDATE notification_outbox SET status = 'pending', locked_until = NULL, last_error = $3,
-                next_attempt_at = now() + make_interval(secs => $4)`,
-        [reason, backoffSeconds(row.attempts, base)]
-      )) {
-        report.retrying++;
+      const reason = sanitizeError(outcome.detail);
+      if (row.attempts >= row.max_attempts) {
+        sql = "UPDATE notification_outbox SET status = 'dead', locked_until = NULL, last_error = $3";
+        params = [reason]; counts = "dead";
+        console.error(`Legion: notification ${row.id} (${row.kind}) gave up after ${row.attempts} attempts: ${reason}`);
+      } else {
+        const base = row.kind === "realtime_alert" ? config.realtimeRetryBaseSeconds : config.notifyRetryBaseSeconds;
+        sql = `UPDATE notification_outbox SET status = 'pending', locked_until = NULL, last_error = $3,
+                next_attempt_at = now() + make_interval(secs => $4)`;
+        params = [reason, backoffSeconds(row.attempts, base)]; counts = "retrying";
       }
+    }
+    try {
+      if (await complete(row, sql, params)) report[counts]++;
+    } catch (error) {
+      // The attempt happened; only its record is missing. Remember it (the
+      // email was accepted: do not send it again), hand back the rest.
+      unrecorded.set(row.id, { row, sql, params, counts });
+      for (const r of rows.slice(i + 1)) untouched.set(r.id, r);
+      throw error;
     }
   }
   return report;
