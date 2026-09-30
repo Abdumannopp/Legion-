@@ -185,6 +185,41 @@ export async function setNotificationLocale(tenantId: string, locale: Locale): P
   await query("UPDATE tenants SET notification_locale = $2 WHERE id = $1", [tenantId, locale]);
 }
 
+/** Presentation and billing settings of a workspace (whitelisted columns; region is not one — moving it is a data migration). */
+export async function updateTenantSettings(
+  tenantId: string, patch: Partial<Record<"name" | "timezone" | "locale" | "currency" | "date_format" | "time_format", string>>,
+): Promise<Tenant | null> {
+  const cols = (["name", "timezone", "locale", "currency", "date_format", "time_format"] as const).filter((c) => patch[c] !== undefined);
+  if (!cols.length) return getTenant(tenantId);
+  const row = await queryOne(
+    `UPDATE tenants SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(", ")} WHERE id = $1 RETURNING *`,
+    [tenantId, ...cols.map((c) => patch[c])],
+  );
+  return row ? toTenant(row) : null;
+}
+
+/** A person's own presentation preferences (null = the workspace's). */
+export async function updateUserPreferences(
+  userId: string, patch: Partial<Record<"timezone" | "locale" | "date_format" | "time_format", string | null>>,
+): Promise<void> {
+  const cols = (["timezone", "locale", "date_format", "time_format"] as const).filter((c) => patch[c] !== undefined);
+  if (!cols.length) return;
+  await query(`UPDATE users SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(", ")} WHERE id = $1`, [userId, ...cols.map((c) => patch[c])]);
+}
+
+/** One page of the workspace's audit trail in time order, after a (created_at, id) cursor — for export. */
+export async function auditPage(
+  tenantId: string, opts: { from: Date; to: Date; after?: { at: string; id: string }; limit: number },
+): Promise<AuditLog[]> {
+  const rows = await queryAll(
+    `SELECT * FROM audit_log WHERE tenant_id = $1 AND created_at >= $2 AND created_at < $3
+        AND ($4::timestamptz IS NULL OR (created_at, id) > ($4::timestamptz, $5::uuid))
+      ORDER BY created_at, id LIMIT $6`,
+    [tenantId, opts.from, opts.to, opts.after?.at ?? null, opts.after?.id ?? null, opts.limit],
+  );
+  return rows.map(toAudit);
+}
+
 // --- Users -------------------------------------------------------------------
 
 export async function findUserById(id: string): Promise<User | null> {

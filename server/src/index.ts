@@ -13,7 +13,8 @@ import { z } from "zod";
 import { config, saasWarnings } from "./config.js";
 import * as store from "./store.js";
 import * as workspaces from "./workspaces.js";
-import { effectiveSettings, isTimeZone, regionOf, regionUrl, servesRegion } from "./regional.js";
+import { roleAllows, roleMatrix, type Permission } from "./permissions.js";
+import { DATE_FORMATS, TIME_FORMATS, effectiveSettings, isTimeZone, regionOf, regionUrl, servesRegion } from "./regional.js";
 import * as integrations from "./integrations/registry.js";
 import * as connections from "./integrations/connections.js";
 import { ingestFindings } from "./integrations/ingest.js";
@@ -301,6 +302,18 @@ function requireRole(minimum: Role) {
   return async (req: AuthedRequest, res: Response, next: NextFunction): Promise<void> => {
     if (!(await authenticate(req, res))) return;
     if (rank[req.user!.role] < rank[minimum]) {
+      res.status(403).json({ detail: "Insufficient permissions" });
+      return;
+    }
+    next();
+  };
+}
+
+/** Routes ask for a permission, not a role (permissions.ts): the enterprise-RBAC seam. */
+function requirePermission(permission: Permission) {
+  return async (req: AuthedRequest, res: Response, next: NextFunction): Promise<void> => {
+    if (!(await authenticate(req, res))) return;
+    if (!roleAllows(req.user!.role, permission)) {
       res.status(403).json({ detail: "Insufficient permissions" });
       return;
     }
@@ -923,6 +936,110 @@ app.post("/auth/refresh", async (req, res) => {
   const accessToken = sign(user);
   setSessionCookies(res, accessToken, result.token);
   return res.json({ access_token: accessToken, token_type: "bearer" });
+});
+
+
+// --- Workspace settings and personal preferences -----------------------------
+// How time and money are presented (the wire format is always UTC ISO-8601
+// and integer minor units). The region is shown, never edited: moving a
+// workspace between regions is a data migration, not a setting.
+
+const localeEnum = z.enum(LOCALES as unknown as [Locale, ...Locale[]]);
+const timezoneField = z.string().refine(isTimeZone, "unknown time zone");
+
+async function workspaceSettingsView(tenantId: string) {
+  const t = (await store.getTenant(tenantId))!;
+  return {
+    id: t.id, name: t.name, region: regionOf(t), timezone: t.timezone, locale: t.locale, currency: t.currency,
+    date_format: t.date_format, time_format: t.time_format,
+    options: { currencies: config.supportedCurrencies, locales: LOCALES, date_formats: DATE_FORMATS, time_formats: TIME_FORMATS },
+  };
+}
+
+app.get("/workspace/settings", auth, async (req: AuthedRequest, res) => {
+  res.json(await workspaceSettingsView(req.user!.tenant_id));
+});
+
+app.patch("/workspace/settings", requirePermission("workspace:manage"), async (req: AuthedRequest, res) => {
+  const body = parse(z.object({
+    name: z.string().trim().min(1).max(100).optional(),
+    timezone: timezoneField.optional(),
+    locale: localeEnum.optional(),
+    currency: z.string().trim().toUpperCase().refine((c) => config.supportedCurrencies.includes(c), "unsupported currency").optional(),
+    date_format: z.enum(DATE_FORMATS).optional(),
+    time_format: z.enum(TIME_FORMATS).optional(),
+  }).strict(), req.body ?? {}, res); if (!body) return;
+  // The billing currency follows the subscription once there is one: change it
+  // there (a new checkout), not here, or invoices and settings would disagree.
+  if (body.currency) {
+    const sub = await store.getSubscription(req.user!.tenant_id);
+    const t = await store.getTenant(req.user!.tenant_id);
+    if (sub && sub.status !== "canceled" && t && body.currency !== t.currency) {
+      return res.status(409).json({ detail: "The billing currency cannot change while a subscription is active" });
+    }
+  }
+  await store.updateTenantSettings(req.user!.tenant_id, body);
+  await log(req, "workspace.settings_updated", "workspace", req.user!.tenant_id, Object.keys(body).join(", "));
+  return res.json(await workspaceSettingsView(req.user!.tenant_id));
+});
+
+app.get("/workspace/roles", auth, (_req, res) => {
+  res.json({ roles: roleMatrix() });
+});
+
+app.patch("/auth/me/preferences", auth, async (req: AuthedRequest, res) => {
+  const body = parse(z.object({
+    timezone: timezoneField.nullable().optional(),
+    locale: localeEnum.nullable().optional(),
+    date_format: z.enum(DATE_FORMATS).nullable().optional(),
+    time_format: z.enum(TIME_FORMATS).nullable().optional(),
+  }).strict(), req.body ?? {}, res); if (!body) return;
+  await store.updateUserPreferences(req.user!.id, body);
+  const [account, tenant] = await Promise.all([store.findUserById(req.user!.id), store.getTenant(req.user!.tenant_id)]);
+  return res.json({ settings: effectiveSettings(tenant!, account!), own: { timezone: account!.timezone, locale: account!.locale, date_format: account!.date_format, time_format: account!.time_format } });
+});
+
+// --- Audit export ---------------------------------------------------------------
+// The workspace's audit trail for a period, streamed (NDJSON or CSV) in time
+// order — for a SIEM, an auditor or retention outside Legion. Cells that a
+// spreadsheet would execute are neutralised.
+
+const csvCell = (v: unknown) => {
+  let s = v === null || v === undefined ? "" : String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return /[",\r\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
+};
+const AUDIT_EXPORT_MAX_ROWS = 1_000_000;
+
+app.get("/audit/export", requirePermission("audit:export"), async (req: AuthedRequest, res) => {
+  const q = parse(z.object({
+    from: z.iso.datetime({ offset: true }),
+    to: z.iso.datetime({ offset: true }),
+    format: z.enum(["ndjson", "csv"]).default("ndjson"),
+  }), req.query, res); if (!q) return;
+  const from = new Date(q.from); const to = new Date(q.to);
+  if (!(from < to) || to.getTime() - from.getTime() > 366 * 86_400_000) return res.status(422).json({ detail: "Choose a period of at most a year, with from before to" });
+  await log(req, "audit.exported", "workspace", req.user!.tenant_id, `${q.format} ${from.toISOString()}..${to.toISOString()}`);
+  const columns = ["created_at", "action", "user_email", "user_id", "resource_type", "resource_id", "detail", "ip_address", "id"] as const;
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Content-Type", q.format === "csv" ? "text/csv; charset=utf-8" : "application/x-ndjson; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="legion-audit-${from.toISOString().slice(0, 10)}-${to.toISOString().slice(0, 10)}.${q.format === "csv" ? "csv" : "ndjson"}"`);
+  if (q.format === "csv") res.write(`${columns.join(",")}\r\n`);
+  let after: { at: string; id: string } | undefined;
+  let sent = 0;
+  for (;;) {
+    const page = await store.auditPage(req.user!.tenant_id, { from, to, after, limit: 1000 });
+    for (const row of page) {
+      res.write(q.format === "csv"
+        ? `${columns.map((c) => csvCell(row[c])).join(",")}\r\n`
+        : `${JSON.stringify(Object.fromEntries(columns.map((c) => [c, row[c]])))}\n`);
+    }
+    sent += page.length;
+    if (page.length < 1000 || sent >= AUDIT_EXPORT_MAX_ROWS) break;
+    const last = page[page.length - 1]!;
+    after = { at: last.created_at, id: last.id };
+  }
+  res.end();
 });
 
 // --- Workspaces --------------------------------------------------------------
@@ -1593,7 +1710,18 @@ app.get("/billing/subscription", auth, async (req: AuthedRequest, res) => {
   return res.json({ ...sub, access_state: state, trial_ends_at: tenant?.trial_ends_at || null });
 });
 
-app.post("/billing/checkout-context", requireRole("admin"), (req: AuthedRequest, res) => res.json({ checkout_token: signToken("checkout", { purpose: "paddle_checkout", tenant_id: req.user!.tenant_id }, "1h") }));
+app.post("/billing/checkout-context", requireRole("admin"), async (req: AuthedRequest, res) => {
+  // The workspace is checked out in its own currency: the server chooses the
+  // price (PADDLE_PRICE_IDS), so the client cannot pick a cheaper one. null:
+  // no price for that currency — the client falls back to its default.
+  const tenant = await store.getTenant(req.user!.tenant_id);
+  const currency = tenant?.currency ?? config.defaultCurrency;
+  res.json({
+    checkout_token: signToken("checkout", { purpose: "paddle_checkout", tenant_id: req.user!.tenant_id }, "1h"),
+    currency,
+    price_id: config.paddlePriceIds[currency] ?? null,
+  });
+});
 
 app.post("/billing/portal", requireRole("admin"), async (req: AuthedRequest, res) => {
   if (!paddleConfigured()) return res.status(503).json({ detail: "Paddle is not configured" });

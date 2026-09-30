@@ -230,6 +230,9 @@ export const config = {
 
   // --- Paddle Billing ---
   paddleApiKey: process.env.PADDLE_API_KEY || "",
+  /** Paddle price per billing currency ("USD=pri_…,EUR=pri_…"): a workspace is checked out in its own currency. */
+  paddlePriceIds: Object.fromEntries((process.env.PADDLE_PRICE_IDS || "").split(",").map((p) => p.split("=").map((x) => x?.trim() ?? ""))
+    .filter(([c, id]) => /^[A-Z]{3}$/.test((c ?? "").toUpperCase()) && /^pri_[A-Za-z0-9]+$/.test(id ?? "")).map(([c, id]) => [c!.toUpperCase(), id!])) as Record<string, string>,
   paddleWebhookSecret: process.env.PADDLE_WEBHOOK_SECRET || "",
   paddleEnvironment,
   // Overridable so the billing paths can be exercised against a stub.
