@@ -545,6 +545,7 @@ describe("route coverage", () => {
     "DELETE /users/:id": "tenant A accessing tenant B's users",
     "POST /security-events/credentials/:id/rotate": "exports/credentials",
     "DELETE /security-events/credentials/:id": "exports/credentials",
+    "POST /notifications/deliveries/:id/retry": "reliability.test.ts (dead letters: another organisation's job is a 404)",
     // Agent layer (packages/agent-identity: covered by its own cross-tenant tests, listed by file)
     "GET /agent/v1/alerts/:id": "agent API (this file)",
     "PATCH /agent/v1/alerts/:id/status": "agent API (this file)",

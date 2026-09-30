@@ -47,6 +47,8 @@ export interface Alert {
   source_ip: string | null;
   target: string | null;
   mitre_technique: string | null;
+  /** When the event happened at its source (the sensor's own timestamp); created_at is when Legion stored it. */
+  occurred_at?: string | null;
   /** English text of the suggested next steps (kept for API clients). */
   suggested_actions: string[];
   /** The same steps as codes, so the dashboard can show them in any language:

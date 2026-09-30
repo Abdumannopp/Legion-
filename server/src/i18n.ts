@@ -304,6 +304,18 @@ export const CATALOG: Record<string, Translation> = {
     ru: "Слишком много неудачных попыток входа в этот аккаунт. Повторите позже.",
     uz: "Bu hisobga kirishda juda ko'p muvaffaqiyatsiz urinish bo'ldi. Keyinroq qayta urinib ko'ring.",
   },
+  "Delivery not found": {
+    ru: "Доставка не найдена",
+    uz: "Yetkazish topilmadi",
+  },
+  "No failed delivery with that id": {
+    ru: "Неудавшейся доставки с таким идентификатором нет",
+    uz: "Bunday identifikatorli muvaffaqiyatsiz yetkazish yo'q",
+  },
+  "Service temporarily unavailable. Try again shortly.": {
+    ru: "Сервис временно недоступен. Повторите чуть позже.",
+    uz: "Xizmat vaqtincha ishlamayapti. Birozdan so'ng qayta urinib ko'ring.",
+  },
   "Could not reach the billing provider. Try again later.": {
     ru: "Не удалось связаться с платёжным провайдером. Повторите позже.",
     uz: "To'lov provayderi bilan bog'lanib bo'lmadi. Keyinroq qayta urinib ko'ring.",

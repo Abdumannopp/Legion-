@@ -372,6 +372,27 @@ export async function pruneDeliveredRealtime(): Promise<number> {
   return res.rowCount ?? 0;
 }
 
+/**
+ * Puts an organisation's dead-lettered jobs back in the queue — after the mail
+ * server outage that exhausted their retries is over, say. Each gets a fresh
+ * set of attempts. With `id`, just that job. Only 'dead' rows move: a job that
+ * is pending, sending or sent is never touched (no double delivery), and never
+ * another organisation's. Returns how many were requeued.
+ */
+export async function requeueDead(tenantId: string, id?: string): Promise<number> {
+  const res = await query(
+    `UPDATE notification_outbox
+        SET status = 'pending', attempts = 0, next_attempt_at = now(), locked_until = NULL,
+            last_error = 'requeued by an administrator after: ' || coalesce(left(last_error, 200), 'unknown')
+      WHERE tenant_id = $1 AND status = 'dead' AND ($2::uuid IS NULL OR id = $2)
+        AND id IN (SELECT id FROM notification_outbox WHERE tenant_id = $1 AND status = 'dead'
+                    AND ($2::uuid IS NULL OR id = $2) ORDER BY created_at LIMIT 1000)`,
+    [tenantId, id ?? null]
+  );
+  if ((res.rowCount ?? 0) > 0) kick();
+  return res.rowCount ?? 0;
+}
+
 /** An administrator's view of their own organisation's deliveries. */
 export async function listDeliveries(tenantId: string, limit = 100) {
   const res = await query(
@@ -387,6 +408,12 @@ export async function listDeliveries(tenantId: string, limit = 100) {
 
 let timer: NodeJS.Timeout | null = null;
 let running = false;
+/** When this instance's worker last finished a pass (queue health: a worker
+ *  that stopped ticking is as bad as a queue that stopped draining). */
+let lastTickAt: number | null = null;
+export function workerStatus(): { running: boolean; last_tick_seconds_ago: number | null } {
+  return { running: timer !== null, last_tick_seconds_ago: lastTickAt === null ? null : Math.round((Date.now() - lastTickAt) / 1000) };
+}
 
 let lastPrune = 0;
 /** Set when a kick arrives mid-tick, so fresh work runs right after, not a poll later. */
@@ -415,6 +442,7 @@ async function tick(): Promise<void> {
     console.error("Legion: notification worker failed:", error instanceof Error ? error.message : "unknown error");
   } finally {
     running = false;
+    lastTickAt = Date.now();
     if (again && timer) {
       again = false;
       void tick();

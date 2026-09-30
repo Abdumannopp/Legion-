@@ -454,3 +454,8 @@ CREATE INDEX IF NOT EXISTS audit_log_tenant_action_user_created_idx ON audit_log
 -- (family_started_at NULL) use their own created_at as the start.
 ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS family_started_at timestamptz;
 ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS grace_used_at timestamptz;
+
+-- Reliability (2026-09): when the event happened at its source. created_at is
+-- when Legion stored it; the two differ when a sensor re-sends from its spool
+-- after an outage. Nullable, no default: a metadata-only ALTER.
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS occurred_at timestamptz;

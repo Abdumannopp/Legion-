@@ -22,6 +22,7 @@ import { hashOneTimeToken, newOneTimeToken } from "./auth-tokens.js";
 import { describeReport, migrateSecretsAtRest } from "./secrets-migration.js";
 import { keyringStatus } from "./secret-box.js";
 import * as outbox from "./outbox.js";
+import { startSensorMonitor, stopSensorMonitor } from "./sensor-monitor.js";
 import { seedDemoIfEmpty } from "./seed.js";
 import { inviteEmail, mailEnabled, notificationConfirmEmail, passwordResetEmail, sendMail, testNotificationEmail, verifyEmailEmail, verifyMail } from "./mailer.js";
 import { actionText, copilotFallback, isLocale, localExplanation, localizeResponses, requestLocale, suggestedActions, validationMessage, type Locale } from "./i18n.js";
@@ -402,7 +403,7 @@ app.get("/health/outbox", async (req, res) => {
   const given = (req.header("authorization") || "").replace(/^Bearer\s+/i, "");
   if (!safeEqual(given, expected)) return res.status(401).json({ detail: "Authentication required" });
   try {
-    return res.json(await outbox.queueMetrics());
+    return res.json({ ...(await outbox.queueMetrics()), worker: outbox.workerStatus() });
   } catch {
     return res.status(503).json({ detail: "Service unavailable" });
   }
@@ -1288,6 +1289,23 @@ app.get("/notifications/health", requireRole("admin"), async (req: AuthedRequest
   res.json(await outbox.queueMetrics(req.user!.tenant_id));
 });
 
+/** Dead letters back into the queue, e.g. after the mail outage that
+ *  exhausted their retries is fixed. One job, or all of the organisation's. */
+app.post("/notifications/deliveries/:id/retry", requireRole("admin"), async (req: AuthedRequest, res) => {
+  const id = String(req.params.id);
+  if (!UUID_RE.test(id)) return res.status(404).json({ detail: "Delivery not found" });
+  const n = await outbox.requeueDead(req.user!.tenant_id, id);
+  if (!n) return res.status(404).json({ detail: "No failed delivery with that id" });
+  await log(req, "notifications.requeued", "notification", id);
+  return res.json({ requeued: n });
+});
+
+app.post("/notifications/deliveries/retry-dead", requireRole("admin"), async (req: AuthedRequest, res) => {
+  const n = await outbox.requeueDead(req.user!.tenant_id);
+  await log(req, "notifications.requeued", "notification", null, `all dead: ${n}`);
+  return res.json({ requeued: n });
+});
+
 app.get("/notifications/settings", requireRole("admin"), async (req: AuthedRequest, res) => {
   const tenant = await store.getTenant(req.user!.tenant_id);
   res.json({
@@ -1609,6 +1627,22 @@ app.post("/security-events/sync", requireRole("admin"), async (req: AuthedReques
  * history that can never be backfilled. Billing state limits the UI, not the
  * recording of events.
  */
+/**
+ * The sensor's own time for an event (Wazuh: "2026-09-30T01:02:03.456+0000"),
+ * or null. Kept apart from created_at (when Legion stored it) because they
+ * differ when a sensor re-sends from its spool after an outage — an analyst
+ * needs to know an alert that arrived now happened an hour ago. Anything
+ * unparseable, before 2000 or more than five minutes in the future (a wrong
+ * sensor clock) is ignored rather than trusted.
+ */
+export function eventTime(raw: unknown): string | null {
+  if (typeof raw !== "string" || raw.length > 64) return null;
+  const normalised = raw.trim().replace(/([+-]\d{2})(\d{2})$/, "$1:$2");
+  const t = Date.parse(normalised);
+  if (!Number.isFinite(t) || t < Date.UTC(2000, 0, 1) || t > Date.now() + 5 * 60_000) return null;
+  return new Date(t).toISOString();
+}
+
 app.post(WEBHOOK_PATH,
   // Refuses an address that keeps failing BEFORE its body is read.
   webhookFailureGate,
@@ -1659,6 +1693,7 @@ app.post(WEBHOOK_PATH,
   const srcip = typeof event.data?.srcip === "string" && isIp(event.data.srcip) ? event.data.srcip : null;
   const severity: Severity = level >= 12 ? "critical" : level >= 9 ? "high" : level >= 5 ? "medium" : "low";
   const agentName = event.agent?.name ? clip(String(event.agent.name), 255) : null;
+  const occurredAt = eventTime(event.timestamp);
 
   // One transaction: the alert, the asset it came from, its email and its
   // dashboard frame. 202 is only sent after that commit, and nothing here
@@ -1671,6 +1706,7 @@ app.post(WEBHOOK_PATH,
     confidence: Math.min(100, level * 7), ai_explanation: null, explained_at: null,
     source_ip: srcip, target: agentName,
     mitre_technique: Array.isArray(event.rule?.mitre?.id) ? clip(event.rule.mitre.id.map(String).join(", "), 200) || null : null, source,
+    occurred_at: occurredAt,
   }, {
     // Turns the asset inventory into live data from the sensors instead of a
     // static seed list.
@@ -1697,9 +1733,33 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (typeof e?.status === "number" && e.status >= 400 && e.status < 500 && e.expose) {
     return res.status(e.status).json({ detail: "Invalid request" });
   }
+  // The database is unreachable or restarting: nothing was stored, and the
+  // caller should come back shortly. 503 + Retry-After tells a sensor (and a
+  // load balancer) exactly that — retry or spool, don't give up — where a bare
+  // 500 reads like a bug in the request.
+  if (databaseUnavailable(error)) {
+    console.error(`Database unavailable: ${e?.code ?? e?.name ?? "error"} (answering 503)`);
+    res.setHeader("Retry-After", "5");
+    return res.status(503).json({ detail: "Service temporarily unavailable. Try again shortly." });
+  }
   console.error(`Unhandled error: ${e?.name ?? "Error"}${e?.code ? ` [${e.code}]` : ""}: ${e?.message ?? "unknown"}`);
   res.status(500).json({ detail: "Internal server error" });
 });
+
+/** Postgres / pool errors that mean "the database is not reachable right now". */
+const DB_UNAVAILABLE_CODES = new Set([
+  "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EPIPE", "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH",
+  "57P01", "57P02", "57P03", // admin_shutdown, crash_shutdown, cannot_connect_now
+  "08000", "08001", "08003", "08004", "08006", // connection exceptions
+  "53300", // too_many_connections
+]);
+export function databaseUnavailable(error: unknown): boolean {
+  const e = error as { code?: string; message?: string } | null;
+  if (!e) return false;
+  if (e.code && DB_UNAVAILABLE_CODES.has(e.code)) return true;
+  return /Connection terminated|timeout exceeded when trying to connect|Client has encountered a connection error|terminating connection due to administrator command/i
+    .test(e.message ?? "");
+}
 
 // --- Realtime ----------------------------------------------------------------
 
@@ -1827,6 +1887,8 @@ if (process.env.NODE_ENV !== "test") {
 
   // Delivers queued alert emails and retries failed ones (outbox.ts).
   outbox.startOutboxWorker();
+  // "Wazuh went quiet" becomes an alert of its own (sensor-monitor.ts).
+  startSensorMonitor(5 * 60_000, newAlertFrame);
   // Retries failed agent-suspension notices and purges expired agent tokens.
   const stopAgentJobs = agentLayer.identity.startBackgroundJobs();
 
@@ -1872,6 +1934,7 @@ if (process.env.NODE_ENV !== "test") {
       shuttingDown = true;
       console.info(`${signal} received — draining connections.`);
       outbox.stopOutboxWorker(); // undelivered rows stay queued for the next start
+      stopSensorMonitor();
       realtime.stopHeartbeat();
       realtime.stopRevalidation();
       realtime.stopLiveness();

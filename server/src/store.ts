@@ -61,7 +61,7 @@ const toAlert = (r: any): Alert => ({
   ai_explanation_source: r.ai_explanation_source === "ai" || r.ai_explanation_source === "local" ? r.ai_explanation_source : null,
   seq: Number(r.seq), created_seq: Number(r.created_seq),
   source_ip: r.source_ip, target: r.target, mitre_technique: r.mitre_technique,
-  source: r.source,
+  source: r.source, occurred_at: iso(r.occurred_at ?? null),
 });
 
 const toAsset = (r: any): Asset => ({
@@ -569,7 +569,7 @@ export async function listVulnerabilityAlerts(tenantId: string, limit: number): 
   return rows.map(toAlert);
 }
 
-export type NewAlert = Omit<Alert, "created_at" | "ai_explanation_locale" | "ai_explanation_source" | "seq" | "created_seq"> & { created_at?: string; ai_explanation_locale?: Locale | null };
+export type NewAlert = Omit<Alert, "created_at" | "ai_explanation_locale" | "ai_explanation_source" | "seq" | "created_seq" | "occurred_at"> & { created_at?: string; ai_explanation_locale?: Locale | null; occurred_at?: string | null };
 
 /**
  * Inserts an alert, returning null if that (tenant, id) already exists.
@@ -588,8 +588,8 @@ export async function insertAlert(alert: NewAlert, client?: PoolClient): Promise
     // (ON CONFLICT still guards the race between two identical inserts.)
     `INSERT INTO alerts (tenant_id, id, title, severity, agent, status, summary,
                          confidence, ai_explanation, explained_at, source_ip, target,
-                         mitre_technique, source, created_at)
-     SELECT $1::uuid,$2,$3,$4,$5,$6,$7,$8::real,$9,$10::timestamptz,$11,$12,$13,$14, COALESCE($15::timestamptz, now())
+                         mitre_technique, source, created_at, occurred_at)
+     SELECT $1::uuid,$2,$3,$4,$5,$6,$7,$8::real,$9,$10::timestamptz,$11,$12,$13,$14, COALESCE($15::timestamptz, now()), $16::timestamptz
       WHERE NOT EXISTS (SELECT 1 FROM alerts WHERE tenant_id = $1::uuid AND id = $2)
      ON CONFLICT (tenant_id, id) DO NOTHING
      RETURNING *`,
@@ -597,7 +597,7 @@ export async function insertAlert(alert: NewAlert, client?: PoolClient): Promise
       alert.tenant_id, alert.id, alert.title, alert.severity, alert.agent, alert.status,
       alert.summary, alert.confidence, alert.ai_explanation, alert.explained_at,
       alert.source_ip, alert.target, alert.mitre_technique, alert.source,
-      alert.created_at ?? null,
+      alert.created_at ?? null, alert.occurred_at ?? null,
     ]
   );
   return row ? toAlert(row) : null;

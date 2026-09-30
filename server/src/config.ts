@@ -177,6 +177,9 @@ export const config = {
   /** How often each connected socket is sent the tenant's current cursor, read
    *  from Postgres. A client that has fallen behind (a dropped frame, a Redis
    *  outage) notices within one interval and catches up. 5–120 s. */
+  /** A sensor credential silent this long (after sending within the last week)
+   *  raises a "sensor silent" alert; 0 turns the check off. */
+  sensorSilenceMinutes: Math.max(0, Math.floor(Number(process.env.SENSOR_SILENCE_MINUTES ?? 120)) || 0),
   /** Concurrent live-alert sockets one user / one tenant may hold per instance. */
   wsMaxPerUser: Math.max(1, Math.floor(Number(process.env.WS_MAX_PER_USER || 20)) || 20),
   wsMaxPerTenant: Math.max(1, Math.floor(Number(process.env.WS_MAX_PER_TENANT || 1000)) || 1000),
