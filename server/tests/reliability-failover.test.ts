@@ -41,6 +41,10 @@ const DB_URL = new URL(process.env.TEST_DATABASE_URL || "postgresql://legion@127
 const SCRIPT = join(__dirname, "..", "..", "integrations", "custom-legion.py");
 const HAS_PYTHON = spawnSync("python3", ["--version"]).status === 0;
 const HAS_REDIS = spawnSync("redis-server", ["--version"]).status === 0;
+// CI sets this: there, a missing tool must fail the run, not skip the scenarios.
+if (process.env.LEGION_REQUIRE_FAILURE_INJECTION === "1" && (!HAS_PYTHON || !HAS_REDIS)) {
+  throw new Error(`failure-injection tests require python3 and redis-server (python3: ${HAS_PYTHON}, redis-server: ${HAS_REDIS})`);
+}
 
 let work: string;
 let tenant: string; let user: User; let cred: TestCredential;
@@ -199,7 +203,7 @@ describe.skipIf(!HAS_PYTHON)("database restart during ingestion", () => {
     expect(Math.abs(new Date(late[0]!.occurred_at!).getTime() - new Date(during).getTime())).toBeLessThan(1500);
 
     // Every one of them is emailed exactly once.
-    await until(async () => (await jobs("alert_email")).sent === 8, 30_000, "all emails sent").catch(async (e) => { console.log("JOBS", JSON.stringify((await query("SELECT dedupe_key, status, attempts, locked_until > now() AS leased, left(last_error,80) AS err, next_attempt_at - now() AS due_in FROM notification_outbox WHERE kind = $1", ["alert_email"])).rows)); throw e; });
+    await until(async () => (await jobs("alert_email")).sent === 8, 30_000, "all emails sent").catch(async (e) => { console.log("outbox rows:", JSON.stringify((await query("SELECT dedupe_key, status, attempts, locked_until > now() AS leased, left(last_error, 80) AS err FROM notification_outbox WHERE kind = $1", ["alert_email"])).rows)); throw e; });
     expect(smtp.accepted).toHaveLength(8);
     expect(dupes(smtp.accepted)).toEqual([]);
   }, 120_000);

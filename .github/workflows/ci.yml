@@ -40,6 +40,8 @@ jobs:
           fi
       - name: Backup, verify and restore against real Postgres
         run: bash ops/tests/test-backup-restore.sh
+      - name: Wazuh integration script (retries, spool, drain)
+        run: python3 -m unittest integrations/test_custom_legion.py
 
   dependencies:
     name: Known vulnerabilities in the lockfile
@@ -132,7 +134,15 @@ jobs:
         working-directory: packages/agent-identity
         run: npm ci && npm run build
       - run: npm run check
+      # The reliability suites inject real failures: they restart redis-server
+      # and use age-encrypted backups. Without these tools those scenarios used
+      # to skip silently; LEGION_REQUIRE_FAILURE_INJECTION turns a missing
+      # tool into a failure instead.
+      - name: Tools for the failure-injection tests
+        run: sudo apt-get update && sudo apt-get install -y redis-server age
       - run: npm test
+        env:
+          LEGION_REQUIRE_FAILURE_INJECTION: "1"
       - run: npm run build
 
   # ---------------------------------------------------------------------------
