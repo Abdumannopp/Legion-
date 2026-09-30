@@ -122,9 +122,22 @@ beforehand with `CREATE INDEX CONCURRENTLY` (same name), so the boot-time statem
 
 ## 3. Evidence
 
-### 3.1 Test runs (this commit, real PostgreSQL 16)
+### 3.1 Test runs (final code of this phase, real PostgreSQL 16, Node 22)
 
-See section 3.3. The raw logs are summarised there.
+| Suite | Result |
+|---|---|
+| Server `tsc --noEmit` and `npm run build` | clean |
+| Server tests (`npx vitest run`) | **38 files, 960 tests passed**; the baseline was 34 files, 857 tests |
+| Agent-identity `npm run check` / `npm test` | clean / **25 files, 767 passed** |
+| Agent-identity `npm run test:security` | **14 files, 424 passed** |
+| Agent-identity attack assessment (`npm run assess`) | **13 files, 56 passed** |
+| End-to-end: provision role, API as app role, real `custom-legion.py`, agents (`ops/tests/e2e-wazuh.mjs`) | **all checks passed** |
+| Frontend `vitest` / `lint` (tsc + i18n) / `next build` | **126 passed** / clean / built (proxy registered, pages dynamic) |
+| Wazuh integration (`python3 -m unittest integrations/test_custom_legion.py`) | **11 passed** |
+
+The new security test files: `auth-hardening` (16), `session-token-hardening` (with checkout-token cases in
+`saas-signup-billing`), `authorization-hardening` (24, including the source-derived RBAC matrix),
+`network-hardening` (30), and `webhook-auth` additions; frontend `csp.test.ts`, `session-refresh.test.ts`.
 
 ### 3.2 Fixes proven by failing first
 
