@@ -112,15 +112,16 @@ describe("Kill switch bypass attempts", () => {
   scenario({
     id: "KSB-5",
     category: "Kill switch bypass",
-    title: "Tenant-wide /kill-switch/all targets AI agents only — checking whether a compromised service account survives it",
+    title: "Tenant-wide /kill-switch/all and a compromised service account",
     attackPath: "An administrator responds to a suspected organisation-wide compromise with POST /kill-switch/all. By this module's own design that route only suspends active ai_agent identities. This checks, factually, whether a compromised *service account* (the kind of identity a tool server or MCP bridge uses) is left running by that same call — a real path an attacker who specifically compromised a service account, rather than an AI agent, could rely on.",
-    expectedDefense: "Reported factually either way. If service accounts are deliberately out of scope for the blanket tenant-wide stop, that is a real operational gap for administrators to know about (they would need POST /kill-switch/agents/:id per service account, or a future tenant-wide option covering both kinds), not an assumed protection.",
+    expectedDefense: "By default /kill-switch/all stops AI agents only (unchanged behaviour); with includeServiceAccounts: true the same call also stops every service account, so an organisation-wide response leaves no machine identity running.",
   }, async (ev) => {
     const agent = await mkAgent(w, ["alerts:read"]);
     const sa = await request(w.t.app).post("/service-accounts").set(as("alice")).send({ name: "compromised-tool-server" });
     const saToken = (await request(w.t.app).post("/agent/v1/token").set(bearer(sa.body.credential.secret))).body.access_token as string;
 
-    const killAll = await request(w.t.app).post("/kill-switch/all").set(as("alice")).send({ reason: "suspected organisation-wide compromise", compromise: "confirmed", confirmAll: true });
+    const killAll = await request(w.t.app).post("/kill-switch/all").set(as("alice"))
+      .send({ reason: "suspected organisation-wide compromise", compromise: "confirmed", confirmAll: true, includeServiceAccounts: true });
     ev("killAllResult", { affectedCount: killAll.body?.affected?.length, affectedIds: killAll.body?.affected?.map((x: { identityId: string }) => x.identityId) });
 
     const agentAfter = await request(w.t.app).get("/agent/v1/whoami").set(bearer(agent.token));
@@ -130,6 +131,9 @@ describe("Kill switch bypass attempts", () => {
 
     const agentStopped = agentAfter.status === 401;
     const saSurvived = saAfter.status === 200;
+    if (agentStopped && !saSurvived) {
+      return defended("With includeServiceAccounts: true, POST /kill-switch/all stopped the AI agent and the service account alike.");
+    }
     if (agentStopped && saSurvived) {
       return partial(
         "POST /kill-switch/all correctly stopped the AI agent, but the service account (a plausible target for compromise — tool servers and MCP bridges authenticate as service accounts) was left completely unaffected and kept working normally.",

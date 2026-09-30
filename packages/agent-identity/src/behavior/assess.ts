@@ -1,3 +1,4 @@
+import { isBlocked } from "../firewall/types.js";
 import { ATTACK_INDICATORS, destinationKey, isExternal, isPeer } from "./keys.js";
 import { levelOf, type Assessment, type BehaviorProfile, type Signal, type SignalCategory, type WindowEvent } from "./types.js";
 
@@ -57,7 +58,7 @@ export function assess(input: AssessInput): Assessment {
 
   const minutes = Math.max(1, (input.windowEnd.getTime() - input.windowStart.getTime()) / 60_000);
   const perHour = (events.length * 60) / minutes;
-  const blocks = events.filter((e) => e.decision === "BLOCK" && !e.ruleIds.every((r) => r.startsWith("behavior.")));
+  const blocks = events.filter((e) => isBlocked(e.decision) && !e.ruleIds.every((r) => r.startsWith("behavior.")));
   const est = p.established;
 
   // ---- Request volume --------------------------------------------------------
@@ -135,7 +136,7 @@ export function assess(input: AssessInput): Assessment {
       sig("agent_communication", "a2a.burst", 15, `${Math.round(msgPerHour)} agent messages/hour against a normal ${Math.round(p.messagesPerHour)}.`);
     }
   }
-  if (events.some((e) => e.viaMessage) && events.filter((e) => e.viaMessage && e.decision === "BLOCK").length >= 3) {
+  if (events.some((e) => e.viaMessage) && events.filter((e) => e.viaMessage && isBlocked(e.decision)).length >= 3) {
     sig("agent_communication", "a2a.blocked_on_behalf", 15, "Repeatedly blocked while acting on another agent's request.");
   }
 

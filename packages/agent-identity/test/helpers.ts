@@ -49,7 +49,7 @@ export interface TestApp {
 
 export async function resetDb(pool: pg.Pool) {
   await pool.query(`
-    DROP TABLE IF EXISTS agent_skill_assignments, agent_interactions, agent_trust_graph_snapshots, security_events, security_notifications,
+    DROP TABLE IF EXISTS agent_action_approvals, agent_skill_assignments, agent_interactions, agent_trust_graph_snapshots, security_events, security_notifications,
       agent_behavior_profiles, agent_behavior_state, agent_behavior_events,
       tool_call_audit, tool_call_tickets, content_ingestion_log, content_risk_acknowledgements,
       agent_messages, agent_delegations, firewall_decisions, firewall_policies,
@@ -136,4 +136,18 @@ export async function agentWithToken(t: TestApp, adminId: string, body: Record<s
 export async function auditRows(pool: pg.Pool, where = "true", args: unknown[] = []) {
   const r = await pool.query(`SELECT * FROM principal_audit_log WHERE ${where} ORDER BY seq`, args);
   return r.rows;
+}
+
+/**
+ * Per-action approval (responses.confirm) is on by default for every tool
+ * permission that acts on the world. Suites that test what sits underneath
+ * it — tool analysis and tickets, the kill switch, behaviour baselines,
+ * agent-to-agent rules — use a policy without it so they exercise what they
+ * test. Approval itself, with the product defaults, is tested in
+ * policy-responses.test.ts. Nothing here changes the product default.
+ */
+export const WITHOUT_APPROVALS = { confirm: { permissions: [] as string[] } };
+export function withoutApprovals(policy: Record<string, unknown> = {}): Record<string, unknown> {
+  const responses = (policy.responses ?? {}) as Record<string, unknown>;
+  return { ...policy, responses: { ...WITHOUT_APPROVALS, ...responses } };
 }

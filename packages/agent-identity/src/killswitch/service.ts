@@ -125,8 +125,12 @@ export class KillSwitch {
 
   async activate(input: {
     tenantId: string;
-    /** Identities to stop, or "all_agents" for every active AI agent in the tenant. */
-    identityIds: string[] | "all_agents";
+    /**
+     * Identities to stop; "all_agents" for every active AI agent in the
+     * tenant; "all_machines" for every active AI agent and service account
+     * (tool servers and MCP bridges authenticate as service accounts).
+     */
+    identityIds: string[] | "all_agents" | "all_machines";
     reason: string | null;
     compromise: Compromise;
     actor: HumanPrincipal | ExternalPrincipal;
@@ -151,17 +155,17 @@ export class KillSwitch {
 
     await this.o.store.tx(async (c) => {
       // Locked in id order so two concurrent activations cannot deadlock.
-      const rows = input.identityIds === "all_agents"
+      const rows = input.identityIds === "all_agents" || input.identityIds === "all_machines"
         ? (await c.query(
-            `SELECT * FROM machine_identities WHERE tenant_id = $1 AND kind = 'ai_agent' AND status = 'active' ORDER BY id FOR UPDATE`,
-            [input.tenantId],
+            `SELECT * FROM machine_identities WHERE tenant_id = $1 AND kind = ANY($2::text[]) AND status = 'active' ORDER BY id FOR UPDATE`,
+            [input.tenantId, input.identityIds === "all_machines" ? ["ai_agent", "service_account"] : ["ai_agent"]],
           )).rows
         : (await c.query(
             `SELECT * FROM machine_identities WHERE tenant_id = $1 AND id = ANY($2::uuid[]) ${input.onlyKind ? "AND kind = $3" : ""} ORDER BY id FOR UPDATE`,
             input.onlyKind ? [input.tenantId, input.identityIds, input.onlyKind] : [input.tenantId, input.identityIds],
           )).rows;
       const found: Identity[] = rows.map(toIdentity);
-      if (input.identityIds !== "all_agents") {
+      if (Array.isArray(input.identityIds)) {
         const ids = new Set(found.map((i) => i.id));
         result.notFound = input.identityIds.filter((id) => !ids.has(id));
       }

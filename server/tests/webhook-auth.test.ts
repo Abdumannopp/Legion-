@@ -663,9 +663,9 @@ describe("secrets stay secret", () => {
     }
     expect(all).not.toMatch(/x-legion-signature|x-legion-nonce/i);
     expect(all).not.toMatch(/whs_/);
-    // What is logged of a key id is a short prefix, only for well-formed ids.
+    // What is logged of a key id is a short prefix (base64url, so it may hold "-" or "_"), only for well-formed ids.
     for (const line of logged.filter((l) => l.includes("rejected webhook"))) {
-      expect(line).toMatch(/^Legion: rejected webhook \([a-z0-9() =\/_-]+\) key=(-|whk_\w{4}) ip=\S+$/);
+      expect(line).toMatch(/^Legion: rejected webhook \([a-z0-9() =\/_-]+\) key=(-|whk_[A-Za-z0-9_-]{4}) ip=\S+$/);
     }
   });
 

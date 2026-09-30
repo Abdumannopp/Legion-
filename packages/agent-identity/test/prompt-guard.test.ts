@@ -251,6 +251,19 @@ describe("agent-to-agent: injection cannot spread", () => {
     expect(res.body.error.rules).toContain("a2a.injection_payload");
     const [e] = await events();
     expect(e).toMatchObject({ principal_id: a.agent.id, source: "agent_message", verdict: "malicious" });
+    // Spreading an injection payload quarantines the sender outright (the
+    // default responses.quarantineOn): suspended before it hears the answer.
+    expect(res.body.error).toMatchObject({ decision: "QUARANTINE", code: "agent_quarantined" });
+    expect((await request(t.app).post("/agent/v1/alerts/A/status").set(bearer(a.token))).status).toBe(401);
+  });
+
+  it("with quarantine turned off for it, the sender is still held by the content quarantine", async () => {
+    const { a, b } = await pair();
+    await setPolicy({ agentMessages: { allow: [{ from: a.agent.id, to: b.agent.id }] }, responses: { quarantineOn: [] } });
+    const res = await request(t.app).post("/agent/v1/messages").set(bearer(a.token))
+      .send({ toAgentId: b.agent.id, requestedPermission: "alerts:read", payload: { note: MALICIOUS } });
+    expect(res.status).toBe(403);
+    expect(res.body.error.decision).toBe("BLOCK");
     expect((await request(t.app).post("/agent/v1/alerts/A/status").set(bearer(a.token))).body.error.rules).toContain("content.quarantine");
   });
 

@@ -17,6 +17,11 @@ const body = z.strictObject({
 const allBody = body.extend({
   /** Must be true: a guard against stopping every agent by accident. */
   confirmAll: z.literal(true, { error: "set confirmAll: true to stop every AI agent in the organisation" }),
+  /**
+   * Also stop every service account (tool servers, MCP bridges). Default
+   * false, as before; an organisation-wide compromise usually wants true.
+   */
+  includeServiceAccounts: z.boolean().default(false),
 });
 
 /** Administrators: the emergency stop. Mounted at /kill-switch. */
@@ -41,12 +46,13 @@ export function killSwitchRouter(d: Deps): Router {
     res.json(result);
   });
 
-  /** Stop every active AI agent in the organisation. */
+  /** Stop every active AI agent in the organisation (and, if asked, every service account). */
   router.post("/all", admin, async (req, res) => {
     const parsed = allBody.safeParse(req.body ?? {});
     if (!parsed.success) return sendError(res, 400, "invalid_request", parsed.error.issues[0]?.message ?? "invalid");
     const result = await d.killSwitch.activate({
-      tenantId: me(req).tenantId, identityIds: "all_agents", reason: parsed.data.reason, compromise: parsed.data.compromise,
+      tenantId: me(req).tenantId, identityIds: parsed.data.includeServiceAccounts ? "all_machines" : "all_agents",
+      reason: parsed.data.reason, compromise: parsed.data.compromise,
       actor: me(req), kind: "agent_killed", ...origin(req),
     });
     res.json(result);

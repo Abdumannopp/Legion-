@@ -13,7 +13,7 @@ import pg from "pg";
 import request from "supertest";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { applyLeastPrivilegeRole } from "../src/index.js";
-import { agentWithToken, as, bearer, DATABASE_URL, makeApp, resetDb, TENANT_A, TENANT_B, type TestApp } from "./helpers.js";
+import { agentWithToken, as, bearer, DATABASE_URL, makeApp, resetDb, TENANT_A, TENANT_B, type TestApp, withoutApprovals } from "./helpers.js";
 
 const ROLE = "lp_gw_test_role";
 const PASSWORD = "lp-gw-test-password";
@@ -51,7 +51,7 @@ beforeEach(async () => {
   await resetDb(t.pool);
   await t.identity.migrate();
   t.host.add("alice", TENANT_A, "admin");
-  const res = await request(t.app).put("/firewall/policy").set(as("alice")).send({ database: { tables: { [TABLE]: ["select", "insert", "update"] } } });
+  const res = await request(t.app).put("/firewall/policy").set(as("alice")).send(withoutApprovals({ database: { tables: { [TABLE]: ["select", "insert", "update"] } } }));
   if (res.status !== 200) throw new Error(JSON.stringify(res.body));
 });
 

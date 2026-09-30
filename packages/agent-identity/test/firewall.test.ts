@@ -324,10 +324,18 @@ describe("agent-to-agent communication", () => {
   });
 
   it("blocks laundering, forged message ids, cross-tenant recipients and secrets", async () => {
-    const { a, b } = await pair();
-    await setPolicy({ agentMessages: { allow: [{ from: a.agent.id, to: b.agent.id }] } });
-    const launder = await request(t.app).post("/agent/v1/messages").set(bearer(a.token)).send({ toAgentId: b.agent.id, requestedPermission: "alerts:update_status" });
+    const { a: launderer, b } = await pair();
+    await setPolicy({ agentMessages: { allow: [{ from: launderer.agent.id, to: b.agent.id }] } });
+    const launder = await request(t.app).post("/agent/v1/messages").set(bearer(launderer.token)).send({ toAgentId: b.agent.id, requestedPermission: "alerts:update_status" });
     expect(launder.body.error.rules).toContain("a2a.laundering");
+    // Laundering is an attempt at privilege escalation: by default the agent
+    // is quarantined before it hears the answer.
+    expect(launder.body.error).toMatchObject({ code: "agent_quarantined", decision: "QUARANTINE", approval: null });
+    expect((await request(t.app).get("/agent/v1/whoami").set(bearer(launderer.token))).status).toBe(401);
+
+    // The rest with a sender that has not tried anything.
+    const a = await agentWithToken(t, "alice", { name: "planner-2", permissions: ["alerts:read", "alerts:comment"] });
+    await setPolicy({ agentMessages: { allow: [{ from: a.agent.id, to: b.agent.id }] } });
 
     const forged = await request(t.app).get("/agent/v1/alerts").set(bearer(b.token)).set("x-legion-message-id", "00000000-0000-4000-8000-000000000000");
     expect(forged.body.error.rules).toEqual(["a2a.message_invalid"]);
@@ -343,6 +351,7 @@ describe("agent-to-agent communication", () => {
     const secret = await request(t.app).post("/agent/v1/messages").set(bearer(a.token))
       .send({ toAgentId: b.agent.id, requestedPermission: "alerts:read", payload: { creds: a.secret } });
     expect(secret.body.error.rules).toContain("a2a.secret_in_payload");
+    expect(secret.body.error.decision).toBe("QUARANTINE");
   });
 
   it("a request can be forwarded down the chain, but no further than maxDepth", async () => {

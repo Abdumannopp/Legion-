@@ -8,7 +8,7 @@
 import request from "supertest";
 import { describe } from "vitest";
 import { as, bearer } from "../test/helpers.js";
-import { authorize, establishNormalBaseline, HTTP_CALL, mkAgent, SLACK, useWorld } from "./setup.js";
+import { authorize, establishNormalBaseline, HTTP_CALL, mkAgent, SLACK, useWorld, authorizeApproved } from "./setup.js";
 import { defended, notDefended, partial, scenario } from "./harness.js";
 
 const w = useWorld();
@@ -66,7 +66,7 @@ describe("Suspicious behavior", () => {
     const newToolAfterRefresh = await authorize(w, a, HTTP_CALL("https://api.partner.example/upload-2", "POST", "data"));
     ev("newTool_afterRefresh", { status: newToolAfterRefresh.status, blockedBy: newToolAfterRefresh.body?.error?.rules ?? newToolAfterRefresh.body?.rules?.map((r: { id: string }) => r.id) });
 
-    const establishedStillWorks = await postSlack(a.token, "C0SECOPS1");
+    const establishedStillWorks = await authorizeApproved(w, a, SLACK("C0SECOPS1"));
     ev("establishedChannelStillWorks", { status: establishedStillWorks.status, decision: establishedStillWorks.body?.decision });
 
     const level = freshAssessment.body.assessment?.level;

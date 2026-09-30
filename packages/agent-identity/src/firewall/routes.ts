@@ -2,14 +2,18 @@ import { Router, type Request } from "express";
 import { z } from "zod";
 import type { AuditLog } from "../audit.js";
 import type { createGuards } from "../authorize.js";
-import { ALL_PERMISSIONS, exceedsRole, type Permission } from "../permissions.js";
+import { ALL_PERMISSIONS, exceedsRole, isPermission, roleAllows, type Permission } from "../permissions.js";
+import type { ApprovalStatus, ApprovalStore } from "./approvals.js";
 import { clientIp, sendError } from "../principal.js";
 import type { IdentityStore } from "../store.js";
 import type { HostAdapter, HumanPrincipal, MachinePrincipal } from "../types.js";
 import { MAX_DELEGATION_DAYS, type DelegationStore } from "./delegations.js";
 import type { AgentFirewall } from "./engine.js";
+import { DECISIONS, refusalCode, refusingHits } from "./types.js";
 import type { DecisionLog } from "./log.js";
 import { policySchema, type PolicyStore } from "./policy.js";
+import { hashToolDefinition } from "./scan.js";
+import { scanToolDefinition } from "./tool-poisoning.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const permission = z.enum(ALL_PERMISSIONS as unknown as [Permission, ...Permission[]]);
@@ -23,6 +27,7 @@ type Deps = {
   policies: PolicyStore;
   decisions: DecisionLog;
   delegations: DelegationStore;
+  approvals: ApprovalStore;
 };
 
 const me = (req: Request) => req.principal as HumanPrincipal;
@@ -68,7 +73,7 @@ export function firewallAdminRouter(d: Deps): Router {
     const decision = s(q.decision);
     res.json({
       decisions: await d.decisions.list(me(req).tenantId, {
-        decision: decision && ["ALLOW", "WARN", "BLOCK"].includes(decision) ? decision : undefined,
+        decision: decision && (DECISIONS as readonly string[]).includes(decision) ? decision : undefined,
         principalId: s(q.principalId),
         surface: s(q.surface),
         before: s(q.before) && /^\d+$/.test(s(q.before)!) ? s(q.before) : undefined,
@@ -142,6 +147,83 @@ export function firewallAdminRouter(d: Deps): Router {
     res.status(204).end();
   });
 
+  // ---- Approvals (CONFIRM decisions) ----------------------------------------
+  // Only people answer. An approval is for one exact action by one agent; it
+  // is used once, when the agent retries, and every other rule is checked
+  // again then.
+  const APPROVAL_STATUSES: ApprovalStatus[] = ["pending", "approved", "denied", "consumed", "expired", "cancelled"];
+  router.get("/approvals", staff, async (req, res) => {
+    const status = typeof req.query.status === "string" && (APPROVAL_STATUSES as string[]).includes(req.query.status)
+      ? req.query.status as ApprovalStatus : undefined;
+    const identityId = typeof req.query.agentId === "string" ? req.query.agentId : undefined;
+    res.json({ approvals: await d.approvals.list(me(req).tenantId, { status, identityId, limit: Number(req.query.limit) || 100 }) });
+  });
+
+  router.get("/approvals/:id", staff, async (req, res) => {
+    const a = await d.approvals.get(me(req).tenantId, String(req.params.id));
+    if (!a) return sendError(res, 404, "not_found", "No such approval request.");
+    res.json({ approval: a });
+  });
+
+  const answerBody = z.strictObject({ reason: z.string().trim().max(500).optional() });
+  const answer = (verdict: "approved" | "denied") => async (req: Request, res: import("express").Response) => {
+    const parsed = answerBody.safeParse(req.body ?? {});
+    if (!parsed.success) return sendError(res, 400, "invalid_request", parsed.error.issues[0]?.message ?? "invalid");
+    const user = me(req);
+    const a = await d.approvals.get(user.tenantId, String(req.params.id));
+    if (!a) return sendError(res, 404, "not_found", "No such approval request.");
+    const agent = (await d.store.get(user.tenantId, "ai_agent", a.identityId)) ?? (await d.store.get(user.tenantId, "service_account", a.identityId));
+    if (!agent) return sendError(res, 404, "not_found", "No such approval request.");
+    // Who may answer: an administrator, or the person answerable for the agent.
+    if (user.role !== "admin" && agent.ownerUserId !== user.id) {
+      return sendError(res, 403, "forbidden", "Only an administrator or the agent's owner can answer this request.");
+    }
+    // Nobody can approve what they could not do themselves.
+    if (verdict === "approved" && a.permission && (!isPermission(a.permission) || !roleAllows(user.role, a.permission))) {
+      return sendError(res, 403, "exceeds_your_role", `Your role does not allow ${a.permission}.`);
+    }
+    const decided = await d.store.tx(async (c) => {
+      const row = await d.approvals.decide(user.tenantId, a.id, verdict, user.id, parsed.data.reason ?? null, c);
+      if (!row) return null;
+      await d.audit.record({
+        ...ctxOf(req), action: verdict === "approved" ? "firewall.approval_granted" : "firewall.approval_denied", outcome: "success",
+        resourceType: agent.kind, resourceId: agent.id, reason: parsed.data.reason,
+        details: { approvalId: a.id, decisionId: a.decisionId, action: a.action, permission: a.permission, actionDigest: a.actionDigest },
+      }, c);
+      return row;
+    });
+    if (!decided) return sendError(res, 409, "not_pending", `This request is ${a.status === "pending" ? "expired" : a.status}; it can no longer be answered.`);
+    res.json({ approval: decided });
+  };
+  router.post("/approvals/:id/approve", staff, answer("approved"));
+  router.post("/approvals/:id/deny", staff, answer("denied"));
+
+  // ---- MCP tool definitions ---------------------------------------------------
+  // Before approving an MCP server's tools, see what the model would read:
+  // descriptions (and parameter descriptions) are scanned for instructions
+  // aimed at the model, and each tool's hash is what the policy pins.
+  const mcpBody = z.strictObject({
+    server: z.string().regex(/^[A-Za-z0-9_.:-]{1,100}$/),
+    tools: z.array(z.strictObject({ name: z.string().min(1).max(100), description: z.string().max(20_000).optional(), inputSchema: z.unknown().optional() })).min(1).max(200),
+  });
+  router.post("/mcp/inspect", staff, async (req, res) => {
+    const parsed = mcpBody.safeParse(req.body ?? {});
+    if (!parsed.success) return sendError(res, 400, "invalid_request", parsed.error.issues[0]?.message ?? "invalid");
+    const { policy } = await d.policies.get(me(req).tenantId);
+    const pinned = policy.mcp.servers[parsed.data.server]?.tools ?? {};
+    res.json({
+      server: parsed.data.server,
+      tools: parsed.data.tools.map((tool) => {
+        const c = scanToolDefinition(tool);
+        const sha256 = hashToolDefinition(tool);
+        return {
+          name: tool.name, sha256, verdict: c.verdict, riskScore: c.score, findings: c.findings,
+          pinned: pinned[tool.name] ? (pinned[tool.name]!.sha256 === sha256 ? "matches" : "changed") : "not_approved",
+        };
+      }),
+    });
+  });
+
   return router;
 }
 
@@ -169,10 +251,12 @@ export function agentMessageRouter(d: Deps): Router {
     if (!messageId) {
       return res.status(403).json({
         error: {
-          code: "firewall_blocked",
-          message: decision.hits.find((h) => h.effect === "BLOCK")?.reason ?? "Blocked.",
+          code: refusalCode(decision.decision),
+          message: refusingHits(decision)[0]?.reason ?? "Blocked.",
           decisionId: decision.decisionId,
-          rules: decision.hits.filter((h) => h.effect === "BLOCK").map((h) => h.id),
+          decision: decision.decision,
+          rules: refusingHits(decision).map((h) => h.id),
+          approval: decision.approval ?? null,
         },
       });
     }
@@ -181,6 +265,15 @@ export function agentMessageRouter(d: Deps): Router {
 
   router.get("/messages", d.guards.requireMachine(["ai_agent"]), d.guards.traced("agents:read_inbox"), async (req, res) => {
     res.json({ messages: await d.firewall.inbox(req.principal as MachinePrincipal) });
+  });
+
+  // An agent may see where its own requests for approval stand — nothing
+  // else, and it has no way to answer one.
+  router.get("/approvals/:id", d.guards.requireMachine(["ai_agent", "service_account"]), d.guards.traced("approvals:read_own"), async (req, res) => {
+    const p = req.principal as MachinePrincipal;
+    const a = await d.approvals.get(p.tenantId, String(req.params.id));
+    if (!a || a.identityId !== p.id) return sendError(res, 404, "not_found", "No such approval request.");
+    res.json({ approval: { id: a.id, status: a.status, action: a.action, expiresAt: a.expiresAt, decidedAt: a.decidedAt } });
   });
 
   return router;

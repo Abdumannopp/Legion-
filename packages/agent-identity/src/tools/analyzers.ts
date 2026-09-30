@@ -7,6 +7,7 @@ import { byteSize, findSecrets, findUrls, hashToolDefinition } from "../firewall
 import type { Sensitivity } from "../firewall/types.js";
 import type { MachinePrincipal } from "../types.js";
 import { Findings } from "./findings.js";
+import { toolDefinitionHits } from "../firewall/tool-poisoning.js";
 import { analyzeShell } from "./shell.js";
 import { analyzeSql } from "./sql.js";
 import type { ToolAnalysis, ToolCall } from "./types.js";
@@ -277,6 +278,10 @@ function analyzeMcp(c: Extract<ToolCall, { kind: "mcp" }>, { principal, policy }
     if (spec.sideEffects === "external") for (const u of findUrls(c.args)) url(u, policy, f);
   }
   secrets(c.args, f, "mcp.secret_in_args", "The arguments");
+  // Pinned or not, the definition is read by the model: scan it every call.
+  const poisoning = toolDefinitionHits(c.definition);
+  f.hits.push(...poisoning.hits);
+  f.factors.push(...poisoning.factors);
   const write = !spec || spec.sideEffects !== "none";
   return {
     toolKind: "mcp", operation: "call_tool", target: `${c.server}/${c.definition.name}`, destination: `mcp:${c.server}/${c.definition.name}`,

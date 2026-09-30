@@ -13,7 +13,7 @@
     "build": "tsc -p tsconfig.build.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:security": "vitest run test/untrusted-content.test.ts test/injection-regression.test.ts test/suspension-immediate.test.ts test/notice-retry-automatic.test.ts test/assessment-provenance.test.ts test/killswitch.test.ts test/prompt-guard.test.ts test/firewall.test.ts test/db-least-privilege.test.ts test/tools-database-executor.test.ts test/tools-analyzers.test.ts test/skills.test.ts test/skills-redteam.test.ts test/skills-registry.test.ts",
+    "test:security": "vitest run test/untrusted-content.test.ts test/injection-regression.test.ts test/suspension-immediate.test.ts test/notice-retry-automatic.test.ts test/assessment-provenance.test.ts test/killswitch.test.ts test/prompt-guard.test.ts test/firewall.test.ts test/db-least-privilege.test.ts test/tools-database-executor.test.ts test/tools-analyzers.test.ts test/skills.test.ts test/skills-redteam.test.ts test/skills-registry.test.ts test/policy-responses.test.ts",
     "assess": "vitest run --config assessment/vitest.config.ts",
     "assess:validate": "node assessment/provenance.mjs validate assessment/results/latest.jsonl"
   },

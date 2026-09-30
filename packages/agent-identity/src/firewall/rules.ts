@@ -3,7 +3,8 @@ import type { HumanRole, MachinePrincipal } from "../types.js";
 import { classifyUrl } from "./destinations.js";
 import { checkFilePath } from "./paths.js";
 import { PROTECTED_TABLES, type FirewallPolicy } from "./policy.js";
-import { byteSize, findSecrets, findUrls } from "./scan.js";
+import { byteSize, findSecrets, findUrls, hashToolDefinition } from "./scan.js";
+import { toolDefinitionHits } from "./tool-poisoning.js";
 import type { ContentRiskSummary, Verdict } from "../prompt-guard/types.js";
 import type { BehaviorState } from "../behavior/monitor.js";
 import { destinationKey } from "../behavior/keys.js";
@@ -198,6 +199,15 @@ export function evaluateRules(input: RuleInputs): RuleOutput {
       else if (spec.sha256 !== req.definitionSha256) {
         hard("mcp.definition_changed",
           "The tool's advertised definition no longer matches the approved one (possible tool poisoning). Review and re-approve it.");
+      }
+      if (req.definition) {
+        // The definition the caller has must be the one it hashed.
+        if (hashToolDefinition(req.definition) !== req.definitionSha256 || req.definition.name !== req.tool) {
+          hard("mcp.definition_mismatch", "The tool definition supplied does not match its hash or name.");
+        }
+        const poisoning = toolDefinitionHits(req.definition);
+        hits.push(...poisoning.hits);
+        factors.push(...poisoning.factors);
       }
       if (!spec) break;
       permission = spec.permission;

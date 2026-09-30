@@ -182,17 +182,92 @@ written, or the policy can't be read, the answer is BLOCK.
 
 ### Decisions
 
-- **Hard** rule hit → BLOCK, always.
-- **Soft** rule hit (host or port not allowlisted, row limit, rate limit,
-  agent pair not allowlisted, risk score ≥ `blockAt`) → BLOCK in `enforce`
-  mode. In `monitor` mode it becomes WARN, logged with `would_block = true`.
-- WARN hit or score ≥ `warnAt` → WARN: the action runs, flagged in the
-  `x-legion-firewall` response header, the log, and the `onFirewallDecision`
-  hook (connect this to Legion's alerting).
+Six answers, least to most severe. **Only ALLOW and WARN let an action
+run**; every guard, executor and ticket checks this with `permits()`, never
+by comparing with one value.
+
+| Decision | Effect |
+|---|---|
+| ALLOW | Runs. |
+| WARN | Runs; flagged in `x-legion-firewall`, the log and `onFirewallDecision`. |
+| CONFIRM | Does not run until a person approves **this exact action** (below). |
+| BLOCK | Does not run. |
+| QUARANTINE | Does not run, and the agent is suspended through the kill switch **before the answer is returned** (tokens, tool tickets and pending messages withdrawn, running executions aborted, security event + audit, admins notified). A person resumes it after review. |
+| KILL | As QUARANTINE, as a confirmed compromise: its credentials and people's delegations are revoked too. |
+
+- The strictest rule hit wins. **Hard** hits apply in every mode.
+- **Soft** hits (host or port not allowlisted, row limit, rate limit, agent
+  pair not allowlisted, risk score ≥ `blockAt`) refuse in `enforce` mode. In
+  `monitor` mode they become WARN, logged with `would_block = true`; monitor
+  mode also never quarantines or kills (hard hits still refuse, as BLOCK). A
+  hard CONFIRM is not waived by monitor mode.
+- Policy `responses` decides what goes beyond BLOCK:
+  - `confirm.permissions` — permissions an agent may hold but never use
+    without a person's approval per action. **Default: every tool
+    permission that acts on the world** (`tool.*:write`,
+    `tool.shell:execute`).
+  - `confirm.riskAt` — otherwise-allowed actions at or above this score also
+    need approval (default 101 = off).
+  - `quarantineOn` / `killOn` — rule ids whose refusal also contains the
+    agent. Defaults: reaching into another tenant, laundering permissions
+    through another agent, spreading an injection payload, structured tool
+    requests hidden in a message, credentials in outgoing data → QUARANTINE;
+    Legion's own credentials sent out (`http.legion_secret`) → KILL.
 - **An AI/LLM is never the decider.** `firewallAdvisors` run only after a
-  non-BLOCK deterministic decision. They can only return WARN or BLOCK, each
-  is limited to 2 seconds, and failures are logged and ignored. Tests prove
-  an advisor can't turn a BLOCK into an ALLOW.
+  deterministic decision below BLOCK. They can only return WARN or BLOCK,
+  each is limited to 2 seconds, and failures are logged and ignored. Tests
+  prove an advisor can't turn a BLOCK into an ALLOW.
+- Order inside `evaluate()`: rules → responses → advisors → approval
+  (consume or request) → **decision recorded** → interaction recorded →
+  **containment applied** → host hook → return. If the decision cannot be
+  recorded, the answer is BLOCK.
+
+### Approvals (CONFIRM)
+
+1. The agent's call is answered `403 approval_required` with
+   `approval: { id, status: "pending", expiresAt }`. No tool ticket is issued.
+   Asking again for the same action reuses the open request; each agent may
+   have at most `confirm.maxPendingPerAgent` open.
+2. A person answers: `GET /firewall/approvals`, `POST
+   /firewall/approvals/:id/approve` or `/deny` (session only — machines
+   cannot reach these routes). Only an administrator or the agent's owner may
+   answer, and nobody can approve a permission their own role does not allow.
+   Answers are audited (`firewall.approval_granted` / `_denied`).
+3. The agent retries the same call with `x-legion-approval-id`. The approval
+   is consumed atomically, only if it is approved, unexpired, unused, for
+   this tenant, this agent, and the **same digest** (the call as sent, plus
+   the person it acts for and the relayed message it cites). Everything else
+   is evaluated again: a suspension, a revoked permission or new untrusted
+   content in between still stops it. A second use, another agent, another
+   argument or an expired approval → BLOCK `approval.invalid`; a denial →
+   BLOCK `approval.denied`.
+4. The agent can see its own request: `GET /agent/v1/approvals/:id`.
+
+### MCP tool definitions
+
+Every MCP call (direct `callMcpTool` and the tool gateway's `mcp` kind) scans
+the tool definition the server advertises — description, parameter names and
+every description/title/default/enum in its input schema — for tool
+poisoning: secret paths, requests for credentials, concealment from the user,
+hidden `<IMPORTANT>`-style blocks, steering of other tools, coercion,
+exfiltration destinations, and the injection classifier's
+override/persona/invisible-text findings. Malicious → BLOCK
+`mcp.poisoned_definition` **even if its hash was pinned** (a pin proves the
+text did not change, not that it was safe), and the text is recorded
+against the agent as malicious external content, so it is held from unsafe
+actions until a person reviews it. Suspicious → CONFIRM. A definition that
+does not match its claimed hash → BLOCK. `POST /firewall/mcp/inspect` shows
+administrators each tool's hash, verdict and findings before they pin it.
+
+### Registry
+
+`GET /agents/registry` (and `/service-accounts/registry`) — people only: for
+each identity, its owner, lifecycle status and whether it can act now,
+granted and effective permissions, tool families and assigned skills, tools
+used, connected systems (destinations, MCP servers, other agents), risk
+(level, baseline, behaviour, refusals, containments, pending approvals, an
+overall rating) and last activity — computed from Legion's records, never
+from what an agent reports.
 
 ### Decision log (`firewall_decisions`)
 
@@ -348,8 +423,8 @@ so the risk follows the content to the agent that received it.
 Every AI tool call passes through `ToolGateway.authorize` **before it runs**:
 1. The call is validated against a strict shape for its tool family.
 2. It is analysed deterministically.
-3. The agent firewall decides ALLOW, WARN or BLOCK.
-4. Blocked and high-risk calls are written to `tool_call_audit` first.
+3. The agent firewall decides (ALLOW / WARN / CONFIRM / BLOCK / QUARANTINE / KILL).
+4. Refused and high-risk calls are written to `tool_call_audit` first. A ticket is issued only when the decision permits the call.
 
 ### What is verified on every call
 
@@ -782,6 +857,7 @@ For an agent that is confirmed or strongly suspected to be compromised.
 ```bash
 curl -X POST /kill-switch/agents/<id> -d '{"reason":"Exfiltration to an unknown host","compromise":"suspected"}'
 curl -X POST /kill-switch/all -d '{"reason":"…","compromise":"confirmed","confirmAll":true}'   # every AI agent in the org
+curl -X POST /kill-switch/all -d '{"reason":"…","compromise":"confirmed","confirmAll":true,"includeServiceAccounts":true}'   # …and every service account
 ```
 
 **One transaction** (`KillSwitch.activate`):
@@ -842,7 +918,7 @@ used:
 | Endpoint | Who |
 |---|---|
 | `POST /kill-switch/agents/:id { reason (≥10 chars), compromise: suspected\|confirmed }` | admin |
-| `POST /kill-switch/all { reason, compromise, confirmAll: true }` — every active AI agent (service accounts keep running) | admin |
+| `POST /kill-switch/all { reason, compromise, confirmAll: true, includeServiceAccounts? }` — every active AI agent; with `includeServiceAccounts: true`, every service account (tool servers, MCP bridges) too | admin |
 | `GET /kill-switch/events`, `/events/verify` | admin, analyst / admin |
 | `GET /kill-switch/notifications`, `POST /kill-switch/notifications/retry` | admin |
 

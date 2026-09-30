@@ -59,6 +59,22 @@ export const principalOf = async (w: World, a: Agent) =>
 export const authorize = (w: World, a: Agent, call: unknown, headers: Record<string, string> = {}) =>
   request(w.t.app).post("/agent/v1/tools/authorize").set(bearer(a.token)).set(headers).send({ call });
 
+/**
+ * A legitimate call, let through the way the product lets it through: tool
+ * permissions that act on the world need a person's approval per action by
+ * default (policy responses.confirm), so the agent asks, an administrator
+ * approves that exact call, and the agent retries citing the approval.
+ * Scenarios use this for their "legitimate baseline" steps.
+ */
+export async function authorizeApproved(w: World, a: Agent, call: unknown): Promise<request.Response> {
+  const first = await authorize(w, a, call);
+  if (first.body?.decision !== "CONFIRM" || !first.body?.approval?.id) return first;
+  const id: string = first.body.approval.id;
+  const ok = await request(w.t.app).post(`/firewall/approvals/${id}/approve`).set(as("alice")).send({ reason: "assessment: legitimate baseline" });
+  if (ok.status !== 200) return first;
+  return authorize(w, a, call, { "x-legion-approval-id": id });
+}
+
 export const rules = (res: request.Response): string[] => res.body?.error?.rules ?? [];
 export const brief = (res: request.Response) => ({ status: res.status, decision: res.body?.decision, rules: rules(res) });
 export const isDenied = (res: request.Response) => [400, 401, 403, 404].includes(res.status);

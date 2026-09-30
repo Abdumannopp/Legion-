@@ -16,29 +16,43 @@ import { DecisionLog } from "./log.js";
 import type { PolicyStore, VersionedPolicy } from "./policy.js";
 import { evaluateRules, scoreOf, type RuleInputs } from "./rules.js";
 import { hashToolDefinition } from "./scan.js";
+import { definitionTexts, scanToolDefinition } from "./tool-poisoning.js";
+import type { Classification } from "../prompt-guard/types.js";
 import type { PromptInjectionGuard } from "../prompt-guard/guard.js";
 import type { BehaviorMonitor } from "../behavior/monitor.js";
 import { findToolRequests, matchRecentRequests, type HiddenDelegationMatch } from "../a2a/hidden.js";
 import type { InteractionLog, InteractionRow } from "../a2a/log.js";
 import { analyzeToolCall } from "../tools/analyzers.js";
-import type {
-  ActionRequest,
-  Advisor,
-  Authority,
-  Decision,
-  FirewallContext,
-  FirewallDecision,
-  RelayedMessage,
-  RuleHit,
-  Sensitivity,
+import type { ApprovalStore } from "./approvals.js";
+import {
+  DECISIONS,
+  decisionRank,
+  permits,
+  refusingHits,
+  type ActionRequest,
+  type Advisor,
+  type Authority,
+  type FirewallContext,
+  type FirewallDecision,
+  type RelayedMessage,
+  type RuleHit,
+  type Sensitivity,
 } from "./types.js";
 
+/** Thrown for every decision that does not permit the action (CONFIRM, BLOCK, QUARANTINE, KILL). */
 export class FirewallBlockedError extends Error {
   constructor(readonly decision: FirewallDecision) {
-    super(`Blocked by the agent firewall: ${decision.hits.filter((h) => h.effect === "BLOCK").map((h) => h.id).join(", ") || "blocked"}`);
+    super(`${decision.decision === "CONFIRM" ? "Needs a person's approval" : "Blocked by the agent firewall"}: ${refusingHits(decision).map((h) => h.id).join(", ") || "blocked"}`);
     this.name = "FirewallBlockedError";
   }
 }
+
+/**
+ * Applies QUARANTINE / KILL: the kill switch, wired in by createAgentIdentity.
+ * Awaited before the decision is returned, so the agent is stopped before it
+ * hears the answer.
+ */
+export type ContainmentResponder = (ctx: FirewallContext, req: ActionRequest, d: FirewallDecision) => Promise<void>;
 
 export interface FirewallOptions {
   pool: Pool;
@@ -60,6 +74,8 @@ export interface FirewallOptions {
   behavior?: BehaviorMonitor;
   /** The agent-to-agent interaction chain. Without it, interactions are not recorded. */
   interactions?: InteractionLog;
+  /** People's approvals for CONFIRM decisions. Without it, CONFIRM is answered as BLOCK. */
+  approvals?: ApprovalStore;
   log: (msg: string, err?: unknown) => void;
 }
 
@@ -125,6 +141,7 @@ export class AgentFirewall {
   private readonly velocity = new Velocity();
   private readonly advisors: Advisor[];
   private readonly lookup: (host: string) => Promise<{ address: string; family: number }[]>;
+  private responder: ContainmentResponder | null = null;
 
   constructor(private readonly o: FirewallOptions) {
     this.advisors = o.advisors ?? [];
@@ -132,9 +149,11 @@ export class AgentFirewall {
   }
 
   /**
-   * THE chokepoint. Decides ALLOW / WARN / BLOCK deterministically, records
-   * the decision, and only then returns it. If the decision cannot be
-   * recorded, the answer is BLOCK.
+   * THE chokepoint. Decides ALLOW / WARN / CONFIRM / BLOCK / QUARANTINE /
+   * KILL deterministically, records the decision, applies containment, and
+   * only then returns it. If the decision cannot be recorded, the answer is
+   * BLOCK. Nothing an agent does can reach a sensitive action without
+   * passing here first: every guard, executor and ticket starts with it.
    */
   async evaluate(ctx: FirewallContext, req: ActionRequest, extraHits: RuleHit[] = []): Promise<FirewallDecision> {
     const p = ctx.principal;
@@ -175,10 +194,29 @@ export class AgentFirewall {
     const out = evaluateRules(inputs);
     const hits = [...out.hits, ...extraHits];
     const score = scoreOf(out.factors);
+    const responses = policy.responses;
+    // Refusals that say something about the agent itself also contain it.
+    const kill = new Set(responses.killOn);
+    const quarantine = new Set(responses.quarantineOn);
+    for (let i = 0; i < hits.length; i++) {
+      const h = hits[i]!;
+      if (h.effect !== "BLOCK") continue;
+      if (kill.has(h.id)) hits[i] = { ...h, effect: "KILL" };
+      else if (quarantine.has(h.id)) hits[i] = { ...h, effect: "QUARANTINE" };
+    }
+    const confirmAt = responses.confirm.riskAt;
     if (score >= policy.thresholds.blockAt) {
       hits.push({ id: "risk.score_block", effect: "BLOCK", hard: false, reason: `Risk score ${score} ≥ ${policy.thresholds.blockAt}.` });
+    } else if (score >= confirmAt) {
+      hits.push({ id: "risk.score_confirm", effect: "CONFIRM", hard: false, reason: `Risk score ${score} ≥ ${confirmAt}: a person must approve this action.` });
     } else if (score >= policy.thresholds.warnAt) {
       hits.push({ id: "risk.score_warn", effect: "WARN", hard: false, reason: `Risk score ${score} ≥ ${policy.thresholds.warnAt}.` });
+    }
+    // Permissions the organisation wants a person to approve per use. Hard:
+    // monitor mode does not waive it. A message to another agent is not the
+    // action itself — the recipient meets this rule when it acts.
+    if (req.surface !== "agent_message" && out.permission && responses.confirm.permissions.includes(out.permission)) {
+      hits.push({ id: "confirm.permission", effect: "CONFIRM", hard: true, reason: `Using ${out.permission} needs a person's approval for each action.` });
     }
 
     const d: FirewallDecision = {
@@ -199,7 +237,7 @@ export class AgentFirewall {
 
     // Advisors run last and can only escalate. A crashed, slow or "allow"-
     // saying advisor never changes a deterministic decision.
-    if (d.decision !== "BLOCK") {
+    if (decisionRank(d.decision) < decisionRank("BLOCK")) {
       for (const a of this.advisors) {
         let verdict: "WARN" | "BLOCK" | null = null;
         let error: string | undefined;
@@ -220,10 +258,21 @@ export class AgentFirewall {
       }
     }
 
+    // CONFIRM: a person's approval of this exact action, or a request for one.
+    if (d.decision === "CONFIRM") {
+      try {
+        await this.resolveConfirmation(ctx, req, d, policy);
+      } catch (err) {
+        this.o.log("approval lookup failed; blocking", err);
+        return this.failClosed(decisionId, req, "approval.unavailable", "The approval could not be checked.", d);
+      }
+    }
+
     try {
       await this.o.decisions.record(DecisionLog.build(ctx, req, d, out.permission));
     } catch (err) {
       this.o.log("firewall decision could not be recorded; blocking", err);
+      if (d.approval?.status === "pending") await this.o.approvals?.cancel(p.tenantId, d.approval.id).catch(() => {});
       return this.failClosed(decisionId, req, "firewall.log_unavailable", "The decision could not be recorded.", d);
     }
 
@@ -234,7 +283,29 @@ export class AgentFirewall {
         await this.recordAction(ctx, req, d, inputs.hiddenDelegation ?? []);
       } catch (err) {
         this.o.log("agent interaction could not be recorded; blocking", err);
-        if (d.decision !== "BLOCK") return this.failClosed(decisionId, req, "a2a.log_unavailable", "The agent interaction could not be recorded.", d);
+        if (permits(d)) return this.failClosed(decisionId, req, "a2a.log_unavailable", "The agent interaction could not be recorded.", d);
+      }
+    }
+
+    // A poisoned tool description has already been read by the model that
+    // asked to call the tool: record it against the agent as malicious
+    // external content, so it is held from unsafe actions until reviewed.
+    await this.recordPoisonedDefinition(ctx, req, d);
+
+    // QUARANTINE / KILL: the agent is stopped before it hears the answer.
+    if (d.decision === "QUARANTINE" || d.decision === "KILL") {
+      const action = d.decision === "KILL" ? "kill" as const : "quarantine" as const;
+      if (!this.responder) {
+        d.response = { action, applied: false, error: "no kill switch is configured" };
+        this.o.log(`firewall decided ${d.decision} for ${p.id} but no kill switch is configured`);
+      } else {
+        try {
+          await this.responder(ctx, req, d);
+          d.response = { action, applied: true };
+        } catch (err) {
+          d.response = { action, applied: false, error: err instanceof Error ? err.message : String(err) };
+          this.o.log(`containment (${action}) failed for ${p.id}`, err);
+        }
       }
     }
 
@@ -250,7 +321,7 @@ export class AgentFirewall {
     const via = ctx.viaMessage;
     if (via) {
       await this.o.interactions!.record({
-        tenantId: p.tenantId, kind: d.decision === "BLOCK" ? "act_blocked" : "acted", interactionId: via.interactionId,
+        tenantId: p.tenantId, kind: permits(d) ? "acted" : "act_blocked", interactionId: via.interactionId,
         messageId: via.id, parentMessageId: null, hop: via.hop, sourceAgent: via.fromAgentId, destinationAgent: p.id, actorId: p.id,
         action: req.action, requestedPermission: via.permission, resource: resourceLabel(req.resource),
         authority: via.authority, agentChain: ctx.chain ?? [], decision: d.decision, decisionId: d.decisionId, ruleIds,
@@ -268,18 +339,106 @@ export class AgentFirewall {
     }
   }
 
+  /**
+   * The strictest effect wins. Monitor mode observes: soft refusals are
+   * logged as WARN (wouldBlock), and containment (QUARANTINE / KILL) is not
+   * taken — hard rules still refuse, as BLOCK. Hard CONFIRM still asks.
+   */
   private compose(d: FirewallDecision): void {
-    const hard = d.hits.some((h) => h.hard && h.effect === "BLOCK");
-    const soft = d.hits.some((h) => !h.hard && h.effect === "BLOCK");
-    const warn = d.hits.some((h) => h.effect === "WARN");
-    let decision: Decision = "ALLOW";
+    const rank = decisionRank;
+    let hard = 0;
+    let soft = 0;
+    for (const h of d.hits) {
+      if (h.hard) hard = Math.max(hard, rank(h.effect));
+      else soft = Math.max(soft, rank(h.effect));
+    }
     d.wouldBlock = false;
-    if (hard) decision = "BLOCK";
-    else if (soft) {
-      decision = d.mode === "monitor" ? "WARN" : "BLOCK";
-      d.wouldBlock = d.mode === "monitor";
-    } else if (warn) decision = "WARN";
-    d.decision = decision;
+    if (d.mode === "monitor") {
+      hard = Math.min(hard, rank("BLOCK"));
+      if (soft > rank("WARN")) {
+        soft = rank("WARN");
+        d.wouldBlock = true;
+      }
+    }
+    d.decision = DECISIONS[Math.max(hard, soft)] ?? "BLOCK";
+  }
+
+  /**
+   * A CONFIRM decision either uses the person's approval the agent cites
+   * (x-legion-approval-id) — which turns the CONFIRM rules into visible
+   * warnings and nothing else — or opens a request for one. An approval that
+   * is for another action, another agent, already used or expired is not a
+   * softer "no": it is refused outright.
+   */
+  private async resolveConfirmation(ctx: FirewallContext, req: ActionRequest, d: FirewallDecision, policy: VersionedPolicy["policy"]): Promise<void> {
+    const satisfy = (note: string) => {
+      d.hits = d.hits.map((h) => (h.effect === "CONFIRM" ? { ...h, effect: "WARN" as const, reason: `${h.reason} ${note}` } : h));
+      this.compose(d);
+    };
+    // Inside an execution a consumed approval already covers (set by Legion's
+    // own executors, never from a request): the nested checks of the same action.
+    if (ctx.confirmed) {
+      satisfy(`Covered by approval ${ctx.confirmed.approvalId}.`);
+      return;
+    }
+    if (!this.o.approvals) {
+      d.hits.push({ id: "approval.unavailable", effect: "BLOCK", hard: true, reason: "This action needs a person's approval and approvals are not configured." });
+      this.compose(d);
+      return;
+    }
+    if (ctx.approvalId !== undefined) {
+      const r = await this.o.approvals.consume(ctx, req, ctx.approvalId, d.decisionId);
+      if (r.ok) {
+        d.approval = { id: r.row.id, status: "consumed", expiresAt: r.row.expiresAt, approvedBy: r.row.decidedBy ?? undefined };
+        satisfy(`Approved by ${r.row.decidedBy} (approval ${r.row.id}).`);
+        return;
+      }
+      if (r.reason === "pending") {
+        d.approval = { id: r.row.id, status: "pending", expiresAt: r.row.expiresAt };
+        return;
+      }
+      d.hits.push(r.reason === "denied"
+        ? { id: "approval.denied", effect: "BLOCK", hard: true, reason: "A person refused this action." }
+        : { id: "approval.invalid", effect: "BLOCK", hard: true, reason: "The cited approval is not an unused, unexpired approval of this exact action by this agent." });
+      this.compose(d);
+      return;
+    }
+    const created = await this.o.approvals.request(ctx, req, {
+      decisionId: d.decisionId, riskScore: d.riskScore, ruleIds: refusingHits(d).map((h) => h.id),
+    }, { ttlSeconds: policy.responses.confirm.ttlSeconds, maxPending: policy.responses.confirm.maxPendingPerAgent });
+    if ("tooMany" in created) {
+      d.hits.push({ id: "approval.too_many_pending", effect: "BLOCK", hard: true, reason: "This agent already has too many actions waiting for approval." });
+      this.compose(d);
+      return;
+    }
+    d.approval = { id: created.row.id, status: "pending", expiresAt: created.row.expiresAt };
+    d.hits.push({
+      id: "approval.required", effect: "CONFIRM", hard: true,
+      reason: `A person must approve this action (approval ${created.row.id}); then retry it unchanged with x-legion-approval-id.`,
+    });
+  }
+
+  private async recordPoisonedDefinition(ctx: FirewallContext, req: ActionRequest, d: FirewallDecision): Promise<void> {
+    if (!this.o.contentGuard || !d.hits.some((h) => h.id === "mcp.poisoned_definition" || h.id === "mcp.suspicious_definition")) return;
+    const def = req.surface === "mcp_tool" ? req.definition
+      : req.surface === "tool_call" ? (req.call as { definition?: { name: string; description?: string; inputSchema?: unknown } } | null)?.definition
+      : undefined;
+    if (!def || typeof def.name !== "string") return;
+    const report = scanToolDefinition(def);
+    const content = definitionTexts(def).join("\n").slice(0, 100_000);
+    const classification: Classification = {
+      verdict: report.verdict, riskScore: report.score, sanitized: content, removedChars: 0,
+      findings: report.findings.map((f) => ({ category: "action_directive" as const, id: f.id, points: f.points, detail: "tool description", excerpt: f.excerpt })),
+    };
+    await this.o.contentGuard.recordIfFlagged(
+      { tenantId: ctx.principal.tenantId, principal: ctx.principal, requestId: ctx.requestId },
+      "other", content, { sourceId: `tool-definition:${def.name}`.slice(0, 200) }, classification,
+    ).catch((err) => this.o.log("poisoned tool definition could not be recorded against the agent", err));
+  }
+
+  /** Wires QUARANTINE / KILL to the kill switch (set after construction; they depend on each other). */
+  setResponder(r: ContainmentResponder): void {
+    this.responder = r;
   }
 
   private failClosed(decisionId: string, req: ActionRequest, id: string, reason: string, base?: FirewallDecision): FirewallDecision {
@@ -470,7 +629,7 @@ export class AgentFirewall {
   /** Evaluate, then run `fn` only if the firewall did not block. */
   async execute<T>(ctx: FirewallContext, req: ActionRequest, fn: (d: FirewallDecision) => Promise<T>): Promise<T> {
     const d = await this.evaluate(ctx, req);
-    if (d.decision === "BLOCK") throw new FirewallBlockedError(d);
+    if (!permits(d)) throw new FirewallBlockedError(d);
     return fn(d);
   }
 
@@ -561,7 +720,7 @@ export class AgentFirewall {
       spec.signal?.throwIfAborted();
       const d = await this.evaluate(ctx, req);
       decisions.push(d);
-      if (d.decision === "BLOCK") throw new FirewallBlockedError(d);
+      if (!permits(d)) throw new FirewallBlockedError(d);
 
       let res: { status: number; headers: EgressResponse["headers"]; body: Buffer };
       try {
@@ -644,6 +803,7 @@ export class AgentFirewall {
       server: call.server,
       tool: call.definition.name,
       definitionSha256: hashToolDefinition(call.definition),
+      definition: call.definition,
       args: call.args,
       sensitivity: call.sensitivity,
     }, fn);
@@ -666,6 +826,14 @@ export class AgentFirewall {
     if (onBehalfOf !== undefined) {
       if (/^[^\s]{1,200}$/.test(onBehalfOf)) ctx.onBehalfOf = onBehalfOf;
       else extraHits.push({ id: "delegation.malformed", effect: "BLOCK", hard: true, reason: "Malformed x-legion-on-behalf-of." });
+    }
+
+    // A person's approval of this action (CONFIRM). Only its id travels in
+    // the header; what it approves is checked against the stored request.
+    const approvalId = req.get("x-legion-approval-id");
+    if (approvalId !== undefined) {
+      if (UUID_RE.test(approvalId)) ctx.approvalId = approvalId;
+      else extraHits.push({ id: "approval.malformed", effect: "BLOCK", hard: true, reason: "Malformed x-legion-approval-id." });
     }
 
     const messageId = req.get("x-legion-message-id");
@@ -734,7 +902,7 @@ export class AgentFirewall {
       agentChain: ctx.chain ?? [], decisionId: d.decisionId, ruleIds: d.hits.map((h) => h.id),
     };
 
-    if (d.decision === "BLOCK") {
+    if (!permits(d)) {
       await this.o.interactions?.record({ ...step, kind: "request_blocked", interactionId: via?.interactionId ?? null, messageId: null, decision: d.decision })
         .catch((err) => this.o.log("agent interaction write failed for a refused request", err));
       return { decision: d, messageId: null, request: null };
@@ -862,7 +1030,7 @@ export class AgentFirewall {
 
   private async mustAllow(ctx: FirewallContext, req: ActionRequest): Promise<FirewallDecision> {
     const d = await this.evaluate(ctx, req);
-    if (d.decision === "BLOCK") throw new FirewallBlockedError(d);
+    if (!permits(d)) throw new FirewallBlockedError(d);
     return d;
   }
 }

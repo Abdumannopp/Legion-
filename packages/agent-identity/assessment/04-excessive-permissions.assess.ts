@@ -5,7 +5,7 @@
 import request from "supertest";
 import { describe } from "vitest";
 import { as, bearer, TENANT_A } from "../test/helpers.js";
-import { authorize, brief, mkAgent, SHELL_CALL, useWorld } from "./setup.js";
+import { authorize, brief, mkAgent, SHELL_CALL, useWorld, authorizeApproved } from "./setup.js";
 import { defended, notDefended, partial, scenario } from "./harness.js";
 
 const w = useWorld();
@@ -50,7 +50,7 @@ describe("Excessive permissions", () => {
   }, async (ev) => {
     const a = await mkAgent(w, ["tool.shell:execute"], "escalation-test-agent", "alice");
     const overReach = await authorize(w, a, { kind: "cloud", operation: "invoke", provider: "aws", account: "111122223333", action: "ec2:TerminateInstances" });
-    const beforeDemotion = await authorize(w, a, SHELL_CALL("echo", ["hi"]));
+    const beforeDemotion = await authorizeApproved(w, a, SHELL_CALL("echo", ["hi"]));
 
     w.t.host.add("alice", TENANT_A, "viewer"); // demote the owner (FakeHost.add overwrites by id)
     const afterDemotion = await authorize(w, a, SHELL_CALL("echo", ["hi"]));

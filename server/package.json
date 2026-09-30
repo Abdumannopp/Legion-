@@ -13,7 +13,7 @@
     "test:watch": "vitest",
     "test:recovery": "vitest run tests/backup-scripts.test.ts tests/disaster-recovery.test.ts",
     "setup": "node scripts/setup.mjs",
-    "test:security": "vitest run tests/first-admin.test.ts tests/webhook-auth.test.ts tests/tenant-isolation-sweep.test.ts tests/ai-output-is-data.test.ts tests/notification-outbox.test.ts tests/config-safety.test.ts tests/sessions.test.ts tests/mfa.test.ts tests/db-app-role.test.ts tests/agents.test.ts tests/saas-signup-billing.test.ts",
+    "test:security": "vitest run tests/first-admin.test.ts tests/webhook-auth.test.ts tests/tenant-isolation-sweep.test.ts tests/ai-output-is-data.test.ts tests/notification-outbox.test.ts tests/config-safety.test.ts tests/sessions.test.ts tests/mfa.test.ts tests/db-app-role.test.ts tests/agents.test.ts tests/agent-security.test.ts tests/saas-signup-billing.test.ts",
     "webhook:credential": "tsx src/scripts/webhook-credential.ts",
     "secrets": "tsx src/scripts/secrets.ts"
   },

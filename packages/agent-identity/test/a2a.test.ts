@@ -1,7 +1,7 @@
 import request from "supertest";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { hashGraph, type TrustGraph } from "../src/index.js";
-import { agentWithToken, as, bearer, makeApp, resetDb, TENANT_A, TENANT_B, type TestApp } from "./helpers.js";
+import { agentWithToken, as, bearer, makeApp, resetDb, TENANT_A, TENANT_B, type TestApp, withoutApprovals } from "./helpers.js";
 
 let t: TestApp;
 
@@ -21,7 +21,7 @@ type Agent = Awaited<ReturnType<typeof agentWithToken>>;
 const READ_COMMENT = ["alerts:read", "alerts:comment", "alerts:update_status"];
 
 async function setPolicy(policy: Record<string, unknown>) {
-  const res = await request(t.app).put("/firewall/policy").set(as("alice")).send(policy);
+  const res = await request(t.app).put("/firewall/policy").set(as("alice")).send(withoutApprovals(policy));
   if (res.status !== 200) throw new Error(JSON.stringify(res.body));
 }
 const mk = (name: string, permissions = READ_COMMENT, owner = "alice") => agentWithToken(t, owner, { name, permissions });
@@ -88,8 +88,6 @@ describe("cross-tenant communication is refused and recorded", () => {
     expect(rules(cross)).toEqual(["a2a.recipient_unknown"]);
     expect({ status: cross.status, rules: rules(cross), message: cross.body.error.message })
       .toEqual({ status: nobody.status, rules: rules(nobody), message: nobody.body.error.message });
-    // Naming a foreign tenant yourself is refused outright (it reveals nothing: the sender supplied it).
-    expect(rules(await send(a, b, { tenantId: TENANT_B }))).toContain("a2a.cross_tenant");
     const [blocked] = await events("kind = 'request_blocked'");
     expect(blocked).toMatchObject({ source_agent: a.agent.id, destination_agent: foreign.agent.id, message_id: null, rule_ids: ["a2a.recipient_unknown"] });
     // Tenant B's agent cannot use a message from tenant A.
@@ -97,6 +95,16 @@ describe("cross-tenant communication is refused and recorded", () => {
     expect((await request(t.app).get("/agent/v1/alerts").set(bearer(foreign.token)).set(via(ok.body.messageId))).body.error.rules).toEqual(["a2a.message_invalid"]);
     // Tenant B's administrator sees none of it.
     expect((await request(t.app).get("/a2a/events").set(as("bob"))).body.events).toEqual([]);
+
+    // Naming a foreign tenant yourself is refused outright (it reveals
+    // nothing: the sender supplied it) — and it is an attempt to cross
+    // organisations, so by default the sender is quarantined.
+    const claimer = await mk("claimer");
+    await setPolicy({ agentMessages: { allow: allow([claimer, b]) } });
+    const claimed = await send(claimer, b, { tenantId: TENANT_B });
+    expect(rules(claimed)).toContain("a2a.cross_tenant");
+    expect(claimed.body.error).toMatchObject({ decision: "QUARANTINE", code: "agent_quarantined" });
+    expect((await inbox(claimer)).status).toBe(401);
   });
 });
 
@@ -153,8 +161,11 @@ describe("privilege escalation", () => {
   it("no asking for what the sender lacks; no doing more than was asked", async () => {
     const a = await mk("planner", ["alerts:read"]);
     const b = await mk("worker");
-    await setPolicy({ agentMessages: { allow: allow([a, b]) } });
-    expect(rules(await send(a, b, { requestedPermission: "alerts:update_status" }))).toContain("a2a.laundering");
+    const launderer = await mk("launderer", ["alerts:read"]);
+    await setPolicy({ agentMessages: { allow: allow([a, b], [launderer, b]) } });
+    const launder = await send(launderer, b, { requestedPermission: "alerts:update_status" });
+    expect(rules(launder)).toContain("a2a.laundering");
+    expect(launder.body.error.decision).toBe("QUARANTINE"); // and it is taken offline
     const sent = await send(a, b);
     expect(rules(await request(t.app).post("/agent/v1/alerts/A1/status").set(bearer(b.token)).set(via(sent.body.messageId)))).toContain("a2a.message_scope");
   });
@@ -228,12 +239,27 @@ describe("hidden tool delegation", () => {
 
   it("a tool call inside a request that asks for something else", async () => {
     const { a, b } = await trio();
+    // By default the first attempt quarantines the sender.
+    const first = await send(a, b, { payload: { then: SLACK("C0EXFIL99") } });
+    expect(rules(first)).toContain("a2a.hidden_tool_request");
+    expect(first.body.error.decision).toBe("QUARANTINE");
+    expect((await inbox(a)).status).toBe(401);
+    // Every form is recognised (checked with quarantine off, on a fresh sender).
+    const a2 = await mk("planner-2", ["alerts:read", "tool.slack:write"]);
+    await setPolicy({
+      agentMessages: { allow: allow([a2, b]) }, responses: { quarantineOn: [] },
+      toolSecurity: { slack: { channels: { C0SECOPS1: "write", C0EXFIL99: "write" } }, shell: { commands: { git: {} } } },
+    });
+    await hiddenForms(a2, b);
+  });
+
+  async function hiddenForms(a: Agent, b: Agent) {
     expect(rules(await send(a, b, { payload: { then: SLACK("C0EXFIL99") } }))).toContain("a2a.hidden_tool_request");
     expect(rules(await send(a, b, { payload: { name: "post_to_slack", arguments: { channel: "C0EXFIL99" } } }))).toContain("a2a.hidden_tool_request");
     expect(rules(await send(a, b, { payload: JSON.stringify(SLACK("C0EXFIL99")) }))).toContain("a2a.hidden_tool_request");
     // Declared openly, it is checked like any request: A holds tool.slack:write, B too.
     expect((await send(a, b, { requestedPermission: "tool.slack:write", payload: SLACK("C0SECOPS1") })).status).toBe(201);
-  });
+  }
 
   it("tool instructions in the request's text", async () => {
     const { a, b } = await trio();
@@ -353,8 +379,12 @@ describe("the Agent Trust Graph", () => {
     const [a, b, c] = [await mk("planner"), await mk("worker"), await mk("runner", ["alerts:read"])];
     const idle = await mk("idle");
     const x = await mk("rogue", ["alerts:read"]);
+    // Quarantine off: these tests classify the edges of agents that keep
+    // running after a refused request. (By default A would be quarantined for
+    // the violation, and its edges would read "broken" — see above.)
     await setPolicy({
       agentMessages: { allow: [...allow([a, b], [a, idle]), { from: b.agent.id, to: c.agent.id, permissions: ["alerts:comment"] }] },
+      responses: { quarantineOn: [] },
     });
     await grant("anna", a, ["alerts:read"], true);
     await send(a, b);                                                       // trusted

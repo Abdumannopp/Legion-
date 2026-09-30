@@ -8,7 +8,7 @@
 import request from "supertest";
 import { describe } from "vitest";
 import { as, bearer, TENANT_B } from "../test/helpers.js";
-import { authorize, establishNormalBaseline, mkAgent, SHELL_CALL, SQL_CALL, setPolicy, useWorld } from "./setup.js";
+import { authorize, establishNormalBaseline, mkAgent, SHELL_CALL, SQL_CALL, setPolicy, useWorld, basePolicy } from "./setup.js";
 import { defended, notDefended, partial, scenario } from "./harness.js";
 
 const w = useWorld();
@@ -21,6 +21,11 @@ describe("Compromised agent", () => {
     attackPath: "A previously well-behaved triage agent (with an established baseline) starts probing in different directions: a foreign-tenant database query, a denied shell interpreter, a protected-table access, and a sensitive-file read — the pattern of an attacker exploring what a stolen credential can reach, not a single mistake.",
     expectedDefense: "Each probe is refused live (as tested throughout this assessment); recorded together, the behaviour monitor recognises the combined pattern as an intent-evidence attack, independent of any learned baseline, and reaches CRITICAL.",
   }, async (ev) => {
+    // This scenario measures how the behaviour monitor classifies sustained
+    // probing, so the agent must stay online to keep probing. With the
+    // default policy it would not: the first foreign-tenant probe already
+    // quarantines it (PE-4).
+    await setPolicy(w, { ...basePolicy(w.dir), responses: { quarantineOn: [] } });
     const a = await mkAgent(w, ["alerts:read", "tool.shell:execute", "tool.database:read", "tool.files:read"]);
     await establishNormalBaseline(w, a.agent);
     const probes = [

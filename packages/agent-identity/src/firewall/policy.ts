@@ -17,8 +17,29 @@ export const PROTECTED_TABLES = new Set([
   // Everything else this module keeps: evidence, tickets, messages, state.
   "agent_messages", "content_ingestion_log", "content_risk_acknowledgements", "tool_call_audit", "tool_call_tickets",
   "agent_behavior_profiles", "agent_behavior_state", "agent_behavior_events", "security_events", "security_notifications",
-  "agent_interactions", "agent_trust_graph_snapshots", "agent_skill_assignments",
+  "agent_interactions", "agent_trust_graph_snapshots", "agent_skill_assignments", "agent_action_approvals",
 ]);
+
+/** Tool permissions that act on the world: approval per action, by default. */
+export const DEFAULT_CONFIRM_PERMISSIONS: readonly Permission[] = [
+  "tool.browser:write", "tool.http:write", "tool.database:write", "tool.files:write", "tool.shell:execute",
+  "tool.email:write", "tool.github:write", "tool.slack:write", "tool.mcp:write", "tool.cloud:write",
+];
+
+/**
+ * Refusals that say more about the agent than about the action: it is
+ * reaching into another organisation, laundering permissions through another
+ * agent, spreading a prompt-injection payload, or trying to carry
+ * credentials out. The action is refused either way; these also take the
+ * agent offline until a person looks.
+ */
+export const DEFAULT_QUARANTINE_RULES: readonly string[] = [
+  "tenant.mismatch", "a2a.cross_tenant", "sql.foreign_tenant", "a2a.laundering", "a2a.injection_payload", "a2a.hidden_tool_request",
+  "egress.secret_in_payload", "a2a.secret_in_payload",
+];
+
+/** Trying to send Legion's own credentials out: treated as a confirmed compromise. */
+export const DEFAULT_KILL_RULES: readonly string[] = ["http.legion_secret"];
 
 const permission = z.enum(ALL_PERMISSIONS as unknown as [Permission, ...Permission[]]);
 const sensitivity = z.enum(["public", "internal", "confidential", "restricted"]);
@@ -206,6 +227,43 @@ export const policySchema = z.strictObject({
       autoSuspendOnCritical: z.boolean().default(false),
     })
     .default({ windowMinutes: 60, baselineDays: 14, minBaselineEvents: 100, minBaselineDays: 2, autoSuspendOnCritical: false }),
+  /**
+   * What the firewall does beyond BLOCK. Everything here only makes a
+   * decision stricter; nothing can relax a hard rule.
+   */
+  responses: z
+    .strictObject({
+      confirm: z
+        .strictObject({
+          /**
+           * Permissions an agent may hold but never use without a person
+           * approving the specific action first. By default every tool
+           * permission that acts on the world: AI does not send, push, run,
+           * write or delete on its own.
+           */
+          permissions: z.array(permission).max(ALL_PERMISSIONS.length).default([...DEFAULT_CONFIRM_PERMISSIONS]),
+          /**
+           * Otherwise-allowed actions at or above this risk score also need
+           * approval. 101 = off (the default: the band between warnAt and
+           * blockAt stays a visible WARN, as before; lower it to ask instead).
+           */
+          riskAt: z.number().int().min(1).max(101).default(101),
+          /** How long a request for approval stays open, and an approval stays usable. */
+          ttlSeconds: z.number().int().min(60).max(86_400).default(900),
+          /** Open requests per agent; beyond this the agent is refused instead of queueing more. */
+          maxPendingPerAgent: z.number().int().min(1).max(500).default(20),
+        })
+        .default({ permissions: [...DEFAULT_CONFIRM_PERMISSIONS], riskAt: 101, ttlSeconds: 900, maxPendingPerAgent: 20 }),
+      /** Rules whose refusal also suspends the agent until a person reviews it. */
+      quarantineOn: z.array(identifier).max(200).default([...DEFAULT_QUARANTINE_RULES]),
+      /** Rules whose refusal kills the agent: suspended, credentials and delegations revoked. */
+      killOn: z.array(identifier).max(200).default([...DEFAULT_KILL_RULES]),
+    })
+    .default({
+      confirm: { permissions: [...DEFAULT_CONFIRM_PERMISSIONS], riskAt: 101, ttlSeconds: 900, maxPendingPerAgent: 20 },
+      quarantineOn: [...DEFAULT_QUARANTINE_RULES],
+      killOn: [...DEFAULT_KILL_RULES],
+    }),
   promptInjection: z
     .strictObject({
       /** How long suspicious (not malicious) content keeps raising an agent's risk. Malicious content counts until reviewed. */

@@ -12,6 +12,8 @@ import {
 import { sendError, clientIp } from "../principal.js";
 import type { KillSwitch } from "../killswitch/service.js";
 import type { Identity, IdentityStore } from "../store.js";
+import { buildRegistry } from "../registry.js";
+import type { Pool } from "pg";
 import type { HostAdapter, HumanPrincipal, MachineKind, RiskLevel } from "../types.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -74,7 +76,7 @@ function isUniqueViolation(err: unknown): boolean {
  */
 export function managementRouter(
   kind: MachineKind,
-  deps: { store: IdentityStore; audit: AuditLog; host: HostAdapter; guards: ReturnType<typeof createGuards>; killSwitch: KillSwitch },
+  deps: { store: IdentityStore; audit: AuditLog; host: HostAdapter; guards: ReturnType<typeof createGuards>; killSwitch: KillSwitch; pool: Pool },
 ): Router {
   const { store, audit, host, guards, killSwitch } = deps;
   const router = Router();
@@ -181,6 +183,14 @@ export function managementRouter(
 
   router.get("/", staff, handle(async (req, res) => {
     res.json({ identities: await store.list(me(req).tenantId, kind) });
+  }));
+
+  // The registry: identity, owner, lifecycle, permissions, tools and skills,
+  // connected systems, risk and last activity for every identity of this
+  // kind — computed from Legion's own records. Before "/:id".
+  router.get("/registry", staff, handle(async (req, res) => {
+    const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 90);
+    res.json({ windowDays: days, agents: await buildRegistry({ pool: deps.pool, store, host }, me(req).tenantId, kind, days) });
   }));
 
   router.get("/:id", staff, handle(async (req, res) => {

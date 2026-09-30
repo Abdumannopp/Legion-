@@ -1,3 +1,4 @@
+import { permits, refusingHits } from "../firewall/types.js";
 import { randomUUID } from "node:crypto";
 import type { AuditLog } from "../audit.js";
 import type { AgentFirewall } from "../firewall/engine.js";
@@ -168,9 +169,9 @@ export class SkillRuntime {
         sensitivity: "internal",
       }, meta.extraHits ?? []);
       decisionIds.push(d.decisionId);
-      if (d.decision === "BLOCK") {
-        const rules = d.hits.filter((h) => h.effect === "BLOCK").map((h) => h.id);
-        return deny(new SkillError("firewall_blocked", d.hits.find((h) => h.effect === "BLOCK")?.reason ?? "Blocked by the agent firewall.", { decisionIds, rules }));
+      if (!permits(d)) {
+        const rules = refusingHits(d).map((h) => h.id);
+        return deny(new SkillError("firewall_blocked", refusingHits(d)[0]?.reason ?? "Blocked by the agent firewall.", { decisionIds, rules }));
       }
     }
 

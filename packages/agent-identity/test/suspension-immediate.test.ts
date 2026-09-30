@@ -11,7 +11,7 @@
 import request from "supertest";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { MachinePrincipal } from "../src/index.js";
-import { agentWithToken, as, bearer, makeApp, resetDb, TENANT_A, type TestApp } from "./helpers.js";
+import { agentWithToken, as, bearer, makeApp, resetDb, TENANT_A, type TestApp, withoutApprovals } from "./helpers.js";
 
 let t: TestApp;
 
@@ -22,7 +22,7 @@ beforeEach(async () => {
   await t.identity.migrate();
   t.host.add("alice", TENANT_A, "admin");
   await request(t.app).put("/firewall/policy").set(as("alice"))
-    .send({ toolSecurity: { slack: { channels: { C0SECOPS1: "write" } } } }).expect(200);
+    .send(withoutApprovals({ toolSecurity: { slack: { channels: { C0SECOPS1: "write" } } } })).expect(200);
 });
 afterAll(async () => { await t?.pool.end(); });
 

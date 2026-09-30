@@ -4,7 +4,7 @@ import path from "node:path";
 import request from "supertest";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ToolBlockedError, type MachinePrincipal } from "../src/index.js";
-import { agentWithToken, as, bearer, makeApp, resetDb, TENANT_A, TENANT_B, type TestApp } from "./helpers.js";
+import { agentWithToken, as, bearer, makeApp, resetDb, TENANT_A, TENANT_B, type TestApp, withoutApprovals } from "./helpers.js";
 
 let t: TestApp;
 let dir: string;
@@ -33,7 +33,7 @@ afterEach(async () => { await fs.rm(dir, { recursive: true, force: true }); });
 afterAll(async () => { await t?.pool.end(); });
 
 async function setPolicy(policy: Record<string, unknown>, user = "alice") {
-  const res = await request(t.app).put("/firewall/policy").set(as(user)).send(policy);
+  const res = await request(t.app).put("/firewall/policy").set(as(user)).send(withoutApprovals(policy));
   if (res.status !== 200) throw new Error(JSON.stringify(res.body));
 }
 const authorize = (token: string, call: unknown) => request(t.app).post("/agent/v1/tools/authorize").set(bearer(token)).send({ call });
@@ -95,7 +95,16 @@ describe("every tool call is verified: agent, tenant, tool, target, permission, 
     const res = await authorize(token, call);
     expect(res.status).toBe(403);
     expect(res.body.error.rules).toContain(rule);
-    const rows = await auditRows("decision = 'BLOCK'");
+    // Reaching into another organisation says something about the agent,
+    // not just the call: by default it is quarantined before it hears "no".
+    const expected = rule === "sql.foreign_tenant" ? "QUARANTINE" : "BLOCK";
+    expect(res.body.decision).toBe(expected);
+    if (expected === "QUARANTINE") {
+      expect(res.body.error.code).toBe("agent_quarantined");
+      expect(res.body.containment).toEqual({ action: "quarantine", applied: true });
+      expect((await request(t.app).get("/agent/v1/whoami").set(bearer(token))).status).toBe(401);
+    }
+    const rows = await auditRows(`decision = '${expected}'`);
     expect(rows).toHaveLength(1);
     expect(rows[0].rule_ids).toContain(rule);
     expect(JSON.stringify(rows[0].call_preview)).not.toMatch(/AKIA[0-9A-Z]{16}/);

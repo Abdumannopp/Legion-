@@ -9,7 +9,7 @@ import request from "supertest";
 import { describe } from "vitest";
 import { classifyContent, PromptAssembly, reviewProposedAction } from "../src/index.js";
 import { as, bearer } from "../test/helpers.js";
-import { brief, mkAgent, rules, SLACK, useWorld } from "./setup.js";
+import { brief, mkAgent, rules, SLACK, useWorld, authorizeApproved } from "./setup.js";
 import { defended, notDefended, partial, scenario } from "./harness.js";
 
 const w = useWorld();
@@ -139,7 +139,7 @@ describe("Indirect prompt injection", () => {
     const byNonAdminAnalyst = await request(w.t.app).post("/prompt-guard/acknowledge").set(as("anna")).send(ackBody);
     const stillBlocked = await request(w.t.app).post("/agent/v1/tools/authorize").set(bearer(a.token)).send({ call: SLACK("C0SECOPS1") });
     const byAdmin = await request(w.t.app).post("/prompt-guard/acknowledge").set(as("alice")).send(ackBody);
-    const afterAdminAck = await request(w.t.app).post("/agent/v1/tools/authorize").set(bearer(a.token)).send({ call: SLACK("C0SECOPS1") });
+    const afterAdminAck = await authorizeApproved(w, a, SLACK("C0SECOPS1"));
 
     ev("agentSelfAckStatus", byAgentItself.status);
     ev("analystAckStatus", byNonAdminAnalyst.status);

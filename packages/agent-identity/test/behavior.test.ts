@@ -3,7 +3,7 @@ import request from "supertest";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DecisionLog } from "../src/firewall/log.js";
 import type { BehaviorChange, MachinePrincipal } from "../src/index.js";
-import { agentWithToken, as, auditRows, bearer, makeApp, resetDb, TENANT_A, TENANT_B, type TestApp } from "./helpers.js";
+import { agentWithToken, as, auditRows, bearer, makeApp, resetDb, TENANT_A, TENANT_B, type TestApp, withoutApprovals } from "./helpers.js";
 
 let t: TestApp;
 let changes: BehaviorChange[];
@@ -25,7 +25,7 @@ beforeEach(async () => {
 afterAll(async () => { await t?.pool.end(); });
 
 async function setPolicy(policy: Record<string, unknown>) {
-  const res = await request(t.app).put("/firewall/policy").set(as("alice")).send(policy);
+  const res = await request(t.app).put("/firewall/policy").set(as("alice")).send(withoutApprovals(policy));
   if (res.status !== 200) throw new Error(JSON.stringify(res.body));
 }
 

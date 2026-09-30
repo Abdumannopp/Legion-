@@ -5,7 +5,7 @@ import pg from "pg";
 import request from "supertest";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FirewallBlockedError, ToolAbortedError, ToolBlockedError, type AdminNotice, type AgentIdentityOptions, type MachinePrincipal } from "../src/index.js";
-import { agentWithToken, as, auditRows, bearer, DATABASE_URL, makeApp, resetDb, TENANT_A, TENANT_B, type TestApp } from "./helpers.js";
+import { agentWithToken, as, auditRows, bearer, DATABASE_URL, makeApp, resetDb, TENANT_A, TENANT_B, type TestApp, withoutApprovals } from "./helpers.js";
 
 let t: TestApp;
 let dir: string;
@@ -44,7 +44,7 @@ afterEach(async () => {
 afterAll(async () => { await t?.pool.end(); });
 
 async function setPolicy(policy: Record<string, unknown>) {
-  const res = await request(t.app).put("/firewall/policy").set(as("alice")).send(policy);
+  const res = await request(t.app).put("/firewall/policy").set(as("alice")).send(withoutApprovals(policy));
   if (res.status !== 200) throw new Error(JSON.stringify(res.body));
 }
 const kill = (id: string, body: Record<string, unknown> = { reason: "Exfiltration to an unknown host seen in egress logs", compromise: "suspected" }, user = "alice") =>
@@ -406,6 +406,20 @@ describe("tenant-wide emergency stop", () => {
     // One notice for the whole stop.
     expect(notices.at(-1)).toMatchObject({ subject: "[Legion] Kill switch: 2 identities suspended — suspected compromise" });
     expect(notices.at(-1)!.events).toHaveLength(2);
+  });
+
+  it("with includeServiceAccounts, service accounts (tool servers, MCP bridges) are stopped too", async () => {
+    const a1 = await agentWithToken(t, "alice");
+    const sa = await serviceAccount();
+    t.host.add("bob", TENANT_B, "admin");
+    const other = await agentWithToken(t, "bob");
+    const res = await request(t.app).post("/kill-switch/all").set(as("alice"))
+      .send({ reason: "Organisation-wide compromise of the tool servers", compromise: "confirmed", confirmAll: true, includeServiceAccounts: true });
+    expect(res.status).toBe(200);
+    expect(res.body.affected.map((x: { identityId: string }) => x.identityId).sort()).toEqual([a1.agent.id, sa.id].sort());
+    expect((await request(t.app).get("/agent/v1/whoami").set(bearer(sa.token))).status).toBe(401);
+    expect((await request(t.app).get("/agent/v1/whoami").set(bearer(a1.token))).status).toBe(401);
+    expect((await request(t.app).get("/agent/v1/alerts").set(bearer(other.token))).status).toBe(200);
   });
 });
 

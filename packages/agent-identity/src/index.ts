@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import { AuditLog } from "./audit.js";
 import { createGuards } from "./authorize.js";
+import { ApprovalStore } from "./firewall/approvals.js";
 import { DelegationStore } from "./firewall/delegations.js";
 import { AgentFirewall } from "./firewall/engine.js";
 import { DecisionLog } from "./firewall/log.js";
@@ -36,6 +37,7 @@ export * from "./types.js";
 export * from "./permissions.js";
 export type { AuditEvent, AuditOutcome, AuditRow } from "./audit.js";
 export type { Identity, CredentialInfo } from "./store.js";
+export { buildRegistry, type RegistryEntry } from "./registry.js";
 export type * from "./firewall/types.js";
 export type { FirewallPolicy } from "./firewall/policy.js";
 export type { DecisionRow } from "./firewall/log.js";
@@ -43,8 +45,12 @@ export { DEFAULT_AI_USER_AGENTS } from "./principal.js";
 /** The module's tables, for hosts that run all migrations in one place (idempotent). */
 export { migrate as migrateAgentSchema, SCHEMA_SQL as AGENT_SCHEMA_SQL } from "./schema.js";
 export { TOKEN_TTL_SECONDS } from "./routes/agent.js";
-export { AgentFirewall, FirewallBlockedError } from "./firewall/engine.js";
-export { DEFAULT_POLICY, PROTECTED_TABLES, policySchema } from "./firewall/policy.js";
+export { AgentFirewall, FirewallBlockedError, type ContainmentResponder } from "./firewall/engine.js";
+export { DECISIONS, decisionRank, permits, isBlocked, refusingHits, refusalCode } from "./firewall/types.js";
+export { ApprovalStore, approvalDigest, type ApprovalRow, type ApprovalStatus } from "./firewall/approvals.js";
+export {
+  DEFAULT_POLICY, PROTECTED_TABLES, policySchema, DEFAULT_CONFIRM_PERMISSIONS, DEFAULT_QUARANTINE_RULES, DEFAULT_KILL_RULES,
+} from "./firewall/policy.js";
 export { hashToolDefinition } from "./firewall/scan.js";
 export { evaluateRules } from "./firewall/rules.js";
 export { PromptInjectionGuard, RecordedAssembly, type IngestContext, type IngestResult } from "./prompt-guard/guard.js";
@@ -52,7 +58,7 @@ export { PromptAssembly, SYSTEM_PROMPTS, reviewProposedAction, type SystemPrompt
 export { classifyContent } from "./prompt-guard/detectors.js";
 export type * from "./prompt-guard/types.js";
 export { CONTENT_SOURCES, THRESHOLDS } from "./prompt-guard/types.js";
-export { ToolGateway, ToolBlockedError, callDigest, type ToolAuthorization, type ToolResult } from "./tools/gateway.js";
+export { ToolGateway, ToolBlockedError, callDigest, executionContext, type ToolAuthorization, type ToolResult } from "./tools/gateway.js";
 export { SkillRegistry, validateDefinition, type SkillDescriptor } from "./skills/registry.js";
 export { SkillRuntime, recordsOutsideTenant, type SkillInvocationResult } from "./skills/runtime.js";
 export { SkillAssignments, type SkillAssignment } from "./skills/assignments.js";
@@ -93,7 +99,7 @@ export interface AgentIdentityOptions {
   aiUserAgents?: RegExp | null;
   /** Optional non-deterministic reviewers (e.g. an LLM). They can only escalate a decision. */
   firewallAdvisors?: Advisor[];
-  /** Called for every WARN/BLOCK after it is logged — hook this to Legion's alerting. */
+  /** Called for every decision other than ALLOW after it is logged (and contained) — hook this to Legion's alerting. */
   onFirewallDecision?: (ctx: FirewallContext, req: ActionRequest, d: FirewallDecision) => void | Promise<void>;
   /** DNS resolver for firewall.request(); every returned address is checked. */
   dnsLookup?: (host: string) => Promise<{ address: string; family: number }[]>;
@@ -161,6 +167,7 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
   const delegations = new DelegationStore(opts.pool);
   const contentGuard = new PromptInjectionGuard(opts.pool, log);
   const interactions = new InteractionLog(opts.pool);
+  const approvals = new ApprovalStore(opts.pool);
   const firewall = new AgentFirewall({
     pool: opts.pool,
     store,
@@ -173,6 +180,7 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
     dnsLookup: opts.dnsLookup,
     contentGuard,
     interactions,
+    approvals,
     log,
   });
   const guards = createGuards(audit, log, firewall);
@@ -184,6 +192,24 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
   firewall.setBehaviorMonitor(behavior);
   const killSwitch = new KillSwitch({
     pool: opts.pool, store, audit, tools, behavior, log, notifyAdmins: opts.notifyAdmins, onSecurityEvent: opts.onSecurityEvent,
+  });
+  // QUARANTINE / KILL decisions stop the agent through the same kill switch
+  // people use: tokens, tool tickets and pending messages withdrawn, running
+  // executions aborted, security event and audit recorded, admins notified.
+  // KILL is a confirmed compromise: credentials and delegations go too.
+  firewall.setResponder(async (ctx, req, d) => {
+    const p = ctx.principal;
+    const rules = d.hits.filter((h) => h.effect === d.decision).map((h) => h.id);
+    await killSwitch.activate({
+      tenantId: p.tenantId,
+      identityIds: [p.id],
+      reason: `Agent firewall ${d.decision} on ${req.action} (decision ${d.decisionId}): ${rules.join(", ")}`.slice(0, 500),
+      compromise: d.decision === "KILL" ? "confirmed" : "suspected",
+      actor: { type: "external_system", id: "legion-agent-firewall", tenantId: p.tenantId, displayName: "Legion agent firewall" },
+      kind: d.decision === "KILL" ? "agent_killed" : "agent_auto_suspended",
+      requestId: ctx.requestId,
+      ip: ctx.ip,
+    });
   });
   behavior.setSuspender(async (tenantId, identityId, actor, reason) => {
     const r = await killSwitch.activate({ tenantId, identityIds: [identityId], reason, compromise: "suspected", actor, kind: "agent_auto_suspended" });
@@ -197,7 +223,7 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
   });
   const agentBasePath = opts.agentBasePath ?? "/agent/v1";
   const sampler = new FailureSampler();
-  const deps = { store, audit, host: opts.host, guards, sampler, log, firewall, policies, decisions, delegations, contentGuard, tools, behavior, killSwitch, interactions, trustGraph, skills, skillAssignments };
+  const deps = { pool: opts.pool, store, audit, host: opts.host, guards, sampler, log, firewall, policies, decisions, delegations, contentGuard, tools, behavior, killSwitch, interactions, trustGraph, skills, skillAssignments, approvals };
   const agentExtras = Router();
   agentExtras.use(agentMessageRouter(deps));
   agentExtras.use(contentInspectRouter(deps));
@@ -253,6 +279,8 @@ export function createAgentIdentity(opts: AgentIdentityOptions) {
     guards,
     audit,
     firewall,
+    /** People's approvals of individual agent actions (CONFIRM decisions). */
+    approvals,
     /** Classify, record and wrap external content before any model reads it. */
     contentGuard,
     /** Every AI tool call passes here: authorize, execute safely, audit. */

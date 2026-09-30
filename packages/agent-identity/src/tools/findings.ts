@@ -12,6 +12,10 @@ export class Findings {
   soft(id: string, reason: string): void {
     this.hits.push({ id, effect: "BLOCK", hard: false, reason });
   }
+  /** Waits for a person's approval of this exact call. */
+  confirm(id: string, reason: string): void {
+    this.hits.push({ id, effect: "CONFIRM", hard: true, reason });
+  }
   warn(id: string, reason: string): void {
     this.hits.push({ id, effect: "WARN", hard: false, reason });
   }

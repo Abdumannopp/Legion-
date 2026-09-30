@@ -1,7 +1,7 @@
 import type { NextFunction, Request, RequestHandler, Response } from "express";
 import type { AuditLog } from "./audit.js";
 import type { AgentFirewall } from "./firewall/engine.js";
-import type { ActionRequest, Sensitivity } from "./firewall/types.js";
+import { permits, refusalCode, refusingHits, type ActionRequest, type Sensitivity } from "./firewall/types.js";
 import { roleAllows, type Permission } from "./permissions.js";
 import { clientIp, sendError } from "./principal.js";
 import { isMachine, type HumanRole, type MachineKind, type Principal } from "./types.js";
@@ -44,22 +44,33 @@ export function createGuards(audit: AuditLog, log: (msg: string, err?: unknown) 
   async function firewallGate(req: Request, res: Response, p: Principal, action: string, permission: Permission | null, opts: GuardOptions, resource?: ResourceRef): Promise<boolean> {
     if (!isMachine(p)) return true;
     const { ctx, extraHits } = await firewall.contextFromRequest(req);
-    const request: ActionRequest = { surface: "api", action, permission, resource, sensitivity: opts.sensitivity };
+    // The call's content is part of what a person approves (CONFIRM): the
+    // approval of "resolve alert 7" does not cover "delete asset 9".
+    const request: ActionRequest = {
+      surface: "api", action, permission, resource, sensitivity: opts.sensitivity,
+      input: { method: req.method, path: req.baseUrl + req.path, query: req.query, body: req.body ?? null },
+    };
     const d = await firewall.evaluate(ctx, request, extraHits);
     req.firewallDecision = d;
     res.setHeader("x-legion-firewall", d.decision.toLowerCase());
     res.setHeader("x-legion-decision-id", d.decisionId);
-    if (d.decision !== "BLOCK") return true;
-    const rules = d.hits.filter((h) => h.effect === "BLOCK").map((h) => h.id);
+    if (permits(d)) return true;
+    const rules = refusingHits(d).map((h) => h.id);
     await audit
-      .record({ ...base(req, p, action, resource), outcome: "denied", reason: `firewall: ${rules.join(", ")}`, details: { decisionId: d.decisionId } })
+      .record({
+        ...base(req, p, action, resource), outcome: "denied", reason: `firewall: ${rules.join(", ")}`,
+        details: { decisionId: d.decisionId, decision: d.decision, ...(d.approval ? { approvalId: d.approval.id } : {}) },
+      })
       .catch((err) => log("audit write failed for a blocked action", err));
     res.status(403).json({
       error: {
-        code: "firewall_blocked",
-        message: d.hits.find((h) => h.effect === "BLOCK")?.reason ?? "Blocked by the agent firewall.",
+        code: refusalCode(d.decision),
+        message: refusingHits(d)[0]?.reason ?? "Blocked by the agent firewall.",
         decisionId: d.decisionId,
+        decision: d.decision,
         rules,
+        ...(d.approval ? { approval: d.approval } : {}),
+        ...(d.response ? { containment: d.response } : {}),
       },
     });
     return false;

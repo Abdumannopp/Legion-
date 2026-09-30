@@ -8,7 +8,7 @@
 import request from "supertest";
 import { describe } from "vitest";
 import { as, bearer, TENANT_B } from "../test/helpers.js";
-import { authorize, brief, mkAgent, SLACK, useWorld } from "./setup.js";
+import { authorize, brief, mkAgent, SLACK, useWorld, authorizeApproved, rules } from "./setup.js";
 import { defended, notDefended, scenario } from "./harness.js";
 
 const w = useWorld();
@@ -67,7 +67,7 @@ describe("Cross-tenant access", () => {
     expectedDefense: "The ticket is refused (as \"unknown\", not revealing that it exists in another tenant) because verification is scoped to the verifier's own tenant.",
   }, async (ev) => {
     const agentA = await mkAgent(w, ["tool.slack:write"]);
-    const auth = await authorize(w, agentA, SLACK("C0SECOPS1"));
+    const auth = await authorizeApproved(w, agentA, SLACK("C0SECOPS1"));
     const ticket = auth.body.ticket as string;
     w.t.host.add("bob", TENANT_B, "admin");
     const saB = await request(w.t.app).post("/service-accounts").set(as("bob")).send({ name: "tenant-b-verifier" });
@@ -103,15 +103,20 @@ describe("Cross-tenant access", () => {
     category: "Cross-tenant access",
     title: "Agent-to-agent messaging across tenants (spot check; full coverage in test/a2a.test.ts)",
     attackPath: "An agent in tenant A tries to send a request naming an agent id that actually belongs to tenant B.",
-    expectedDefense: "Refused with a2a.cross_tenant, without revealing that the id belongs to a real agent elsewhere.",
+    expectedDefense: "Refused, and answered exactly like an id that exists nowhere (a2a.recipient_unknown), so the answer does not reveal that the id belongs to a real agent in another organisation.",
   }, async (ev) => {
     const a = await mkAgent(w, ["alerts:read"]);
     w.t.host.add("bob", TENANT_B, "admin");
     const foreignAgent = await mkAgent(w, ["alerts:read"], "tenant-b-target", "bob");
     const res = await request(w.t.app).post("/agent/v1/messages").set(bearer(a.token)).send({ toAgentId: foreignAgent.agent.id, requestedPermission: "alerts:read" });
+    const ghost = await request(w.t.app).post("/agent/v1/messages").set(bearer(a.token)).send({ toAgentId: "00000000-0000-4000-8000-00000000beef", requestedPermission: "alerts:read" });
     ev("crossTenantMessage", brief(res));
-    return res.body?.error?.rules?.includes("a2a.cross_tenant")
-      ? defended("Refused with a2a.cross_tenant.")
-      : notDefended(JSON.stringify(brief(res)), "High", "Refuse agent-to-agent messages whose recipient resolves to another tenant.");
+    ev("nonexistentRecipient", brief(ghost));
+    const refused = res.status === 403 && rules(res).includes("a2a.recipient_unknown");
+    const indistinguishable = res.status === ghost.status && res.body?.error?.message === ghost.body?.error?.message
+      && JSON.stringify(rules(res)) === JSON.stringify(rules(ghost));
+    return refused && indistinguishable
+      ? defended("Refused, and indistinguishable from an id that does not exist (no cross-tenant oracle).")
+      : notDefended(JSON.stringify({ foreign: brief(res), ghost: brief(ghost) }), "High", "Refuse agent-to-agent messages whose recipient resolves to another tenant, answering exactly as for an unknown id.");
   });
 });

@@ -92,6 +92,7 @@ export const agentLayer = createAgentLayer(
     resolveSessionUser,
     accessState,
     onAlertUpdated: (alert) => broadcast(alert.tenant_id, { type: "alert.status_updated", alert: outputAlert(alert) }),
+    newAlertFrame: (alert) => newAlertFrame(alert),
   },
   { withModel: aiEnabled() },
 );
@@ -1889,8 +1890,9 @@ if (process.env.NODE_ENV !== "test") {
   outbox.startOutboxWorker();
   // "Wazuh went quiet" becomes an alert of its own (sensor-monitor.ts).
   startSensorMonitor(5 * 60_000, newAlertFrame);
-  // Retries failed agent-suspension notices and purges expired agent tokens.
-  const stopAgentJobs = agentLayer.identity.startBackgroundJobs();
+  // Retries failed agent-suspension notices, purges expired agent tokens,
+  // and re-assesses agent behaviour every minute (agents.ts startJobs).
+  const stopAgentJobs = agentLayer.startJobs();
 
   // Refresh tokens accumulate one row per rotation — every active user adds
   // one every few minutes — so dead rows have to be swept.

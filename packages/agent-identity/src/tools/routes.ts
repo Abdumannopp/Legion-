@@ -2,6 +2,7 @@ import { Router, type Request } from "express";
 import { z } from "zod";
 import type { createGuards } from "../authorize.js";
 import type { AgentFirewall } from "../firewall/engine.js";
+import { DECISIONS, permits, refusalCode, refusingHits } from "../firewall/types.js";
 import { sendError } from "../principal.js";
 import type { HumanPrincipal, MachinePrincipal } from "../types.js";
 import type { ToolGateway } from "./gateway.js";
@@ -37,9 +38,12 @@ export function toolAgentRouter(d: Deps): Router {
       rules: dec.hits.map((h) => ({ id: h.id, effect: h.effect, reason: h.reason })),
       ticket: auth.ticket?.value ?? null,
       ticketExpiresAt: auth.ticket?.expiresAt ?? null,
+      approval: dec.approval ?? null,
+      containment: dec.response ?? null,
     };
-    if (dec.decision === "BLOCK") {
-      return res.status(403).json({ error: { code: "tool_blocked", message: dec.hits.find((h) => h.effect === "BLOCK")?.reason ?? "Blocked.", decisionId: dec.decisionId, rules: body.rules.filter((r) => r.effect === "BLOCK").map((r) => r.id) }, ...body });
+    if (!permits(dec)) {
+      const code = dec.decision === "BLOCK" ? "tool_blocked" : refusalCode(dec.decision);
+      return res.status(403).json({ error: { code, message: refusingHits(dec)[0]?.reason ?? "Blocked.", decisionId: dec.decisionId, rules: refusingHits(dec).map((h) => h.id) }, ...body });
     }
     res.json(body);
   });
@@ -72,7 +76,7 @@ export function toolAdminRouter(d: Deps): Router {
     const phase = s(q.phase);
     res.json({
       events: await d.tools.audit.list(me(req).tenantId, {
-        decision: decision && ["ALLOW", "WARN", "BLOCK"].includes(decision) ? decision : undefined,
+        decision: decision && (DECISIONS as readonly string[]).includes(decision) ? decision : undefined,
         principalId: s(q.principalId),
         toolKind: toolKind && ([...TOOL_KINDS, "unknown"] as string[]).includes(toolKind) ? toolKind : undefined,
         phase: phase && ["decision", "outcome", "ticket_verified", "ticket_rejected"].includes(phase) ? phase : undefined,

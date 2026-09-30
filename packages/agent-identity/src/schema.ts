@@ -11,6 +11,35 @@ import type { Pool } from "pg";
  *   ALTER TABLE machine_identities ADD FOREIGN KEY (owner_user_id) REFERENCES users(id);
  * (with a ::text cast / matching column type).
  */
+
+/**
+ * Decisions beyond ALLOW/WARN/BLOCK (firewall/types.ts). Tables created
+ * before them carry the narrower CHECK; this replaces it with the superset.
+ * NOT VALID: every existing row already satisfies it, so no table scan is
+ * needed; new rows are checked as always. A no-op (a catalog read) once done.
+ *
+ * migrate() runs it in its own short transaction, before everything else,
+ * with a lock timeout and retries: swapping a constraint takes a brief
+ * exclusive lock on a table live instances write to, and it must neither
+ * wait behind (nor deadlock with) them while holding the other migration
+ * locks.
+ */
+export const WIDEN_DECISIONS_SQL = `
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['firewall_decisions', 'tool_call_audit'] LOOP
+    IF to_regclass(t) IS NOT NULL AND EXISTS (
+         SELECT 1 FROM pg_constraint WHERE conrelid = to_regclass(t) AND conname = t || '_decision_check'
+            AND pg_get_constraintdef(oid) NOT LIKE '%QUARANTINE%') THEN
+      EXECUTE format('ALTER TABLE %I DROP CONSTRAINT %I', t, t || '_decision_check');
+      EXECUTE format($f$ALTER TABLE %I ADD CONSTRAINT %I CHECK (decision IN ('ALLOW', 'WARN', 'CONFIRM', 'BLOCK', 'QUARANTINE', 'KILL')) NOT VALID$f$,
+                     t, t || '_decision_check');
+    END IF;
+  END LOOP;
+END $$;
+`;
+
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS machine_identities (
   id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -146,7 +175,7 @@ CREATE TABLE IF NOT EXISTS firewall_decisions (
   resource_id     text,
   sensitivity     text NOT NULL,
   destination     text,
-  decision        text NOT NULL CHECK (decision IN ('ALLOW', 'WARN', 'BLOCK')),
+  decision        text NOT NULL CHECK (decision IN ('ALLOW', 'WARN', 'CONFIRM', 'BLOCK', 'QUARANTINE', 'KILL')),
   would_block     boolean NOT NULL,
   mode            text NOT NULL,
   risk_score      integer NOT NULL,
@@ -278,7 +307,7 @@ CREATE TABLE IF NOT EXISTS tool_call_audit (
   target               text NOT NULL,
   destination          text NOT NULL,
   permission           text,
-  decision             text NOT NULL CHECK (decision IN ('ALLOW', 'WARN', 'BLOCK')),
+  decision             text NOT NULL CHECK (decision IN ('ALLOW', 'WARN', 'CONFIRM', 'BLOCK', 'QUARANTINE', 'KILL')),
   risk_score           integer NOT NULL,
   high_risk            boolean NOT NULL,
   rule_ids             text[] NOT NULL,
@@ -539,6 +568,36 @@ DROP TRIGGER IF EXISTS agent_trust_graph_snapshots_no_truncate ON agent_trust_gr
 CREATE TRIGGER agent_trust_graph_snapshots_no_truncate
   BEFORE TRUNCATE ON agent_trust_graph_snapshots
   FOR EACH STATEMENT EXECUTE FUNCTION principal_audit_log_append_only();
+
+-- A person's approval of one exact agent action (firewall/approvals.ts).
+CREATE TABLE IF NOT EXISTS agent_action_approvals (
+  id                    uuid PRIMARY KEY,
+  tenant_id             text NOT NULL,
+  identity_id           uuid NOT NULL REFERENCES machine_identities(id) ON DELETE CASCADE,
+  decision_id           uuid NOT NULL,
+  surface               text NOT NULL,
+  action                text NOT NULL,
+  permission            text,
+  resource_type         text,
+  resource_id           text,
+  action_digest         text NOT NULL,
+  preview               jsonb NOT NULL,
+  risk_score            integer NOT NULL,
+  rule_ids              text[] NOT NULL DEFAULT '{}',
+  status                text NOT NULL CHECK (status IN ('pending', 'approved', 'denied', 'consumed', 'expired', 'cancelled')),
+  requested_at          timestamptz NOT NULL DEFAULT now(),
+  expires_at            timestamptz NOT NULL,
+  decided_by            text,
+  decided_at            timestamptz,
+  decision_reason       text,
+  consumed_at           timestamptz,
+  consumed_decision_id  uuid
+);
+CREATE INDEX IF NOT EXISTS agent_action_approvals_open
+  ON agent_action_approvals (tenant_id, identity_id, status, expires_at);
+CREATE INDEX IF NOT EXISTS agent_action_approvals_recent
+  ON agent_action_approvals (tenant_id, requested_at DESC);
+` + WIDEN_DECISIONS_SQL + `
 `;
 
 /** Constant advisory-lock key, so concurrently starting instances migrate one at a time. */
@@ -547,6 +606,22 @@ const MIGRATION_LOCK = 734_011_902;
 export async function migrate(pool: Pool): Promise<void> {
   const client = await pool.connect();
   try {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_LOCK]);
+        await client.query("SET LOCAL lock_timeout = '3s'");
+        await client.query(WIDEN_DECISIONS_SQL);
+        await client.query("COMMIT");
+        break;
+      } catch (err) {
+        await client.query("ROLLBACK").catch(() => {});
+        const code = (err as { code?: string }).code;
+        // 55P03 lock_not_available, 40P01 deadlock_detected: busy tables, try again shortly.
+        if (attempt >= 5 || (code !== "55P03" && code !== "40P01")) throw err;
+        await new Promise((r) => setTimeout(r, 500 * attempt));
+      }
+    }
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_LOCK]);
     await client.query(SCHEMA_SQL);

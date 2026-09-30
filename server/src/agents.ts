@@ -22,6 +22,7 @@ import {
   type SkillDataSource,
   type SkillModel,
 } from "@legion/agent-identity";
+import { alertForBehaviorChange, alertForFirewallDecision, alertForSecurityEvent } from "./agent-alerts.js";
 import { chatSafe } from "./ai.js";
 import { aiPolicy, consumeAiQuota } from "./ai-policy.js";
 import { Pseudonymizer } from "./ai-safety.js";
@@ -40,6 +41,8 @@ export interface AgentLayerDeps {
   accessState(tenantId: string): Promise<AccessState>;
   /** Realtime fan-out after an agent changes an alert. */
   onAlertUpdated(alert: Alert): void;
+  /** The dashboard frame for a new alert (index.ts newAlertFrame), queued durably with agent-security alerts. */
+  newAlertFrame?: (alert: Alert) => unknown;
 }
 
 /** A Legion alert in the shape the security skills read. */
@@ -156,10 +159,62 @@ export function createAgentLayer(deps: AgentLayerDeps, opts: { withModel: boolea
         }
       }
       : undefined,
+    // Agent security becomes SOC alerts through the durable pipeline
+    // (agent-alerts.ts). A hook failure never changes a decision; it is logged.
+    onFirewallDecision: (ctx, req, d) => report("firewall decision", alertForFirewallDecision(ctx, req, d, deps.newAlertFrame)),
+    onSecurityEvent: (e) => report("security event", alertForSecurityEvent(e, deps.newAlertFrame)),
+    onBehaviorChange: (c) => report("behaviour change", alertForBehaviorChange(c, deps.newAlertFrame)),
     log: (msg, err) => console.warn(`[agents] ${msg}`, err instanceof Error ? err.message : err ?? ""),
   });
 
-  return { identity, mount: (app: Application) => mount(app, identity, deps) };
+  return {
+    identity,
+    mount: (app: Application) => mount(app, identity, deps),
+    /**
+     * The module's timers plus the behaviour sweep, which the module leaves
+     * to the host: every minute, each tenant with recent agent activity is
+     * re-assessed (so an agent that goes quiet after misbehaving is still
+     * classified). One instance sweeps at a time.
+     */
+    startJobs(opts: { sweepMs?: number } = {}): () => void {
+      const stopModule = identity.startBackgroundJobs();
+      let busy = false;
+      const timer = setInterval(() => {
+        if (busy) return;
+        busy = true;
+        void sweepBehavior(identity).catch((err) => console.warn("[agents] behaviour sweep failed:", err instanceof Error ? err.message : err))
+          .finally(() => { busy = false; });
+      }, opts.sweepMs ?? 60_000);
+      timer.unref();
+      return () => { clearInterval(timer); stopModule(); };
+    },
+  };
+}
+
+function report(what: string, p: Promise<unknown>): Promise<void> {
+  return p.then(() => undefined, (err) => {
+    console.error(`[agents] could not raise an alert for a ${what}:`, err instanceof Error ? err.message : err);
+  });
+}
+
+const SWEEP_LOCK = 734_011_977;
+export async function sweepBehavior(identity: Pick<Identity, "behavior">): Promise<number> {
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN");
+    const got = (await c.query("SELECT pg_try_advisory_xact_lock($1) AS ok", [SWEEP_LOCK])).rows[0].ok;
+    if (!got) { await c.query("COMMIT"); return 0; }
+    const tenants = await c.query<{ tenant_id: string }>(
+      "SELECT DISTINCT tenant_id FROM firewall_decisions WHERE occurred_at > now() - interval '24 hours'");
+    for (const t of tenants.rows) await identity.behavior.sweep(t.tenant_id);
+    await c.query("COMMIT");
+    return tenants.rows.length;
+  } catch (err) {
+    await c.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    c.release();
+  }
 }
 
 type Identity = ReturnType<typeof createAgentIdentity>;

@@ -8,7 +8,7 @@ import { FirewallBlockedError, type AgentFirewall } from "../firewall/engine.js"
 import type { PolicyStore } from "../firewall/policy.js";
 import { checkFilePath } from "../firewall/paths.js";
 import { digest } from "../firewall/scan.js";
-import type { FirewallContext, FirewallDecision } from "../firewall/types.js";
+import { permits, type FirewallContext, type FirewallDecision } from "../firewall/types.js";
 import type { PromptInjectionGuard } from "../prompt-guard/guard.js";
 import type { ContentSource, Verdict } from "../prompt-guard/types.js";
 import { newAccessToken, parseAccessToken } from "../secrets.js";
@@ -62,6 +62,20 @@ const OUTPUT_SOURCE: Record<ToolKind, ContentSource> = {
   browser: "webpage", http: "api_response", database: "api_response", files: "document", shell: "other",
   email: "email", github: "github_issue", slack: "user_generated", mcp: "api_response", cloud: "api_response",
 };
+
+/**
+ * The context for the firewall checks an executor makes while running an
+ * authorized call (the egress of an HTTP call, the write of a files call).
+ * The approval the call cited was consumed by authorize(); the nested checks
+ * of the same action are covered by it rather than asking a person again —
+ * and cannot reuse it for anything else, because it is no longer cited.
+ */
+export function executionContext(ctx: FirewallContext, auth: ToolAuthorization): FirewallContext {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { approvalId, confirmed, ...rest } = ctx;
+  const a = auth.decision.approval;
+  return a?.status === "consumed" ? { ...rest, confirmed: { approvalId: a.id, decisionId: auth.decision.decisionId } } : rest;
+}
 
 /** The digest a ticket is bound to: the exact, validated call. */
 export function callDigest(call: ToolCall): string {
@@ -203,8 +217,10 @@ export class ToolGateway {
       }
     }
 
+    // A ticket only for a decision that lets the call run: never for
+    // CONFIRM (a person has not approved it yet), BLOCK, QUARANTINE or KILL.
     let ticket: ToolAuthorization["ticket"] = null;
-    if (decision.decision !== "BLOCK" && call) {
+    if (permits(decision) && call) {
       const { token, hash } = newAccessToken();
       const value = token.replace(/^lgt_/, "ltk_");
       const res = await this.o.pool.query(
@@ -287,7 +303,7 @@ export class ToolGateway {
     executor: (call: ToolCall, auth: ToolAuthorization, signal: AbortSignal) => Promise<T>,
   ): Promise<T & { decisionId: string; outputVerdict: Verdict | null }> {
     const auth = await this.authorize(ctx, input);
-    if (auth.decision.decision === "BLOCK" || !auth.call) throw new ToolBlockedError(auth.decision, auth.analysis);
+    if (!permits(auth.decision) || !auth.call) throw new ToolBlockedError(auth.decision, auth.analysis);
     const call = auth.call;
 
     // Registered while it runs, so a suspension can stop it. The executor gets
@@ -386,12 +402,13 @@ export class ToolGateway {
 
   /** Files through the firewall's own executors (symlink-safe, re-checked at the real path). */
   async files(ctx: FirewallContext, input: unknown) {
-    return this.execute(ctx, input, async (call) => {
+    return this.execute(ctx, input, async (call, auth) => {
       if (call.kind !== "files") throw new Error("not a files call");
       const fw = this.o.firewall;
+      const inner = executionContext(ctx, auth);
       switch (call.operation) {
-        case "read": return { output: (await fw.readFile(ctx, call.path, { permission: "tool.files:read" })).toString("utf8") };
-        case "write": await fw.writeFile(ctx, call.path, call.content ?? "", { permission: "tool.files:write" }); return { data: { written: true } };
+        case "read": return { output: (await fw.readFile(inner, call.path, { permission: "tool.files:read" })).toString("utf8") };
+        case "write": await fw.writeFile(inner, call.path, call.content ?? "", { permission: "tool.files:write" }); return { data: { written: true } };
         case "list": {
           const real = await fs.realpath(call.path);
           if (real !== path.resolve(call.path)) throw new Error("Refusing to list through a symbolic link.");
@@ -434,9 +451,9 @@ export class ToolGateway {
 
   /** HTTP through the firewall's egress executor (DNS answers re-checked at connect time). */
   async http(ctx: FirewallContext, input: unknown) {
-    return this.execute(ctx, input, async (call, _auth, signal) => {
+    return this.execute(ctx, input, async (call, auth, signal) => {
       if (call.kind !== "http") throw new Error("not an http call");
-      const res = await this.o.firewall.request(ctx, {
+      const res = await this.o.firewall.request(executionContext(ctx, auth), {
         url: call.url, method: call.method, headers: call.headers, body: call.body, signal,
         action: `tool:http.${call.method.toLowerCase()}`, permission: call.method.toUpperCase() === "GET" || call.method.toUpperCase() === "HEAD" ? "tool.http:read" : "tool.http:write",
       });
