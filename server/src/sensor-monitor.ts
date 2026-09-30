@@ -16,7 +16,9 @@
  */
 import { createHash } from "node:crypto";
 import { config } from "./config.js";
-import { query } from "./db/pool.js";
+import { query, withLeaderLock } from "./db/pool.js";
+
+const SENSOR_CHECK_LOCK = 734_012_031;
 import * as outbox from "./outbox.js";
 import * as store from "./store.js";
 import type { Alert } from "./types.js";
@@ -90,7 +92,9 @@ let timer: NodeJS.Timeout | null = null;
 export function startSensorMonitor(intervalMs: number, realtimeFrame?: (alert: Alert) => unknown): void {
   stopSensorMonitor();
   timer = setInterval(() => {
-    checkSensors({ realtimeFrame }).catch((error) => {
+    // One instance checks at a time (the result is idempotent either way; this
+    // just stops N instances doing the same scan every five minutes).
+    withLeaderLock(SENSOR_CHECK_LOCK, () => checkSensors({ realtimeFrame })).catch((error) => {
       console.error("Legion: sensor check failed:", error instanceof Error ? error.message : "unknown error");
     });
   }, intervalMs);

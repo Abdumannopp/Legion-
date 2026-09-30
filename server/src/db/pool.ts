@@ -188,3 +188,26 @@ export async function currentRoleAttributes() {
 export async function closePool(): Promise<void> {
   await pool.end();
 }
+
+/**
+ * Runs `fn` on at most one instance at a time, cluster-wide: a session-level
+ * advisory lock held on a dedicated connection for the duration. Another
+ * instance that tries meanwhile skips (it does not wait). If this process
+ * dies, Postgres drops the connection and the lock with it — no stuck leader.
+ * For periodic jobs that are correct but wasteful when several instances run
+ * them at once (sensor-silence checks, behaviour sweeps).
+ */
+export async function withLeaderLock<T>(key: number, fn: () => Promise<T>): Promise<{ ran: true; value: T } | { ran: false }> {
+  const client = await pool.connect();
+  try {
+    const got = (await client.query<{ ok: boolean }>("SELECT pg_try_advisory_lock($1) AS ok", [key])).rows[0]?.ok;
+    if (!got) return { ran: false };
+    try {
+      return { ran: true, value: await fn() };
+    } finally {
+      await client.query("SELECT pg_advisory_unlock($1)", [key]).catch(() => {});
+    }
+  } finally {
+    client.release();
+  }
+}

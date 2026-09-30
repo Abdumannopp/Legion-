@@ -1,6 +1,6 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import cookieParser from "cookie-parser";
-import { apiLimiter, authLimiter, closeRateLimitStore, initRateLimitStore, loginAccountLimiter, mailPerAddressLimiter, makeMfaLimiter, makeStepUpLimiter } from "./ratelimit.js";
+import { apiLimiter, authLimiter, closeRateLimitStore, initRateLimitStore, redisConnected, loginAccountLimiter, mailPerAddressLimiter, makeMfaLimiter, makeStepUpLimiter } from "./ratelimit.js";
 import { hashForComparison, notifyAccountOwner, networkOf, recentLoginFailures, rememberLoginDevice } from "./account-security.js";
 import { backupHealthReport } from "./backup-health.js";
 import { applyTrustedProxies, checkWebSocketOrigin, clientAddress, corsMiddleware, originGuard, securityHeaders, upgradeRateLimited } from "./edge.js";
@@ -18,7 +18,7 @@ import * as integrations from "./integrations/registry.js";
 import * as connections from "./integrations/connections.js";
 import { ingestFindings } from "./integrations/ingest.js";
 import { wazuhAdapter } from "./integrations/wazuh.js";
-import { closePool, currentRoleAttributes, migrate, transaction } from "./db/pool.js";
+import { closePool, currentRoleAttributes, migrate, query, transaction } from "./db/pool.js";
 import { databaseRoleDecision } from "./db/provision.js";
 import { SETUP_LOCK_KEY, consumeSetupToken, ensureSetupToken, removeSetupTokenFile, setupBanner } from "./setup-token.js";
 import { WEBHOOK_REJECTION_DETAIL, isKeyId } from "./webhook-auth.js";
@@ -427,6 +427,16 @@ app.get("/health", async (req, res) => {
     // Names the third party that sees alert text, or null when none does.
     // An operator should be able to confirm this without reading .env.
     ai_provider: aiProviderName(),
+    // Which instance answered, in which region, and whether the state that
+    // must be shared across instances is (GLOBAL-SAAS-ARCHITECTURE.md).
+    instance: connections.INSTANCE,
+    region: config.region,
+    shared_state: {
+      realtime_fanout: config.redisUrl ? (realtime.realtimeConnected() ? "redis" : "redis-unreachable") : "single-instance",
+      rate_limits: config.redisUrl ? (redisConnected() ? "redis" : "local-fallback") : "single-instance",
+      ai_quota: "postgres",
+      jobs: "postgres-leases",
+    },
   });
 });
 
@@ -1187,7 +1197,7 @@ app.post("/alerts/:id/explain", requireRole("analyst"), async (req: AuthedReques
   let why: AiWhy = policy.reason;
   let meta;
   if (policy.allowed) {
-    if (!consumeAiQuota(tenantId).ok) why = "rate_limited";
+    if (!(await consumeAiQuota(tenantId)).ok) why = "rate_limited";
     else {
       const r = await explainAlertSafe(alert, locale, policy.dataMode);
       meta = r.meta;
@@ -1229,7 +1239,7 @@ app.post("/copilot/chat", requireRole("analyst"), async (req: AuthedRequest, res
   let why: AiWhy = policy.reason;
   let meta;
   if (policy.allowed) {
-    if (!consumeAiQuota(tenantId).ok) why = "rate_limited";
+    if (!(await consumeAiQuota(tenantId)).ok) why = "rate_limited";
     else {
       const r = await copilotAnswerSafe(body.message, body.history, alerts, locale, policy.dataMode);
       meta = r.meta;
@@ -2067,6 +2077,13 @@ if (process.env.NODE_ENV !== "test") {
   outbox.startOutboxWorker();
   // "Wazuh went quiet" becomes an alert of its own (sensor-monitor.ts).
   startSensorMonitor(5 * 60_000, newAlertFrame);
+  // Several instances need shared state for realtime fan-out and rate limits
+  // (Redis). Without it each instance is an island: correct, but a second
+  // instance would give clients per-instance limits and miss live events
+  // from its peers until they reconcile from the database.
+  if (config.isProduction && !config.redisUrl) {
+    console.warn("Legion: REDIS_URL is not set — realtime fan-out and rate limits are per instance. Set it before running more than one API instance.");
+  }
   // Polls pull integrations (src/integrations); leases make it safe on every instance.
   connections.startIntegrationWorker(15_000, newAlertFrame);
   // Retries failed agent-suspension notices, purges expired agent tokens,
@@ -2079,6 +2096,8 @@ if (process.env.NODE_ENV !== "test") {
     try {
       const removed = await sessions.pruneExpired();
       if (removed > 0) console.info(`Pruned ${removed} expired session token(s).`);
+      // Shared counters older than a day are no longer consulted.
+      await query("DELETE FROM usage_counters WHERE window_start < now() - interval '1 day'");
     } catch (error) {
       console.error("Session prune failed:", error instanceof Error ? error.message : error);
     }

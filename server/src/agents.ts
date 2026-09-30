@@ -26,7 +26,7 @@ import { alertForBehaviorChange, alertForFirewallDecision, alertForSecurityEvent
 import { chatSafe } from "./ai.js";
 import { aiPolicy, consumeAiQuota } from "./ai-policy.js";
 import { Pseudonymizer } from "./ai-safety.js";
-import { pool } from "./db/pool.js";
+import { pool, withLeaderLock } from "./db/pool.js";
 import { mailEnabled, sendMail } from "./mailer.js";
 import * as store from "./store.js";
 import { regionOf, regionUrl, servesRegion } from "./regional.js";
@@ -123,7 +123,7 @@ export function skillData(): SkillDataSource {
 export const skillModel: SkillModel = async (messages, { signal, tenantId }) => {
   const policy = await aiPolicy(tenantId);
   if (!policy.allowed) throw new Error(`AI analysis is unavailable for this organisation (${policy.reason})`);
-  if (!consumeAiQuota(tenantId).ok) throw new Error("AI request limit reached");
+  if (!(await consumeAiQuota(tenantId)).ok) throw new Error("AI request limit reached");
   const r = await chatSafe(messages, { maxTokens: 700, signal, pseudonymizer: policy.dataMode === "strict" ? new Pseudonymizer() : undefined });
   if (!r.ok) throw new Error(`the AI provider did not answer (${r.reason})`);
   return r.text;
@@ -199,23 +199,15 @@ function report(what: string, p: Promise<unknown>): Promise<void> {
 }
 
 const SWEEP_LOCK = 734_011_977;
+/** Re-assesses every workspace with recent agent activity; one instance at a time (0 when another holds it). */
 export async function sweepBehavior(identity: Pick<Identity, "behavior">): Promise<number> {
-  const c = await pool.connect();
-  try {
-    await c.query("BEGIN");
-    const got = (await c.query("SELECT pg_try_advisory_xact_lock($1) AS ok", [SWEEP_LOCK])).rows[0].ok;
-    if (!got) { await c.query("COMMIT"); return 0; }
-    const tenants = await c.query<{ tenant_id: string }>(
+  const r = await withLeaderLock(SWEEP_LOCK, async () => {
+    const tenants = await pool.query<{ tenant_id: string }>(
       "SELECT DISTINCT tenant_id FROM firewall_decisions WHERE occurred_at > now() - interval '24 hours'");
     for (const t of tenants.rows) await identity.behavior.sweep(t.tenant_id);
-    await c.query("COMMIT");
     return tenants.rows.length;
-  } catch (err) {
-    await c.query("ROLLBACK").catch(() => {});
-    throw err;
-  } finally {
-    c.release();
-  }
+  });
+  return r.ran ? r.value : 0;
 }
 
 type Identity = ReturnType<typeof createAgentIdentity>;

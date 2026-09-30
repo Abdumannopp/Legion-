@@ -6,6 +6,7 @@
  * directly.
  */
 import { config } from "./config.js";
+import { query } from "./db/pool.js";
 import { aiProviderName, type AiCallMeta, type AiFailure, type DataMode } from "./ai.js";
 import * as store from "./store.js";
 import type { Tenant } from "./types.js";
@@ -53,11 +54,32 @@ const windows = new Map<string, number[]>();
 
 /**
  * Provider calls are paid for by the operator and slow, and `?force=true` lets
- * an analyst repeat one at will. Best-effort and per instance (in memory): it
- * stops a loop or a runaway client, not a determined multi-instance flood —
- * that is what the provider-side spend cap is for.
+ * an analyst repeat one at will. The quota is PER WORKSPACE ACROSS ALL
+ * INSTANCES: one counter row per workspace per minute in Postgres
+ * (usage_counters), incremented only while under the limit, in one atomic
+ * statement — so three replicas give a workspace the same allowance as one.
+ * If the database cannot be reached the check falls back to counting in this
+ * process: a smaller guarantee, never "no limit".
  */
-export function consumeAiQuota(tenantId: string, now = Date.now()): { ok: boolean; retryAfterSeconds: number } {
+export async function consumeAiQuota(tenantId: string, now = Date.now()): Promise<{ ok: boolean; retryAfterSeconds: number }> {
+  const retryAfterSeconds = Math.max(1, 60 - Math.floor((now % 60_000) / 1000));
+  try {
+    const r = await query(
+      `INSERT INTO usage_counters (tenant_id, meter, window_start, count)
+       VALUES ($1, 'ai.requests', date_trunc('minute', to_timestamp($3 / 1000.0)), 1)
+       ON CONFLICT (tenant_id, meter, window_start) DO UPDATE SET count = usage_counters.count + 1
+         WHERE usage_counters.count < $2
+       RETURNING count`,
+      [tenantId, config.aiRateLimitPerMinute, now],
+    );
+    return r.rowCount ? { ok: true, retryAfterSeconds: 0 } : { ok: false, retryAfterSeconds };
+  } catch {
+    return consumeLocalAiQuota(tenantId, now);
+  }
+}
+
+/** The per-process fallback (and the old behaviour). */
+export function consumeLocalAiQuota(tenantId: string, now = Date.now()): { ok: boolean; retryAfterSeconds: number } {
   const recent = (windows.get(tenantId) ?? []).filter((t) => now - t < 60_000);
   if (recent.length >= config.aiRateLimitPerMinute) {
     windows.set(tenantId, recent);
@@ -67,7 +89,10 @@ export function consumeAiQuota(tenantId: string, now = Date.now()): { ok: boolea
   windows.set(tenantId, recent);
   return { ok: true, retryAfterSeconds: 0 };
 }
-export function resetAiQuota(): void { windows.clear(); }
+export async function resetAiQuota(): Promise<void> {
+  windows.clear();
+  await query("DELETE FROM usage_counters WHERE meter = 'ai.requests'").catch(() => {});
+}
 
 // --- audit -------------------------------------------------------------------
 

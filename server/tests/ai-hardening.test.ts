@@ -73,7 +73,7 @@ beforeEach(async () => {
     openrouterApiKey: PROVIDER_KEY, groqApiKey: "", aiProvider: "", aiTenantDefault: "on",
     aiTimeoutMs: 15_000, aiMaxInputChars: 24_000, aiMaxOutputChars: 6_000, aiBreakerThreshold: 5, aiBreakerCooldownSeconds: 60, aiRateLimitPerMinute: 30,
   });
-  resetAiCircuit(); resetAiQuota();
+  resetAiCircuit(); await resetAiQuota();
   tenant = randomUUID(); other = randomUUID();
   await query("INSERT INTO tenants (id, name, trial_ends_at) VALUES ($1, 'A', now() + interval '14 days'), ($2, 'B', now() + interval '14 days')", [tenant, other]);
   const hash = await bcrypt.hash("password123", 4);
