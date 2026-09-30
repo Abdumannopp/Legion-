@@ -140,12 +140,16 @@ fallback).
 - **no cross-credential send**;
 - concurrent drains never double-send; stale claims are recovered; a full spool drops the oldest.
 
-### Run results (this commit)
-
-See `§6`, filled in from the final run.
-
 ---
 
-## 6. Final verification run
+## 6. Final verification run (real PostgreSQL 16, redis-server 7, Python 3.11, Node 22)
 
-_(Filled in below.)_
+| Suite | Result |
+|---|---|
+| Server `tsc --noEmit` and `npm run build` | clean |
+| Server tests with `LEGION_REQUIRE_FAILURE_INJECTION=1` (nothing may skip) | **40 files, 994 tests passed** (phase 2 ended at 38 / 960) |
+| Agent-identity tests | **25 files, 767 passed** (`npm ci` now works with the synced lockfile) |
+| End-to-end (`ops/tests/e2e-wazuh.mjs`: provisioned app role, real integration script with spool, agents) | **all checks passed** |
+| Wazuh integration (`python3 -m unittest integrations/test_custom_legion.py`) | **23 passed** |
+| Frontend `vitest` / `lint` | **126 passed** / clean |
+| CI gate self-test (`ops/tests/test-ci-gate.sh`), `check-ci-gate.mjs` | 10 passed / OK |
