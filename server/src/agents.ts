@@ -29,6 +29,7 @@ import { Pseudonymizer } from "./ai-safety.js";
 import { pool } from "./db/pool.js";
 import { mailEnabled, sendMail } from "./mailer.js";
 import * as store from "./store.js";
+import { regionOf, regionUrl, servesRegion } from "./regional.js";
 import type { AccessState, Alert, Severity, User } from "./types.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -258,6 +259,15 @@ export function subscriptionGate(deps: Pick<AgentLayerDeps, "accessState">) {
     if (!AGENT_SURFACE.test(path)) return next();
     const tenantId = req.principal?.tenantId;
     if (!tenantId || req.principal?.type === "external_system") return next();
+    try {
+      // Data residency, as for people (regional.ts): another region's workspace is not served here.
+      const workspace = await store.getTenant(tenantId);
+      if (workspace && !servesRegion(workspace)) {
+        return res.status(421).json({ detail: "This workspace is hosted in another region.", region: regionOf(workspace), region_url: regionUrl(regionOf(workspace)) });
+      }
+    } catch (error) {
+      return next(error);
+    }
     if (STOP_ACTIONS.some(([m, re]) => m === req.method && re.test(path))) return next();
     try {
       const state = await deps.accessState(tenantId);

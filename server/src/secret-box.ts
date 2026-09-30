@@ -32,7 +32,7 @@ import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:cr
 import { config } from "./config.js";
 import { parseKeyring } from "./keyring-parse.js";
 
-export type SecretPurpose = "mfa-totp" | "webhook-secret";
+export type SecretPurpose = "mfa-totp" | "webhook-secret" | "integration-secret";
 
 const FORMAT = "lsb1";
 const DEV_KEY_ID = "dev";

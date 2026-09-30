@@ -13,7 +13,11 @@ import { z } from "zod";
 import { config, saasWarnings } from "./config.js";
 import * as store from "./store.js";
 import * as workspaces from "./workspaces.js";
-import { effectiveSettings, isTimeZone, regionOf } from "./regional.js";
+import { effectiveSettings, isTimeZone, regionOf, regionUrl, servesRegion } from "./regional.js";
+import * as integrations from "./integrations/registry.js";
+import * as connections from "./integrations/connections.js";
+import { ingestFindings } from "./integrations/ingest.js";
+import { wazuhAdapter } from "./integrations/wazuh.js";
 import { closePool, currentRoleAttributes, migrate, transaction } from "./db/pool.js";
 import { databaseRoleDecision } from "./db/provision.js";
 import { SETUP_LOCK_KEY, consumeSetupToken, ensureSetupToken, removeSetupTokenFile, setupBanner } from "./setup-token.js";
@@ -277,6 +281,14 @@ async function authenticate(req: AuthedRequest, res: Response): Promise<boolean>
     return false;
   }
   req.user = member;
+  // Data residency: a workspace is served only by the deployment in its
+  // region (regional.ts). Nothing of it is here to serve anyway; this makes
+  // a misrouted client get a pointer instead of an empty workspace.
+  const workspace = await store.getTenant(member.tenant_id);
+  if (workspace && !servesRegion(workspace)) {
+    misdirected(res, workspace);
+    return false;
+  }
   return enforceAccess(req, res);
 }
 
@@ -1770,21 +1782,8 @@ app.post("/security-events/sync", requireRole("admin"), async (req: AuthedReques
  * history that can never be backfilled. Billing state limits the UI, not the
  * recording of events.
  */
-/**
- * The sensor's own time for an event (Wazuh: "2026-09-30T01:02:03.456+0000"),
- * or null. Kept apart from created_at (when Legion stored it) because they
- * differ when a sensor re-sends from its spool after an outage — an analyst
- * needs to know an alert that arrived now happened an hour ago. Anything
- * unparseable, before 2000 or more than five minutes in the future (a wrong
- * sensor clock) is ignored rather than trusted.
- */
-export function eventTime(raw: unknown): string | null {
-  if (typeof raw !== "string" || raw.length > 64) return null;
-  const normalised = raw.trim().replace(/([+-]\d{2})(\d{2})$/, "$1:$2");
-  const t = Date.parse(normalised);
-  if (!Number.isFinite(t) || t < Date.UTC(2000, 0, 1) || t > Date.now() + 5 * 60_000) return null;
-  return new Date(t).toISOString();
-}
+// eventTime moved to the Wazuh adapter; re-exported for existing callers.
+export { eventTime } from "./integrations/wazuh.js";
 
 app.post(WEBHOOK_PATH,
   // Refuses an address that keeps failing BEFORE its body is read.
@@ -1812,59 +1811,92 @@ app.post(WEBHOOK_PATH,
   // Only now — the bytes are proven to come from the credential's holder — is
   // the body parsed. A signed document that is not valid JSON is the sender's
   // bug: 400, no stack trace.
-  let body: { event?: unknown; provider?: unknown } & Record<string, unknown>;
+  let body: unknown;
   try {
     const parsed: unknown = JSON.parse(rawBody!.toString("utf8"));
-    body = parsed !== null && typeof parsed === "object" ? parsed as typeof body : {};
+    body = parsed !== null && typeof parsed === "object" ? parsed : {};
   } catch {
     return res.status(400).json({ detail: "Invalid request" });
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const event: any = body.event || body;
-  const description = String(event?.rule?.description || "");
-  if (!description) return res.status(202).json({ status: "skipped" });
+  // Data residency: this deployment stores data only for its own region's
+  // workspaces. A sensor pointed at the wrong region is told where to go (and
+  // spools until reconfigured) instead of creating data here.
+  const workspace = await store.getTenant(tenantId);
+  if (workspace && !servesRegion(workspace)) return misdirected(res, workspace);
 
-  const source = String(body.provider || "webhook");
-  const rawId = String(event.id || JSON.stringify(event));
-  const id = `SEC-${createHmac("sha256", config.webhookSecret || "legion-webhook-event-id").update(`${tenantId}:${source}:${rawId}`).digest("hex").slice(0, 16).toUpperCase()}`;
-
-  const level = Number(event.rule?.level || 0);
-  // Whatever the sensor sends is bounded and shaped before it is stored: these
-  // fields feed prompts and analyst-facing suggestions, and are attacker-
-  // influenced. (The original text remains in the summary/full_log.)
-  const srcip = typeof event.data?.srcip === "string" && isIp(event.data.srcip) ? event.data.srcip : null;
-  const severity: Severity = level >= 12 ? "critical" : level >= 9 ? "high" : level >= 5 ? "medium" : "low";
-  const agentName = event.agent?.name ? clip(String(event.agent.name), 255) : null;
-  const occurredAt = eventTime(event.timestamp);
-
-  // One transaction: the alert, the asset it came from, its email and its
-  // dashboard frame. 202 is only sent after that commit, and nothing here
-  // waits on SMTP or Redis — the outbox worker does that, with retries. If the
-  // commit fails the request fails (5xx) and the sensor retries; nothing was
-  // stored, so the retry is not a duplicate.
-  const alert = await outbox.insertAlertAndNotify({
-    id, tenant_id: tenantId, title: clip(description, 300), severity, agent: "Sentinel", status: "open",
-    summary: String(event.full_log || description).slice(0, 4000),
-    confidence: Math.min(100, level * 7), ai_explanation: null, explained_at: null,
-    source_ip: srcip, target: agentName,
-    mitre_technique: Array.isArray(event.rule?.mitre?.id) ? clip(event.rule.mitre.id.map(String).join(", "), 200) || null : null, source,
-    occurred_at: occurredAt,
-  }, {
-    // Turns the asset inventory into live data from the sensors instead of a
-    // static seed list.
-    asset: agentName ? {
-      name: agentName,
-      ip: event.agent?.ip ? String(event.agent.ip) : null,
-      os: event.agent?.os?.name ? String(event.agent.os.name) : null,
-    } : null,
-    realtime: newAlertFrame,
-  });
+  // Wazuh is one integration: its adapter maps the event, the shared path
+  // stores it (src/integrations). One transaction: the alert, the asset it
+  // came from, its email and its dashboard frame. 202 is only sent after that
+  // commit, and nothing here waits on SMTP or Redis — the outbox worker does
+  // that, with retries. If the commit fails the request fails (5xx) and the
+  // sensor retries; nothing was stored, so the retry is not a duplicate.
+  const normalized = wazuhAdapter.normalize(body);
+  if (normalized.skipped) return res.status(202).json({ status: "skipped" });
+  const report = await ingestFindings(tenantId, normalized.source, normalized.findings, { realtime: newAlertFrame });
   // Idempotent by construction: retries from the sensor collapse onto the same
   // primary key instead of creating duplicates.
-  if (!alert) return res.status(202).json({ status: "skipped", reason: "duplicate", alert_id: id });
+  const id = report.ingested[0] ?? report.duplicates[0]!;
+  if (!report.ingested.length) return res.status(202).json({ status: "skipped", reason: "duplicate", alert_id: id });
   return res.status(202).json({ status: "ingested", alert_id: id });
   });
+
+// --- Integrations ------------------------------------------------------------
+// The catalogue of integrations and this workspace's configured connections
+// (src/integrations). Wazuh's credentials stay at /security-events/credentials.
+
+app.get("/integrations/catalogue", auth, (_req, res) => {
+  res.json({ integrations: integrations.catalogue() });
+});
+
+app.get("/integrations", requireRole("admin"), async (req: AuthedRequest, res) => {
+  res.json({ connections: await connections.list(req.user!.tenant_id) });
+});
+
+app.post("/integrations", requireRole("admin"), async (req: AuthedRequest, res) => {
+  const body = parse(z.object({
+    kind: z.string().regex(/^[a-z][a-z0-9_]{1,40}$/),
+    name: z.string().trim().min(1).max(100),
+    config: z.record(z.string(), z.unknown()).default({}),
+    secrets: z.record(z.string().max(100), z.string().max(8192)).default({}),
+    poll_seconds: z.number().int().min(60).max(86_400).optional(),
+  }), req.body ?? {}, res); if (!body) return;
+  try {
+    const created = await connections.create(req.user!.tenant_id, { kind: body.kind, name: body.name, config: body.config, secrets: body.secrets, pollSeconds: body.poll_seconds }, req.user!.id);
+    await log(req, "integration.created", "integration", created.id, `${created.kind}: ${created.name}`);
+    noStore(res);
+    return res.status(201).json(created);
+  } catch (error) {
+    if (error instanceof connections.ConnectionError) return res.status(error.code === "not_found" ? 404 : 400).json({ detail: error.message });
+    throw error;
+  }
+});
+
+for (const [action, status] of [["pause", "paused"], ["resume", "active"]] as const) {
+  app.post(`/integrations/:id/${action}`, requireRole("admin"), async (req: AuthedRequest, res) => {
+    if (!UUID_RE.test(String(req.params.id))) return res.status(404).json({ detail: "Integration not found." });
+    try {
+      const c = await connections.setStatus(req.user!.tenant_id, String(req.params.id), status);
+      await log(req, `integration.${action}d`, "integration", c.id, c.kind);
+      return res.json(c);
+    } catch (error) {
+      if (error instanceof connections.ConnectionError) return res.status(404).json({ detail: error.message });
+      throw error;
+    }
+  });
+}
+
+app.delete("/integrations/:id", requireRole("admin"), async (req: AuthedRequest, res) => {
+  if (!UUID_RE.test(String(req.params.id))) return res.status(404).json({ detail: "Integration not found." });
+  try {
+    const c = await connections.setStatus(req.user!.tenant_id, String(req.params.id), "disabled");
+    await log(req, "integration.removed", "integration", c.id, c.kind);
+    return res.json({ status: "removed", id: c.id });
+  } catch (error) {
+    if (error instanceof connections.ConnectionError) return res.status(404).json({ detail: error.message });
+    throw error;
+  }
+});
 
 app.use((_req, res) => res.status(404).json({ detail: "Not found" }));
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
@@ -1888,6 +1920,12 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   console.error(`Unhandled error: ${e?.name ?? "Error"}${e?.code ? ` [${e.code}]` : ""}: ${e?.message ?? "unknown"}`);
   res.status(500).json({ detail: "Internal server error" });
 });
+
+/** 421: this deployment does not hold the workspace's data (another region does). */
+function misdirected(res: Response, tenant: { region?: string | null }): Response {
+  const region = regionOf(tenant);
+  return res.status(421).json({ detail: "This workspace is hosted in another region.", region, region_url: regionUrl(region) });
+}
 
 /** Postgres / pool errors that mean "the database is not reachable right now". */
 const DB_UNAVAILABLE_CODES = new Set([
@@ -2029,6 +2067,8 @@ if (process.env.NODE_ENV !== "test") {
   outbox.startOutboxWorker();
   // "Wazuh went quiet" becomes an alert of its own (sensor-monitor.ts).
   startSensorMonitor(5 * 60_000, newAlertFrame);
+  // Polls pull integrations (src/integrations); leases make it safe on every instance.
+  connections.startIntegrationWorker(15_000, newAlertFrame);
   // Retries failed agent-suspension notices, purges expired agent tokens,
   // and re-assesses agent behaviour every minute (agents.ts startJobs).
   const stopAgentJobs = agentLayer.startJobs();
@@ -2076,6 +2116,7 @@ if (process.env.NODE_ENV !== "test") {
       console.info(`${signal} received — draining connections.`);
       outbox.stopOutboxWorker(); // undelivered rows stay queued for the next start
       stopSensorMonitor();
+      connections.stopIntegrationWorker();
       realtime.stopHeartbeat();
       realtime.stopRevalidation();
       realtime.stopLiveness();
