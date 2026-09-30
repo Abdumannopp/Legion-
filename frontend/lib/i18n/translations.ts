@@ -35,6 +35,10 @@ import { pricing } from "./ns/pricing";
 import { notFound } from "./ns/notFound";
 import { meta } from "./ns/meta";
 import { workspaces } from "./ns/workspaces";
+import { errors } from "./ns/errors";
+import { agents } from "./ns/agents";
+import { overview } from "./ns/overview";
+import { connect } from "./ns/connect";
 
 export { LOCALES, DEFAULT_LOCALE, isLocale } from "./core";
 export type { Locale } from "./core";
@@ -70,6 +74,10 @@ const namespaces = {
   notFound,
   meta,
   workspaces,
+  errors,
+  agents,
+  overview,
+  connect,
 };
 
 type Namespaces = typeof namespaces;

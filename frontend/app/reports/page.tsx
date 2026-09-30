@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { BarChart3, Loader2, ShieldCheck, Monitor, Bot } from "lucide-react";
+import { sourceLabel } from "@/lib/sources";
 import Sidebar from "@/components/Sidebar";
 import {
   Alert,
@@ -32,13 +33,7 @@ const STATUS_COLOR: Record<Alert["status"], string> = {
   resolved: palette.success,
 };
 
-const AGENT_COLOR: Record<Alert["agent"], string> = {
-  Sentinel: palette.info,
-  Hunter: palette.warning,
-  Guardian: palette.success,
-  Oracle: palette.brandBright,
-  Executor: palette.critical,
-};
+const SOURCE_COLORS = [palette.info, palette.brandBright, palette.success, palette.warning, palette.critical];
 
 function BarRow({
   label,
@@ -135,13 +130,13 @@ export default function ReportsPage() {
 
   const total = alerts.length;
 
-  const agentCounts = alerts.reduce<Record<string, number>>((acc, a) => {
-    acc[a.agent] = (acc[a.agent] || 0) + 1;
+  // Where detections came from (Wazuh, an integration, Legion itself).
+  const sourceCounts = alerts.reduce<Record<string, number>>((acc, a) => {
+    const label = sourceLabel(a.source, t) ?? t.reports.otherSource;
+    acc[label] = (acc[label] || 0) + 1;
     return acc;
   }, {});
-  const agents = (Object.keys(agentCounts) as Alert["agent"][]).sort(
-    (a, b) => agentCounts[b] - agentCounts[a]
-  );
+  const sources = Object.keys(sourceCounts).sort((a, b) => sourceCounts[b] - sourceCounts[a]);
 
   const explainedCount = alerts.filter((a) => a.ai_explanation).length;
   const avgConfidence =
@@ -247,22 +242,22 @@ export default function ReportsPage() {
                   </div>
                 </div>
 
-                {/* Detection by agent */}
+                {/* Detections by source */}
                 <div className="rounded-xl border border-line bg-surface p-4">
                   <h2 className="text-ink text-sm font-medium mb-4">
                     {t.reports.byAgent}
                   </h2>
                   <div className="flex flex-col gap-3">
-                    {agents.length === 0 ? (
+                    {sources.length === 0 ? (
                       <p className="text-ink-faint text-xs">{t.reports.noIncidents}</p>
                     ) : (
-                      agents.map((agent) => (
+                      sources.map((source, i) => (
                         <BarRow
-                          key={agent}
-                          label={agent}
-                          count={agentCounts[agent]}
+                          key={source}
+                          label={source}
+                          count={sourceCounts[source]}
                           total={total}
-                          color={AGENT_COLOR[agent] || palette.inkMuted}
+                          color={SOURCE_COLORS[i % SOURCE_COLORS.length]}
                         />
                       ))
                     )}

@@ -10,10 +10,12 @@ import {
   AlertTriangle,
   AlertCircle,
   Info,
-  Zap,
+  Radio,
 } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import { Alert, getAlerts, isLoggedIn, ApiError } from "@/lib/api";
+import ErrorNotice from "@/components/ErrorNotice";
+import { sourceLabel } from "@/lib/sources";
 import { palette } from "@/lib/theme";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 import { timeAgo } from "@/lib/i18n/format";
@@ -43,7 +45,7 @@ export default function IncidentsPage() {
   const [statusFilter, setStatusFilter] = useState<"all" | Alert["status"]>("all");
   const [severityFilter, setSeverityFilter] = useState<"all" | Alert["severity"]>("all");
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -59,11 +61,7 @@ export default function IncidentsPage() {
         router.push("/login");
         return;
       }
-      setError(
-        err instanceof ApiError
-          ? err.message
-          : t.dashboard.alert.loadError
-      );
+      setError(err);
     } finally {
       setLoading(false);
     }
@@ -145,10 +143,8 @@ export default function IncidentsPage() {
             </select>
           </div>
 
-          {error && (
-            <div className="mb-4 text-critical text-xs bg-critical/10 rounded-lg px-3 py-2.5">
-              {error}
-            </div>
+          {error != null && (
+            <div className="mb-4"><ErrorNotice error={error} onRetry={load} /></div>
           )}
 
           {loading ? (
@@ -214,8 +210,8 @@ export default function IncidentsPage() {
                         </td>
                         <td className="hidden sm:table-cell px-4 py-3 text-ink-muted text-xs">
                           <span className="inline-flex items-center gap-1.5">
-                            <Zap size={11} />
-                            {incident.agent}
+                            <Radio size={11} />
+                            {sourceLabel(incident.source, t) ?? "—"}
                           </span>
                         </td>
                         <td className="hidden sm:table-cell px-4 py-3 text-ink-faint text-xs whitespace-nowrap">

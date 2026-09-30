@@ -48,6 +48,8 @@ export interface Alert {
   source_ip: string | null;
   target: string | null;
   mitre_technique: string | null;
+  /** Where the alert came from: "wazuh", an integration kind, or Legion itself ("legion-test", "legion-monitor", …). */
+  source?: string | null;
   /** When the event happened at its source (the sensor's own timestamp); created_at is when Legion stored it. */
   occurred_at?: string | null;
   /** English text of the suggested next steps (kept for API clients). */
@@ -84,10 +86,16 @@ class ApiError extends Error {
   status: number;
   /** Machine-readable reason when the API gives one, e.g. "email_unverified". */
   code?: string;
-  constructor(message: string, status: number, code?: string) {
+  /** The rest of the error body (e.g. region_url, access_state, approval) for explaining it. */
+  data?: Record<string, unknown>;
+  /** Seconds the server asked us to wait (Retry-After), when it said. */
+  retryAfter?: number;
+  constructor(message: string, status: number, code?: string, data?: Record<string, unknown>, retryAfter?: number) {
     super(message);
     this.status = status;
     this.code = code;
+    this.data = data;
+    this.retryAfter = retryAfter;
   }
 }
 
@@ -142,13 +150,19 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (!res.ok) {
     let detail = res.statusText;
+    let code: string | undefined;
+    let data: Record<string, unknown> | undefined;
     try {
+      // Two shapes: { detail, code } (dashboard API) and { error: { code, message } } (agent layer).
       const body = await res.json();
-      detail = body.detail || detail;
+      data = body && typeof body === "object" ? body : undefined;
+      detail = body.detail || body.error?.message || body.message || detail;
+      code = body.code || body.error?.code;
     } catch {
       // response wasn't JSON, keep statusText
     }
-    throw new ApiError(detail, res.status);
+    const retry = Number(res.headers.get("retry-after"));
+    throw new ApiError(detail, res.status, code, data, Number.isFinite(retry) && retry > 0 ? retry : undefined);
   }
 
   if (res.status === 204) return undefined as T;
@@ -727,3 +741,169 @@ export function sendTestNotification(): Promise<{ status: string; message?: stri
 }
 
 export { ApiError };
+
+
+// ---------- Overview and onboarding ----------
+
+export type ProtectionStatus = "not_connected" | "waiting_for_data" | "attention" | "protected";
+export type SourceHealth = "receiving" | "waiting" | "silent" | "error" | "paused";
+export type OnboardingStepId = "connect" | "first_event" | "notifications" | "team" | "agent";
+export type FirewallDecisionName = "ALLOW" | "WARN" | "CONFIRM" | "BLOCK" | "QUARANTINE" | "KILL";
+
+export interface Overview {
+  status: ProtectionStatus;
+  reasons: string[];
+  protected: {
+    sources: { kind: string; name: string; health: SourceHealth; last_event_at: string | null }[];
+    assets: number;
+    assets_online: number;
+    agents: { total: number; active: number; stopped: number };
+  };
+  threats: {
+    open: { critical: number; high: number; medium: number; low: number };
+    open_total: number;
+    new_last_24h: number;
+    top: { id: string; title: string; severity: Alert["severity"]; created_at: string }[];
+  };
+  blocked: {
+    window_days: number;
+    refused: number;
+    contained: number;
+    approvals_pending: number;
+    recent: { decision_id: string; at: string; agent_id: string; agent_name: string | null; action: string; decision: FirewallDecisionName; rules: string[]; reason: string | null }[];
+  };
+  onboarding: { steps: { id: OnboardingStepId; done: boolean; optional: boolean }[]; complete: boolean };
+}
+
+export function getOverview(): Promise<Overview> {
+  return request("/overview");
+}
+
+// ---------- Connect (sensor keys, integrations) ----------
+
+export interface SensorKey {
+  id: string;
+  label: string;
+  status: "active" | "rotating" | "expired" | "revoked";
+  created_at: string;
+  last_used_at: string | null;
+}
+export interface IssuedSensorKey extends SensorKey { secret: string; api_key: string }
+
+export function getSensorKeys(): Promise<{ credentials: SensorKey[] }> {
+  return request("/security-events/credentials");
+}
+export function createSensorKey(label: string): Promise<IssuedSensorKey> {
+  return request("/security-events/credentials", { method: "POST", body: JSON.stringify({ label }) });
+}
+export function revokeSensorKey(id: string): Promise<{ status: string }> {
+  return request(`/security-events/credentials/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+export function sendTestAlert(): Promise<{ alert_id: string }> {
+  return request("/security-events/test", { method: "POST" });
+}
+
+export interface IntegrationInfo {
+  kind: string;
+  displayName: string;
+  vendor: string;
+  status: "available" | "planned";
+  plane: "data" | "tool";
+  inbound: "push" | "pull" | null;
+  outbound: string[];
+  summary: string;
+  auth: string;
+}
+export function getIntegrationCatalogue(): Promise<{ integrations: IntegrationInfo[] }> {
+  return request("/integrations/catalogue");
+}
+
+function absoluteApi(path: string): string {
+  const base = API_URL.startsWith("http") ? API_URL : `${typeof window !== "undefined" ? window.location.origin : ""}${API_URL}`;
+  return `${base.replace(/\/+$/, "")}${path}`;
+}
+/** Where sensors send events: this API's webhook, as an absolute URL. */
+export function webhookUrl(): string {
+  return absoluteApi("/security-events/webhook");
+}
+/** Where an AI agent exchanges its ID and secret for a short-lived token. */
+export function agentTokenUrl(): string {
+  return absoluteApi("/agent/v1/token");
+}
+
+// ---------- AI agents ----------
+
+export interface AgentPermissionInfo { id: string; tier: 0 | 1 | 2; asks_first: boolean }
+export function getAgentPermissions(): Promise<{ permissions: AgentPermissionInfo[]; never: string[] }> {
+  return request("/agent-permissions");
+}
+
+export interface AgentSummary {
+  id: string;
+  name: string;
+  description: string;
+  owner: { userId: string; active: boolean };
+  status: string;
+  statusReason: string | null;
+  canActNow: boolean;
+  blockedBecause: string | null;
+  createdAt: string;
+  permissions: { granted: string[]; effective: string[] };
+  tools: { families: string[]; skills: string[]; used: { action: string; calls: number; lastAt: string }[] };
+  connectedSystems: { destinations: string[]; mcpServers: string[]; agents: string[] };
+  risk: { level: string; overall: "low" | "medium" | "high" | "critical"; refusalsInWindow: number; containmentsInWindow: number; pendingApprovals: number; behavior: { level: string; score: number } | null };
+  activity: { lastActivityAt: string | null; decisionsInWindow: number; activeCredentials: number };
+}
+export function getAgents(): Promise<{ agents: AgentSummary[] }> {
+  return request("/agents/registry");
+}
+export function createAgent(input: { name: string; description?: string; permissions: string[] }): Promise<{ identity: { id: string; name: string }; credential: { id: string; secret: string } }> {
+  return request("/agents", { method: "POST", body: JSON.stringify(input) });
+}
+export function updateAgentPermissions(id: string, permissions: string[]): Promise<{ identity: { id: string; permissions: string[] } }> {
+  return request(`/agents/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ permissions }) });
+}
+export function pauseAgent(id: string, reason?: string): Promise<unknown> {
+  return request(`/agents/${encodeURIComponent(id)}/suspend`, { method: "POST", body: JSON.stringify(reason ? { reason } : {}) });
+}
+export function resumeAgent(id: string): Promise<unknown> {
+  return request(`/agents/${encodeURIComponent(id)}/resume`, { method: "POST", body: JSON.stringify({}) });
+}
+export function emergencyStopAgent(id: string, reason: string, compromise: "suspected" | "confirmed"): Promise<unknown> {
+  return request(`/kill-switch/agents/${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify({ reason, compromise }) });
+}
+
+export interface AgentDecision {
+  decisionId: string;
+  occurredAt: string;
+  principalId: string;
+  action: string;
+  permission: string | null;
+  decision: FirewallDecisionName;
+  destination: string | null;
+  ruleHits: { id: string; effect: string; reason: string }[];
+}
+export function getAgentDecisions(agentId: string): Promise<{ decisions: AgentDecision[] }> {
+  return request(`/firewall/decisions?principalId=${encodeURIComponent(agentId)}&limit=50`);
+}
+
+export interface ApprovalRequest {
+  id: string;
+  identityId: string;
+  action: string;
+  permission: string | null;
+  resourceType: string | null;
+  resourceId: string | null;
+  preview: unknown;
+  riskScore: number;
+  ruleIds: string[];
+  status: "pending" | "approved" | "denied" | "consumed" | "expired" | "cancelled";
+  requestedAt: string;
+  expiresAt: string;
+}
+export function getApprovals(status: ApprovalRequest["status"] = "pending"): Promise<{ approvals: ApprovalRequest[] }> {
+  return request(`/firewall/approvals?status=${status}`);
+}
+export function answerApproval(id: string, answer: "approve" | "deny", reason?: string): Promise<{ approval: ApprovalRequest }> {
+  return request(`/firewall/approvals/${encodeURIComponent(id)}/${answer}`, { method: "POST", body: JSON.stringify(reason ? { reason } : {}) });
+}

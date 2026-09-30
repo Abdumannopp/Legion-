@@ -60,7 +60,7 @@ export const site = defineMessages({
       heroTitle: "Stop chasing alerts.",
       heroTitleAccent: "Start stopping threats.",
       heroText:
-        "Legion is a security operations console for teams running Wazuh. It turns thousands of raw alerts into a short, explained list of decisions — so a small team can respond like a big one.",
+        "Legion watches your computers and your AI agents, explains every threat in plain language, and stops risky AI actions before they happen — so a small team can respond like a big one.",
       ctaTrial: (days: number) => `Start ${days}-day free trial`,
       ctaPricing: "See pricing",
       noCard: "No credit card required.",
@@ -68,8 +68,8 @@ export const site = defineMessages({
       featuresTitle: "From alert to decision",
       features: {
         realtime: {
-          title: "Wazuh, in real time",
-          text: "Alerts arrive from your Wazuh manager through a signed webhook and appear on the dashboard the moment they happen — no polling, no spreadsheets.",
+          title: "Connected in minutes",
+          text: "Link the security sensor you already run — Wazuh today, more on the way — and alerts appear the moment they happen. No polling, no spreadsheets.",
         },
         explained: {
           title: "Explained, not just listed",
@@ -99,8 +99,8 @@ export const site = defineMessages({
           text: (days: number) => `Sign up with your work email. ${days} days free, no card.`,
         },
         connect: {
-          title: "Connect Wazuh",
-          text: "Drop our integration script into your Wazuh manager and paste one key.",
+          title: "Connect your sensors",
+          text: "Create a key, paste one block into your sensor's settings, and Legion tells you when the first event arrives.",
         },
         act: {
           title: "Act on what matters",
@@ -127,7 +127,7 @@ export const site = defineMessages({
     },
     /** What the one plan includes — also listed on the in-app Billing page. */
     planFeatures: [
-      "Wazuh integration with signed, real-time alert delivery",
+      "Real-time alerts from your security sensors (Wazuh today)",
       "Real-time alert feed and incident workflow",
       "AI explanations and investigation copilot",
       "Asset inventory built from your sensors",
@@ -159,7 +159,7 @@ export const site = defineMessages({
       heroTitle: "Хватит разгребать оповещения.",
       heroTitleAccent: "Пора останавливать угрозы.",
       heroText:
-        "Legion — консоль для команд безопасности, которые работают с Wazuh. Тысячи сырых оповещений превращаются в короткий список решений с понятными объяснениями — и небольшая команда справляется, как большая.",
+        "Legion следит за вашими компьютерами и ИИ-агентами, объясняет каждую угрозу простым языком и останавливает рискованные действия ИИ до того, как они произойдут, — и небольшая команда справляется, как большая.",
       ctaTrial: (days: number) => `Попробовать ${ruDays(days)} бесплатно`,
       ctaPricing: "Посмотреть цены",
       noCard: "Банковская карта не нужна.",
@@ -167,8 +167,8 @@ export const site = defineMessages({
       featuresTitle: "От оповещения к решению",
       features: {
         realtime: {
-          title: "Wazuh в реальном времени",
-          text: "Оповещения приходят с вашего Wazuh manager через подписанный вебхук и появляются на панели в ту же секунду — без опросов по расписанию и без таблиц.",
+          title: "Подключение за минуты",
+          text: "Подключите датчик безопасности, который у вас уже есть, — сейчас Wazuh, скоро и другие, — и оповещения появятся в ту же секунду. Без опросов по расписанию и без таблиц.",
         },
         explained: {
           title: "Не просто список, а объяснение",
@@ -198,8 +198,8 @@ export const site = defineMessages({
           text: (days: number) => `Зарегистрируйтесь с рабочей почтой. ${ruDays(days)} бесплатно, без карты.`,
         },
         connect: {
-          title: "Подключите Wazuh",
-          text: "Добавьте наш скрипт интеграции в Wazuh manager и вставьте один ключ.",
+          title: "Подключите датчики",
+          text: "Создайте ключ, вставьте один блок в настройки датчика — Legion сообщит, когда придёт первое событие.",
         },
         act: {
           title: "Займитесь главным",
@@ -226,7 +226,7 @@ export const site = defineMessages({
       taxNote: "Налог включён в цену или добавляется к ней в зависимости от вашей страны. Оплата через Paddle.com.",
     },
     planFeatures: [
-      "Интеграция с Wazuh: подписанная доставка оповещений в реальном времени",
+      "Оповещения от ваших датчиков безопасности в реальном времени (сейчас — Wazuh)",
       "Лента оповещений в реальном времени и работа с инцидентами",
       "Объяснения от ИИ и Copilot для расследований",
       "Учёт активов по данным ваших сенсоров",
@@ -258,7 +258,7 @@ export const site = defineMessages({
       heroTitle: "Ogohlantirishlar ortidan quvishni bas qiling.",
       heroTitleAccent: "Tahdidlarni to'xtatishni boshlang.",
       heroText:
-        "Legion — Wazuh bilan ishlaydigan jamoalar uchun xavfsizlik operatsiyalari konsoli. U minglab xom ogohlantirishlarni tushuntirishlari bilan qisqa qarorlar ro'yxatiga aylantiradi — shunda kichik jamoa ham katta jamoadek ishlay oladi.",
+        "Legion kompyuterlaringiz va AI agentlaringizni kuzatadi, har bir tahdidni oddiy tilda tushuntiradi va xavfli AI amallarini sodir bo'lishidan oldin to'xtatadi — shunda kichik jamoa ham katta jamoadek ishlay oladi.",
       ctaTrial: (days: number) => `${days} kun bepul sinab ko'ring`,
       ctaPricing: "Narxlarni ko'rish",
       noCard: "Bank kartasi talab qilinmaydi.",
@@ -266,8 +266,8 @@ export const site = defineMessages({
       featuresTitle: "Ogohlantirishdan qarorgacha",
       features: {
         realtime: {
-          title: "Wazuh — real vaqtda",
-          text: "Ogohlantirishlar Wazuh manager'ingizdan imzolangan webhook orqali keladi va sodir bo'lgan zahoti boshqaruv panelida paydo bo'ladi — davriy so'rovlarsiz, jadvallarsiz.",
+          title: "Bir necha daqiqada ulanish",
+          text: "Sizda bor xavfsizlik sensorini ulang — hozir Wazuh, tez orada boshqalari ham — ogohlantirishlar sodir bo'lgan zahoti paydo bo'ladi. Davriy so'rovlarsiz, jadvallarsiz.",
         },
         explained: {
           title: "Ro'yxat emas — tushuntirish",
@@ -297,8 +297,8 @@ export const site = defineMessages({
           text: (days: number) => `Ish emailingiz bilan ro'yxatdan o'ting. ${days} kun bepul, kartasiz.`,
         },
         connect: {
-          title: "Wazuh'ni ulang",
-          text: "Integratsiya skriptimizni Wazuh manager'ga joylang va bitta kalitni kiriting.",
+          title: "Sensorlaringizni ulang",
+          text: "Kalit yarating, sensor sozlamalariga bitta blokni joylang — birinchi hodisa kelganda Legion xabar beradi.",
         },
         act: {
           title: "Eng muhimiga e'tibor bering",
@@ -323,7 +323,7 @@ export const site = defineMessages({
       taxNote: "Mamlakatingizga qarab soliq narxga kiritilgan yoki alohida qo'shiladi. To'lov Paddle.com orqali amalga oshiriladi.",
     },
     planFeatures: [
-      "Wazuh integratsiyasi: ogohlantirishlar real vaqtda, imzolangan holda yetkaziladi",
+      "Xavfsizlik sensorlaringizdan real vaqtdagi ogohlantirishlar (hozircha Wazuh)",
       "Real vaqtdagi ogohlantirishlar lentasi va hodisalar bilan ishlash",
       "AI tushuntirishlari va tekshiruvlar uchun Copilot",
       "Sensorlaringiz asosida tuzilgan aktivlar ro'yxati",

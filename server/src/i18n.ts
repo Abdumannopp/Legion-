@@ -448,6 +448,18 @@ export const CATALOG: Record<string, Translation> = {
     ru: "Это рабочее пространство размещено в другом регионе.",
     uz: "Bu ish maydoni boshqa mintaqada joylashgan.",
   },
+  "Test alert: Legion is working": {
+    ru: "Тестовое оповещение: Legion работает",
+    uz: "Sinov ogohlantirishi: Legion ishlamoqda",
+  },
+  "This is a test alert you sent from the Connect page. It shows what a real alert looks like and that live updates and notifications reach you. It is safe to resolve.": {
+    ru: "Это тестовое оповещение, отправленное со страницы «Подключения». Оно показывает, как выглядит настоящее оповещение, и что обновления и уведомления до вас доходят. Его можно спокойно закрыть.",
+    uz: "Bu «Ulanishlar» sahifasidan yuborilgan sinov ogohlantirishi. U haqiqiy ogohlantirish qanday ko'rinishini hamda yangilanishlar va bildirishnomalar sizga yetib borishini ko'rsatadi. Uni bemalol hal qilingan deb belgilash mumkin.",
+  },
+  "Too many test alerts. Try again later.": {
+    ru: "Слишком много тестовых оповещений. Попробуйте позже.",
+    uz: "Sinov ogohlantirishlari juda ko'p. Keyinroq urinib ko'ring.",
+  },
   "That integration is not available.": {
     ru: "Эта интеграция недоступна.",
     uz: "Bu integratsiya mavjud emas.",

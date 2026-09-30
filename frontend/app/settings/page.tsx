@@ -137,6 +137,12 @@ export default function SettingsPage() {
     loadMe();
   }, [loadMe, router]);
 
+  // Links from the getting-started checklist open a tab directly (?tab=team).
+  useEffect(() => {
+    const wanted = new URLSearchParams(window.location.search).get("tab");
+    if (wanted === "notifications" || wanted === "team" || wanted === "audit" || wanted === "profile") setTab(wanted);
+  }, []);
+
   useEffect(() => {
     if (!me || me.role !== "admin") return;
 

@@ -6,13 +6,14 @@ import { backupHealthReport } from "./backup-health.js";
 import { applyTrustedProxies, checkWebSocketOrigin, clientAddress, corsMiddleware, originGuard, securityHeaders, upgradeRateLimited } from "./edge.js";
 import { signToken, verifyLegacyCheckoutToken, verifyTokenOf } from "./auth-jwt.js";
 import bcrypt from "bcryptjs";
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import { z } from "zod";
 import { config, saasWarnings } from "./config.js";
 import * as store from "./store.js";
 import * as workspaces from "./workspaces.js";
+import { agentPermissionCatalogue, overview } from "./overview.js";
 import { roleAllows, roleMatrix, type Permission } from "./permissions.js";
 import { DATE_FORMATS, TIME_FORMATS, effectiveSettings, isTimeZone, regionOf, regionUrl, servesRegion } from "./regional.js";
 import * as integrations from "./integrations/registry.js";
@@ -32,7 +33,7 @@ import * as outbox from "./outbox.js";
 import { startSensorMonitor, stopSensorMonitor } from "./sensor-monitor.js";
 import { seedDemoIfEmpty } from "./seed.js";
 import { inviteEmail, mailEnabled, notificationConfirmEmail, passwordResetEmail, sendMail, testNotificationEmail, verifyEmailEmail, verifyMail } from "./mailer.js";
-import { LOCALES, actionText, copilotFallback, isLocale, localExplanation, localizeResponses, requestLocale, suggestedActions, validationMessage, type Locale } from "./i18n.js";
+import { LOCALES, actionText, copilotFallback, isLocale, localExplanation, localizeResponses, requestLocale, suggestedActions, translate, validationMessage, type Locale } from "./i18n.js";
 import { createPortalSession, paddleConfigured, verifyPaddleSignature } from "./paddle.js";
 import { aiCircuit, aiConfigWarnings, aiEnabled, aiProviderName, copilotAnswerSafe, explainAlertSafe } from "./ai.js";
 import { aiAuditDetail, aiPolicy, consumeAiQuota, type AiWhy } from "./ai-policy.js";
@@ -229,6 +230,7 @@ async function enforceAccess(req: AuthedRequest, res: Response): Promise<boolean
     detail: state === "readonly"
       ? "Your subscription payment is past due. Legion is read-only until it is settled."
       : "This workspace does not have an active Legion subscription.",
+    code: state === "readonly" ? "subscription_past_due" : "subscription_inactive",
     access_state: state,
   });
   return false;
@@ -981,6 +983,16 @@ app.patch("/workspace/settings", requirePermission("workspace:manage"), async (r
   await store.updateTenantSettings(req.user!.tenant_id, body);
   await log(req, "workspace.settings_updated", "workspace", req.user!.tenant_id, Object.keys(body).join(", "));
   return res.json(await workspaceSettingsView(req.user!.tenant_id));
+});
+
+// --- Overview and onboarding ----------------------------------------------------
+
+app.get("/overview", auth, async (req: AuthedRequest, res) => {
+  res.json(await overview(req.user!.tenant_id));
+});
+
+app.get("/agent-permissions", auth, async (req: AuthedRequest, res) => {
+  res.json(await agentPermissionCatalogue(req.user!.tenant_id));
 });
 
 app.get("/workspace/roles", auth, (_req, res) => {
@@ -1899,6 +1911,30 @@ app.delete("/security-events/credentials/:id", requireRole("admin"), async (req:
   } catch (error) { return credentialFailure(res, error); }
 });
 
+/**
+ * A labelled sample alert through the real pipeline (stored, versioned, pushed
+ * live, emailed per the workspace's settings), so a new workspace can see what
+ * an alert looks like and that notifications reach it. It does not prove a
+ * sensor is connected — the Connect page waits for the sensor's own first
+ * event for that — and it is never counted as one (source "legion-test").
+ */
+app.post("/security-events/test", requireRole("admin"), async (req: AuthedRequest, res) => {
+  if ((await store.recentAuditCount(req.user!.tenant_id, "security_events.test_sent")) >= 10) {
+    return res.status(429).json({ detail: "Too many test alerts. Try again later." });
+  }
+  // Written in the sender's language: it is Legion's own text, not a sensor's.
+  const locale = requestLocale(req);
+  const report = await ingestFindings(req.user!.tenant_id, "legion-test", [{
+    externalId: randomUUID(),
+    title: translate("Test alert: Legion is working", locale),
+    severity: "low",
+    summary: translate("This is a test alert you sent from the Connect page. It shows what a real alert looks like and that live updates and notifications reach you. It is safe to resolve.", locale),
+    occurredAt: new Date().toISOString(), sourceIp: null, target: "legion-test", mitre: [], confidence: 100, asset: null,
+  }], { realtime: newAlertFrame });
+  await log(req, "security_events.test_sent", "alert", report.ingested[0] ?? null);
+  return res.status(201).json({ alert_id: report.ingested[0] });
+});
+
 app.post("/security-events/sync", requireRole("admin"), async (req: AuthedRequest, res) => {
   const id = `SEC-${randomBytes(8).toString("hex").toUpperCase()}`;
   const alert = await outbox.insertAlertAndNotify({
@@ -2066,7 +2102,7 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
 /** 421: this deployment does not hold the workspace's data (another region does). */
 function misdirected(res: Response, tenant: { region?: string | null }): Response {
   const region = regionOf(tenant);
-  return res.status(421).json({ detail: "This workspace is hosted in another region.", region, region_url: regionUrl(region) });
+  return res.status(421).json({ detail: "This workspace is hosted in another region.", code: "wrong_region", region, region_url: regionUrl(region) });
 }
 
 /** Postgres / pool errors that mean "the database is not reachable right now". */

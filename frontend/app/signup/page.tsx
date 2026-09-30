@@ -1,5 +1,6 @@
 "use client";
 
+import ErrorNotice from "@/components/ErrorNotice";
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { Loader2, MailCheck } from "lucide-react";
@@ -16,7 +17,7 @@ export default function SignUpPage() {
   const [password, setPassword] = useState("");
   const [agreed, setAgreed] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [resent, setResent] = useState(false);
 
@@ -33,7 +34,7 @@ export default function SignUpPage() {
       setSentTo(email.trim());
       setPassword("");
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : t.signup.createFailed);
+      setError(err instanceof ApiError ? err : new Error(t.signup.createFailed));
     } finally {
       setBusy(false);
     }
@@ -114,7 +115,7 @@ export default function SignUpPage() {
             {t.signup.agree.after}
           </span>
         </label>
-        {error && <p className="text-critical text-xs bg-critical/10 rounded-lg px-3 py-2">{error}</p>}
+        {error != null && <ErrorNotice error={error} />}
         <button type="submit" disabled={busy || mode === null} className={authButton}>
           {busy && <Loader2 size={14} className="animate-spin" />}
           {t.signup.createAccount}

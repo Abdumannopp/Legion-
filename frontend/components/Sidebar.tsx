@@ -11,6 +11,8 @@ import {
   BarChart3,
   Settings,
   CreditCard,
+  Plug,
+  BrainCircuit,
 } from "lucide-react";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
@@ -23,8 +25,10 @@ export default function Sidebar() {
 
   const NAV_ITEMS = [
     { label: t.nav.dashboard, Icon: LayoutDashboard, href: "/" },
+    { label: t.nav.connect, Icon: Plug, href: "/connect" },
     { label: t.nav.alerts, Icon: AlertTriangle, href: "/" },
     { label: t.nav.assets, Icon: Monitor, href: "/assets" },
+    { label: t.nav.agents, Icon: BrainCircuit, href: "/agents" },
     { label: t.nav.incidents, Icon: ClipboardList, href: "/incidents" },
     { label: t.nav.copilot, Icon: Bot, href: "/copilot" },
     { label: t.nav.reports, Icon: BarChart3, href: "/reports" },
@@ -48,7 +52,7 @@ export default function Sidebar() {
         {NAV_ITEMS.map(({ label, Icon, href }, index) => {
           // Dashboard and Alerts share "/"; highlight only the first match.
           const active =
-            href !== null && pathname === href && NAV_ITEMS.findIndex((i) => i.href === href) === index;
+            href !== null && (pathname === href || (href !== "/" && pathname.startsWith(`${href}/`))) && NAV_ITEMS.findIndex((i) => i.href === href) === index;
           const disabled = href === null;
 
           const content = (

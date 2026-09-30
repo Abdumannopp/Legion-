@@ -3,6 +3,8 @@ import { defineMessages } from "../core";
 export const nav = defineMessages({
   en: {
     dashboard: "Dashboard",
+    connect: "Connect",
+    agents: "AI agents",
     alerts: "Alerts",
     assets: "Assets",
     incidents: "Incidents",
@@ -14,6 +16,8 @@ export const nav = defineMessages({
   },
   ru: {
     dashboard: "Панель управления",
+    connect: "Подключения",
+    agents: "ИИ-агенты",
     alerts: "Оповещения",
     assets: "Активы",
     incidents: "Инциденты",
@@ -25,6 +29,8 @@ export const nav = defineMessages({
   },
   uz: {
     dashboard: "Boshqaruv paneli",
+    connect: "Ulanishlar",
+    agents: "AI agentlar",
     alerts: "Ogohlantirishlar",
     assets: "Aktivlar",
     incidents: "Hodisalar",

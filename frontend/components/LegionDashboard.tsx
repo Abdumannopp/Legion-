@@ -5,12 +5,11 @@ import { useState, useEffect, useCallback, useRef, type MouseEvent } from "react
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  Shield,
   AlertTriangle,
   AlertCircle,
   Info,
   Search,
-  Zap,
+  Radio,
   Eye,
   CheckCircle2,
   ChevronRight,
@@ -18,14 +17,16 @@ import {
   Loader2,
   Sparkles,
   LogOut,
-  ShieldCheck,
   ExternalLink,
+  ListChecks,
 } from "lucide-react";
 import {
   Alert,
   AlertStats,
   CurrentUser,
+  Overview,
   getAlertFeed,
+  getOverview,
   getStats,
   getMe,
   updateAlertStatus,
@@ -40,7 +41,10 @@ import { useRealtimeAlerts, RealtimeEvent } from "@/hooks/useRealtimeAlerts";
 import { sortAlerts, upsertAlert } from "@/lib/realtime/alert-feed";
 import { palette } from "@/lib/theme";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
-import { timeAgo } from "@/lib/i18n/format";
+import { suggestedActionText, timeAgo } from "@/lib/i18n/format";
+import ErrorNotice from "@/components/ErrorNotice";
+import ProtectionOverview from "@/components/ProtectionOverview";
+import { isTestSource, sourceLabel } from "@/lib/sources";
 
 type Severity = Alert["severity"];
 
@@ -76,122 +80,31 @@ const STATUS_COLOR: Record<Alert["status"], string> = {
   resolved: COLORS.success,
 };
 
-/** Simple, transparent heuristic: start at 100, subtract weighted points for
- *  each open/investigating alert by severity. Never fabricates data — it's
- *  purely a function of the real alert counts we have. */
-function computeSecurityScore(stats: AlertStats | null): number | null {
-  if (!stats) return null;
-  const weight: Record<string, number> = { critical: 15, high: 8, medium: 3, low: 1 };
-  const openOrInvestigating = stats.open + stats.investigating;
-  if (openOrInvestigating === 0) return 100;
-  // We don't have per-status severity breakdown from the API yet, so this
-  // approximates using total by_severity counts, weighted.
-  let deduction = 0;
-  for (const [sev, count] of Object.entries(stats.by_severity)) {
-    deduction += (weight[sev] ?? 2) * count;
-  }
-  return Math.max(0, Math.min(100, Math.round(100 - deduction)));
-}
-
-function KpiCard({
-  label,
-  value,
-  color,
-  Icon,
-}: {
-  label: string;
-  value: string;
-  color?: string;
-  Icon: typeof Shield;
-}) {
-  return (
-    <div className="flex-1 min-w-[140px] rounded-xl border border-line bg-surface/80 backdrop-blur px-4 py-3.5">
-      <div className="flex items-center gap-2 mb-2">
-        <Icon size={14} color={color || COLORS.textMuted} strokeWidth={2.2} />
-        <span className="text-ink-muted text-[11px] uppercase tracking-wide">
-          {label}
-        </span>
-      </div>
-      <p
-        className="text-2xl font-semibold tabular-nums"
-        style={{ color: color || COLORS.text }}
-      >
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function TopBar({ stats }: { stats: AlertStats | null }) {
+/** The page header. The numbers live in ProtectionOverview, from GET /overview. */
+function TopBar() {
   const router = useRouter();
   const { t } = useLanguage();
-  const score = computeSecurityScore(stats);
 
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-line bg-gradient-to-br from-panel to-canvas px-6 py-5 mb-6">
-      <div className="pointer-events-none absolute -top-24 -right-16 h-64 w-64 rounded-full bg-brand/20 blur-3xl" />
-      <div
-        className="pointer-events-none absolute inset-0 opacity-[0.06]"
-        style={{
-          backgroundImage:
-            "repeating-linear-gradient(0deg, #7C3AED 0px, #7C3AED 1px, transparent 1px, transparent 3px)",
+    <div className="flex items-center justify-between flex-wrap gap-4 mb-4">
+      <div>
+        <h1 className="text-ink font-semibold tracking-tight text-lg leading-none">
+          {t.dashboard.welcome}
+        </h1>
+        <p className="legion-eyebrow text-brand-bright mt-2">
+          {t.dashboard.overview}
+        </p>
+      </div>
+      <button
+        onClick={async () => {
+          await logout();
+          router.push("/login");
         }}
-      />
-      <div className="relative flex items-center justify-between flex-wrap gap-4 mb-5">
-        <div>
-          <h1 className="text-ink font-semibold tracking-tight text-lg leading-none">
-            {t.dashboard.welcome}
-          </h1>
-          <p className="legion-eyebrow text-brand-bright mt-2">
-            {t.dashboard.overview}
-          </p>
-        </div>
-        <button
-          onClick={async () => {
-            await logout();
-            router.push("/login");
-          }}
-          className="flex items-center gap-1.5 text-ink-faint hover:text-ink text-xs transition-colors"
-        >
-          <LogOut size={13} />
-          {t.common.signOut}
-        </button>
-      </div>
-
-      <div className="relative flex flex-wrap gap-3">
-        <KpiCard
-          label={t.dashboard.kpi.securityScore}
-          value={score !== null ? `${score}%` : "–"}
-          color={
-            score === null
-              ? undefined
-              : score >= 80
-              ? COLORS.success
-              : score >= 50
-              ? COLORS.warning
-              : COLORS.critical
-          }
-          Icon={ShieldCheck}
-        />
-        <KpiCard
-          label={t.dashboard.kpi.criticalAlerts}
-          value={stats ? String(stats.by_severity.critical ?? 0) : "–"}
-          color={COLORS.critical}
-          Icon={AlertTriangle}
-        />
-        <KpiCard
-          label={t.dashboard.kpi.open}
-          value={stats ? String(stats.open) : "–"}
-          color={COLORS.warning}
-          Icon={Activity}
-        />
-        <KpiCard
-          label={t.dashboard.kpi.resolved}
-          value={stats ? String(stats.resolved) : "–"}
-          color={COLORS.success}
-          Icon={CheckCircle2}
-        />
-      </div>
+        className="flex items-center gap-1.5 text-ink-faint hover:text-ink text-xs transition-colors"
+      >
+        <LogOut size={13} />
+        {t.common.signOut}
+      </button>
     </div>
   );
 }
@@ -217,6 +130,8 @@ function AlertRow({
   const sev = SEVERITY_STYLE[alert.severity];
   const statusColor = STATUS_COLOR[alert.status];
   const SevIcon = sev.Icon;
+  const source = sourceLabel(alert.source, t);
+  const steps = (alert.suggested_action_codes ?? []).slice(0, 3);
   // The stored explanation was written in another language: offer to
   // regenerate it (the server answers in the language the dashboard sends).
   const explanationInOtherLanguage =
@@ -225,7 +140,7 @@ function AlertRow({
     alert.ai_explanation_locale !== locale;
 
   return (
-    <div className="rounded-xl border border-line bg-surface hover:border-brand-hover/40 transition-colors">
+    <div className="rounded-xl border border-line bg-surface hover:border-brand-hover/40 transition-colors" data-testid="alert-row">
       <div
         className="flex items-center gap-4 px-4 py-3.5 cursor-pointer"
         onClick={onToggle}
@@ -246,16 +161,23 @@ function AlertRow({
             >
               {t.common.severity[alert.severity]}
             </span>
+            {isTestSource(alert.source) && (
+              <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-panel text-ink-faint border border-line">
+                {t.overview.testBadge}
+              </span>
+            )}
           </div>
           <p className="text-ink text-sm font-medium truncate mt-0.5">
             {alert.title}
           </p>
         </div>
 
-        <div className="hidden sm:flex items-center gap-1.5 text-ink-faint text-xs shrink-0">
-          <Zap size={12} />
-          {alert.agent}
-        </div>
+        {source && (
+          <div className="hidden sm:flex items-center gap-1.5 text-ink-faint text-xs shrink-0 max-w-[9rem]">
+            <Radio size={12} className="shrink-0" />
+            <span className="truncate">{source}</span>
+          </div>
+        )}
 
         <div className="hidden md:flex items-center gap-1.5 text-ink-faint text-xs shrink-0 w-28 whitespace-nowrap">
           {timeAgo(alert.created_at, locale)}
@@ -281,6 +203,21 @@ function AlertRow({
           <p className="text-ink-muted text-sm leading-relaxed mb-3">
             {alert.summary}
           </p>
+
+          {steps.length > 0 && alert.status !== "resolved" && (
+            <div className="mb-3">
+              <p className="flex items-center gap-1.5 text-ink-muted text-[11px] uppercase tracking-wide mb-1">
+                <ListChecks size={12} /> {t.overview.whatToDo}
+              </p>
+              <ul className="space-y-0.5">
+                {steps.map((a, i) => (
+                  <li key={i} className="text-ink-soft text-xs flex gap-1.5">
+                    <span aria-hidden>•</span>{suggestedActionText(a, locale)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           <div className="mb-3">
             {alert.ai_explanation ? (
@@ -403,7 +340,8 @@ export default function LegionDashboard() {
   const [filter, setFilter] = useState("all");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [overview, setOverview] = useState<Overview | null>(null);
   const [explainingId, setExplainingId] = useState<string | null>(null);
   // Drives the subscription banner. Fetched separately from the alert list so
   // a 402 on /alerts still leaves us able to explain *why* it happened.
@@ -419,6 +357,7 @@ export default function LegionDashboard() {
     statsTimer.current = setTimeout(() => {
       statsTimer.current = null;
       getStats().then(setStats).catch(() => {});
+      getOverview().then(setOverview).catch(() => {});
     }, 500);
   }, []);
   useEffect(() => () => { if (statsTimer.current) clearTimeout(statsTimer.current); }, []);
@@ -483,15 +422,11 @@ export default function LegionDashboard() {
         router.push("/login");
         return;
       }
-      setError(
-        err instanceof ApiError
-          ? err.message
-          : t.dashboard.alert.loadError
-      );
+      setError(err);
     } finally {
       if (mine === loadSeq.current) setLoading(false);
     }
-  }, [filter, query, router, t, setBaseline]);
+  }, [filter, query, router, setBaseline]);
   useEffect(() => { loadRef.current = load; }, [load]);
 
   useEffect(() => {
@@ -504,19 +439,20 @@ export default function LegionDashboard() {
       .catch(() => {
         // Non-fatal: the banner is an explanation, not a gate.
       });
+    // Also non-fatal: the alert list below works without it.
+    getOverview().then(setOverview).catch(() => {});
     load();
   }, [load, router]);
 
-  async function handleResolve(id: string) {
-    const updated = await updateAlertStatus(id, "resolved");
-    setAlerts((prev) => upsertAlert(prev, updated, { insert: false }));
-    refreshStats();
-  }
-
-  async function handleInvestigate(id: string) {
-    const updated = await updateAlertStatus(id, "investigating");
-    setAlerts((prev) => upsertAlert(prev, updated, { insert: false }));
-    getStats().then(setStats).catch(() => {});
+  async function changeStatus(id: string, status: Alert["status"]) {
+    setError(null);
+    try {
+      const updated = await updateAlertStatus(id, status);
+      setAlerts((prev) => upsertAlert(prev, updated, { insert: false }));
+      refreshStats();
+    } catch (err) {
+      setError(err);
+    }
   }
 
   async function handleExplain(id: string, force = false) {
@@ -525,7 +461,7 @@ export default function LegionDashboard() {
       const updated = await explainAlert(id, force);
       setAlerts((prev) => upsertAlert(prev, updated, { insert: false }));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : t.dashboard.alert.explainError);
+      setError(err);
     } finally {
       setExplainingId(null);
     }
@@ -543,7 +479,15 @@ export default function LegionDashboard() {
       <Sidebar />
       <div className="flex-1 p-4 sm:p-6">
         <div className="max-w-3xl mx-auto">
-          <TopBar stats={stats} />
+          <TopBar />
+          {me && (
+            <AccessBanner
+              state={me.access_state}
+              trialEndsAt={me.trial_ends_at}
+              isAdmin={me.role === "admin"}
+            />
+          )}
+          {overview && <ProtectionOverview data={overview} />}
 
           <div className="flex flex-wrap items-center gap-2 mb-4">
             <div className="relative flex-1 min-w-[180px]">
@@ -575,17 +519,9 @@ export default function LegionDashboard() {
             ))}
           </div>
 
-          {me && (
-            <AccessBanner
-              state={me.access_state}
-              trialEndsAt={me.trial_ends_at}
-              isAdmin={me.role === "admin"}
-            />
-          )}
-
-          {error && (
-            <div className="mb-4 text-critical text-xs bg-critical/10 rounded-lg px-3 py-2.5">
-              {error}
+          {error != null && (
+            <div className="mb-4">
+              <ErrorNotice error={error} onRetry={load} isAdmin={me?.role === "admin"} />
             </div>
           )}
 
@@ -603,8 +539,8 @@ export default function LegionDashboard() {
                   onToggle={() =>
                     setExpandedId(expandedId === alert.id ? null : alert.id)
                   }
-                  onResolve={() => handleResolve(alert.id)}
-                  onInvestigate={() => handleInvestigate(alert.id)}
+                  onResolve={() => changeStatus(alert.id, "resolved")}
+                  onInvestigate={() => changeStatus(alert.id, "investigating")}
                   onExplain={(force) => handleExplain(alert.id, force)}
                   explaining={explainingId === alert.id}
                 />

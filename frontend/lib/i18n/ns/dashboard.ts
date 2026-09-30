@@ -9,12 +9,6 @@ export const dashboard = defineMessages({
   en: {
     welcome: "Welcome back 👋",
     overview: "Legion Security Overview",
-    kpi: {
-      securityScore: "Security score",
-      criticalAlerts: "Critical alerts",
-      open: "Open",
-      resolved: "Resolved",
-    },
     searchPlaceholder: "Search alerts by ID or title",
     empty: "No alerts match this view.",
     alert: {
@@ -33,12 +27,6 @@ export const dashboard = defineMessages({
   ru: {
     welcome: "С возвращением 👋",
     overview: "Обзор безопасности Legion",
-    kpi: {
-      securityScore: "Индекс безопасности",
-      criticalAlerts: "Критические оповещения",
-      open: "Открытые",
-      resolved: "Решённые",
-    },
     searchPlaceholder: "Поиск по ID или названию",
     empty: "Нет оповещений, подходящих под фильтр.",
     alert: {
@@ -57,12 +45,6 @@ export const dashboard = defineMessages({
   uz: {
     welcome: "Xush kelibsiz 👋",
     overview: "Legion xavfsizlik holati",
-    kpi: {
-      securityScore: "Xavfsizlik bahosi",
-      criticalAlerts: "Kritik ogohlantirishlar",
-      open: "Ochiq",
-      resolved: "Hal qilingan",
-    },
     searchPlaceholder: "ID yoki nomi bo'yicha qidirish",
     empty: "Bu filtrga mos ogohlantirishlar yo'q.",
     alert: {

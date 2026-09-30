@@ -18,6 +18,7 @@ import { openCheckout, isPaddleConfigured, CHECKOUT_COMPLETED, getPriceLabel, Pr
 import { palette } from "@/lib/theme";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 import { formatDate } from "@/lib/i18n/format";
+import ErrorNotice from "@/components/ErrorNotice";
 import type { BillingInterval } from "@/lib/i18n/ns/billing";
 
 // A single paid plan for now — swap in real Paddle price IDs from
@@ -47,7 +48,7 @@ export default function BillingPage() {
   const [loading, setLoading] = useState(true);
   const [checkoutBusy, setCheckoutBusy] = useState(false);
   const [portalBusy, setPortalBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -60,11 +61,11 @@ export default function BillingPage() {
         router.push("/login");
         return;
       }
-      setError(err instanceof ApiError ? err.message : t.billing.loadError);
+      setError(err);
     } finally {
       setLoading(false);
     }
-  }, [router, t]);
+  }, [router]);
 
   useEffect(() => {
     if (!isLoggedIn()) {
@@ -81,7 +82,7 @@ export default function BillingPage() {
   const notConfirmedRef = useRef(t.billing.notConfirmed);
   useEffect(() => { notConfirmedRef.current = t.billing.notConfirmed; }, [t]);
   const [price, setPrice] = useState<PriceLabel | null>(null);
-  useEffect(() => { getPriceLabel(PRICE_ID).then(setPrice); }, []);
+  useEffect(() => { getPriceLabel(PRICE_ID, locale).then(setPrice); }, [locale]);
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | undefined;
     const onCompleted = () => {
@@ -96,7 +97,7 @@ export default function BillingPage() {
           clearInterval(timer);
         } else if (tries >= 20) {
           setActivating(false);
-          setError(notConfirmedRef.current);
+          setError(new Error(notConfirmedRef.current));
           clearInterval(timer);
         }
       }, 2000);
@@ -114,7 +115,7 @@ export default function BillingPage() {
       const { checkout_token, price_id } = await getCheckoutContext();
       await openCheckout(price_id || PRICE_ID, checkout_token, me.email, locale);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t.billing.checkoutError);
+      setError(err instanceof ApiError ? err : new Error(t.billing.checkoutError));
     } finally {
       setCheckoutBusy(false);
     }
@@ -127,9 +128,7 @@ export default function BillingPage() {
       const { url } = await openBillingPortal();
       window.location.href = url;
     } catch (err) {
-      setError(
-        err instanceof ApiError ? err.message : t.billing.portalError
-      );
+      setError(err instanceof ApiError ? err : new Error(t.billing.portalError));
     } finally {
       setPortalBusy(false);
     }
@@ -141,6 +140,9 @@ export default function BillingPage() {
   };
 
   const isActive = subscription?.status === "active" || subscription?.status === "trialing";
+  // No subscription yet: the plan is the workspace's free trial.
+  const trialEnd = subscription?.trial_ends_at ?? me?.trial_ends_at ?? null;
+  const trialDays = trialEnd ? Math.ceil((new Date(trialEnd).getTime() - Date.now()) / 86_400_000) : 0;
 
   return (
     <div className="flex min-h-screen bg-canvas">
@@ -168,11 +170,7 @@ export default function BillingPage() {
             </div>
           ) : (
             <div className="flex flex-col gap-5">
-              {error && (
-                <div className="text-sm text-critical bg-critical/10 border border-critical/30 rounded-lg px-4 py-3">
-                  {error}
-                </div>
-              )}
+              {error != null && <ErrorNotice error={error} onRetry={load} isAdmin={me?.role === "admin"} />}
 
               {activating && (
                 <div className="text-sm text-brand-bright bg-brand/10 border border-brand-hover/30 rounded-lg px-4 py-3 flex items-center gap-2">
@@ -227,9 +225,16 @@ export default function BillingPage() {
                     </button>
                   </div>
                 ) : (
-                  <p className="text-sm text-ink-muted">
-                    {t.billing.notSubscribed}
+                  <p className="text-sm text-ink-muted" data-testid="plan-status">
+                    {trialEnd
+                      ? trialDays > 0
+                        ? t.billing.trialActive(formatDate(trialEnd, locale), trialDays)
+                        : t.billing.trialEnded(formatDate(trialEnd, locale))
+                      : t.billing.notSubscribed}
                   </p>
+                )}
+                {me && me.role !== "admin" && (
+                  <p className="text-ink-faint text-xs mt-3">{t.billing.adminOnlyNote}</p>
                 )}
               </div>
 

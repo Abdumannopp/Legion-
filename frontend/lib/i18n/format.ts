@@ -102,3 +102,19 @@ export function suggestedActionText(action: SuggestedAction, locale: Locale): st
   const a = translations[locale].common.actions;
   return action.code === "block_source_ip" ? a.block_source_ip(action.ip) : a[action.code];
 }
+
+/**
+ * An amount of money in the viewer's language: "$29.00" / "29,00 $" /
+ * "29,00 US$". Amounts arrive in minor units (cents), as the billing
+ * provider sends them; the currency's own number of decimals is used.
+ */
+export function formatMoney(amountMinor: number, currency: string, locale: Locale): string {
+  const code = currency.toUpperCase();
+  let digits = 2;
+  try {
+    digits = new Intl.NumberFormat("en", { style: "currency", currency: code }).resolvedOptions().maximumFractionDigits ?? 2;
+  } catch {
+    return `${formatNumber(amountMinor / 100, locale)} ${code}`;
+  }
+  return new Intl.NumberFormat(INTL_TAG[locale], { style: "currency", currency: code }).format(amountMinor / 10 ** digits);
+}

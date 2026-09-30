@@ -6,6 +6,7 @@
 import { initializePaddle, Paddle } from "@paddle/paddle-js";
 import type { Locale } from "@/lib/i18n/core";
 import { translations } from "@/lib/i18n/translations";
+import { formatMoney } from "@/lib/i18n/format";
 
 export const CHECKOUT_COMPLETED = "legion:checkout-completed";
 
@@ -72,7 +73,7 @@ export interface PriceLabel {
 
 /** The plan's price as Paddle would charge this visitor (currency and tax
  *  follow their location). Null when Paddle is not configured or unreachable. */
-export async function getPriceLabel(priceId: string): Promise<PriceLabel | null> {
+export async function getPriceLabel(priceId: string, locale: Locale = "en"): Promise<PriceLabel | null> {
   if (!priceId) return null;
   const paddle = await getPaddle();
   if (!paddle) return null;
@@ -82,7 +83,13 @@ export async function getPriceLabel(priceId: string): Promise<PriceLabel | null>
     if (!line) return null;
     const cycle = line.price.billingCycle;
     const per = cycle ? (cycle.frequency === 1 ? cycle.interval : `${cycle.frequency} ${cycle.interval}s`) : null;
-    return { amount: line.formattedTotals.total, per };
+    // Paddle picks the currency (and tax) for the visitor's location; the
+    // number itself is written the way the visitor's language writes money.
+    const minor = Number(line.totals.total);
+    const amount = Number.isFinite(minor) && preview.data.currencyCode
+      ? formatMoney(minor, preview.data.currencyCode, locale)
+      : line.formattedTotals.total;
+    return { amount, per };
   } catch {
     return null;
   }

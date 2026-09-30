@@ -14,7 +14,7 @@ import {
   Loader2,
   Eye,
   CheckCircle2,
-  Zap,
+  Radio,
   ShieldAlert,
 } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
@@ -30,6 +30,8 @@ import {
 import { palette } from "@/lib/theme";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 import { formatDateTime, suggestedActionText } from "@/lib/i18n/format";
+import ErrorNotice from "@/components/ErrorNotice";
+import { sourceLabel } from "@/lib/sources";
 
 const SEVERITY_COLOR: Record<Alert["severity"], string> = {
   critical: palette.critical,
@@ -78,7 +80,7 @@ export default function IncidentDetailsPage() {
 
   const [alert, setAlert] = useState<Alert | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const [explaining, setExplaining] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [doneActions, setDoneActions] = useState<Set<string>>(new Set());
@@ -95,7 +97,7 @@ export default function IncidentDetailsPage() {
           router.push("/login");
           return;
         }
-        setError(err instanceof ApiError ? err.message : t.incident.loadError);
+        setError(err);
       })
       .finally(() => setLoading(false));
   }, [id, router, t]);
@@ -107,7 +109,7 @@ export default function IncidentDetailsPage() {
       const updated = await explainAlert(alert.id, force);
       setAlert(updated);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : t.dashboard.alert.explainError);
+      setError(err);
     } finally {
       setExplaining(false);
     }
@@ -120,7 +122,7 @@ export default function IncidentDetailsPage() {
       const updated = await updateAlertStatus(alert.id, status);
       setAlert(updated);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : t.incident.statusError);
+      setError(err);
     } finally {
       setUpdating(false);
     }
@@ -137,12 +139,12 @@ export default function IncidentDetailsPage() {
     );
   }
 
-  if (error && !alert) {
+  if (error != null && !alert) {
     return (
       <div className="flex min-h-screen bg-canvas">
         <Sidebar />
         <div className="flex-1 flex flex-col items-center justify-center gap-3">
-          <p className="text-critical text-sm">{error}</p>
+          <div className="max-w-md w-full px-4"><ErrorNotice error={error} /></div>
           <button
             onClick={() => router.push("/")}
             className="text-brand-bright text-sm flex items-center gap-1.5"
@@ -219,10 +221,8 @@ export default function IncidentDetailsPage() {
             )}
           </div>
 
-          {error && (
-            <div className="mb-4 text-critical text-xs bg-critical/10 rounded-lg px-3 py-2.5">
-              {error}
-            </div>
+          {error != null && (
+            <div className="mb-4"><ErrorNotice error={error} /></div>
           )}
 
           <div className="grid md:grid-cols-2 gap-4">
@@ -254,7 +254,7 @@ export default function IncidentDetailsPage() {
                 label={t.incident.detail.confidence}
                 value={`${alert.confidence}%`}
               />
-              <DetailRow Icon={Zap} label={t.incident.detail.detectedBy} value={alert.agent} />
+              <DetailRow Icon={Radio} label={t.incident.detail.detectedBy} value={sourceLabel(alert.source, t) ?? t.incident.detail.notSpecified} />
             </div>
 
             {/* Right: AI explanation */}
