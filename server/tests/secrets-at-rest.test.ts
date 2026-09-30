@@ -216,7 +216,7 @@ describe("invitation tokens", () => {
   it("the token never travels in a URL: the preview is a POST, the old GET is gone", async () => {
     const token = await inviteLink();
     const res = await request(app).post("/auth/invite/preview").send({ token }).expect(200);
-    expect(res.body).toEqual({ email: "new@t.io", role: "viewer", tenant_name: "T" });
+    expect(res.body).toEqual({ email: "new@t.io", role: "viewer", tenant_name: "T", existing_account: false });
     await request(app).get(`/auth/invite/${token}`).expect(404);
   });
 });

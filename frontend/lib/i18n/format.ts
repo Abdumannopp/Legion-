@@ -6,31 +6,79 @@ import { translations } from "./translations";
 type DateInput = string | Date;
 const toDate = (value: DateInput) => (typeof value === "string" ? apiDate(value) : value);
 
+/**
+ * How to present moments to this viewer. Defaults reproduce the behaviour
+ * before these settings existed: the browser's own time zone, dates and
+ * times as the language writes them. getMe() applies the person's choices
+ * (Settings → Regional); the workspace's time zone is the organisation's
+ * reference for reports and emails, not a display override.
+ */
+export type DateFormat = "locale" | "YYYY-MM-DD" | "DD.MM.YYYY" | "DD/MM/YYYY" | "MM/DD/YYYY";
+export type TimeFormat = "locale" | "24h" | "12h";
+export interface DisplaySettings { timeZone?: string; dateFormat: DateFormat; timeFormat: TimeFormat }
+let display: DisplaySettings = { dateFormat: "locale", timeFormat: "locale" };
+export function setDisplaySettings(next: Partial<DisplaySettings>): void {
+  display = { ...display, ...next };
+}
+export function displaySettings(): DisplaySettings {
+  return display;
+}
+
+/** Calendar fields of a moment in the display time zone. */
+function partsOf(d: Date): { y: number; m: number; day: number; h: number; min: number } {
+  const f = new Intl.DateTimeFormat("en-US", {
+    timeZone: display.timeZone, year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", hourCycle: "h23",
+  });
+  const get = (type: string) => Number(f.formatToParts(d).find((p) => p.type === type)?.value ?? 0);
+  return { y: get("year"), m: get("month"), day: get("day"), h: get("hour") % 24, min: get("minute") };
+}
+
 // Browsers ship little or no Uzbek date data (Chrome prints "2026 M09 28"),
 // so Uzbek dates are written out here in the standard form: 2026-yil 28-sentabr.
 const UZ_MONTHS = ["yanvar", "fevral", "mart", "aprel", "may", "iyun", "iyul", "avgust", "sentabr", "oktabr", "noyabr", "dekabr"];
 const pad = (n: number) => String(n).padStart(2, "0");
-const uzDate = (d: Date) => `${d.getFullYear()}-yil ${d.getDate()}-${UZ_MONTHS[d.getMonth()]}`;
-const uzTime = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+const uzDate = (d: Date) => { const p = partsOf(d); return `${p.y}-yil ${p.day}-${UZ_MONTHS[p.m - 1]}`; };
 
-/** "Sep 28, 2026" / "28 сент. 2026 г." / "2026-yil 28-sentabr" */
+function fixedDate(d: Date): string | null {
+  const p = partsOf(d);
+  switch (display.dateFormat) {
+    case "YYYY-MM-DD": return `${p.y}-${pad(p.m)}-${pad(p.day)}`;
+    case "DD.MM.YYYY": return `${pad(p.day)}.${pad(p.m)}.${p.y}`;
+    case "DD/MM/YYYY": return `${pad(p.day)}/${pad(p.m)}/${p.y}`;
+    case "MM/DD/YYYY": return `${pad(p.m)}/${pad(p.day)}/${p.y}`;
+    default: return null;
+  }
+}
+function fixedTime(d: Date, locale: Locale): string {
+  if (display.timeFormat === "12h") {
+    return d.toLocaleTimeString(INTL_TAG[locale], { hour: "numeric", minute: "2-digit", hour12: true, timeZone: display.timeZone });
+  }
+  const p = partsOf(d);
+  return `${pad(p.h)}:${pad(p.min)}`;
+}
+const hour12 = (): boolean | undefined => (display.timeFormat === "12h" ? true : display.timeFormat === "24h" ? false : undefined);
+
+/** "Sep 28, 2026" / "28 сент. 2026 г." / "2026-yil 28-sentabr" — or the chosen fixed format. */
 export function formatDate(value: DateInput, locale: Locale): string {
   const d = toDate(value);
+  const fixed = fixedDate(d);
+  if (fixed) return fixed;
   if (locale === "uz") return uzDate(d);
-  return d.toLocaleDateString(INTL_TAG[locale], { dateStyle: "medium" });
+  return d.toLocaleDateString(INTL_TAG[locale], { dateStyle: "medium", timeZone: display.timeZone });
 }
 
 /** Date and time, in the viewer's language and time zone. */
 export function formatDateTime(value: DateInput, locale: Locale): string {
   const d = toDate(value);
-  if (locale === "uz") return `${uzDate(d)}, ${uzTime(d)}`;
-  return d.toLocaleString(INTL_TAG[locale], { dateStyle: "medium", timeStyle: "short" });
+  const fixed = fixedDate(d);
+  if (fixed || locale === "uz") return `${fixed ?? uzDate(d)}, ${formatTime(d, locale)}`;
+  return d.toLocaleString(INTL_TAG[locale], { dateStyle: "medium", timeStyle: "short", timeZone: display.timeZone, hour12: hour12() });
 }
 
 export function formatTime(value: DateInput, locale: Locale): string {
   const d = toDate(value);
-  if (locale === "uz") return uzTime(d);
-  return d.toLocaleTimeString(INTL_TAG[locale], { timeStyle: "short" });
+  if (locale === "uz" || display.timeFormat !== "locale") return fixedTime(d, locale);
+  return d.toLocaleTimeString(INTL_TAG[locale], { timeStyle: "short", timeZone: display.timeZone });
 }
 
 export function formatNumber(value: number, locale: Locale): string {

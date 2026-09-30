@@ -4,7 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Loader2, CheckCircle2 } from "lucide-react";
-import { getInvite, acceptInvite, InvitePreview, ApiError } from "@/lib/api";
+import { getInvite, acceptInvite, acceptWorkspaceInvite, getMe, switchWorkspace, InvitePreview, ApiError } from "@/lib/api";
 import { palette } from "@/lib/theme";
 import LegionLogo from "@/components/brand/LegionLogo";
 import { AuthLanguageSwitcher } from "@/components/AuthShell";
@@ -28,6 +28,9 @@ function AcceptInviteForm() {
   const errorText =
     error === null ? null : typeof error === "string" ? error : t.acceptInvite[error.fallback];
   const [done, setDone] = useState(false);
+  // Existing accounts accept while signed in (never by setting a password):
+  // who is signed in here, if anyone.
+  const [signedInAs, setSignedInAs] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) {
@@ -36,7 +39,10 @@ function AcceptInviteForm() {
       return;
     }
     getInvite(token)
-      .then(setInvite)
+      .then(async (inv) => {
+        setInvite(inv);
+        if (inv.existing_account) setSignedInAs(await getMe().then((m) => m.email).catch(() => null));
+      })
       .catch((err) =>
         setError(
           err instanceof ApiError
@@ -74,6 +80,21 @@ function AcceptInviteForm() {
     }
   }
 
+  async function handleAcceptExisting() {
+    setError(null);
+    setSubmitting(true);
+    try {
+      const { workspace_id } = await acceptWorkspaceInvite(token);
+      await switchWorkspace(workspace_id);
+      setDone(true);
+      window.location.assign("/");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : t.acceptInvite.setupFailed);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <div className="relative min-h-screen legion-backdrop flex items-center justify-center p-4 font-sans">
       <AuthLanguageSwitcher />
@@ -90,11 +111,13 @@ function AcceptInviteForm() {
           <div className="bg-surface border border-line rounded-2xl p-6 text-center">
             <CheckCircle2 size={28} className="mx-auto mb-3" color={palette.success} />
             <h2 className="text-ink font-semibold text-lg">
-              {t.acceptInvite.readyTitle}
+              {invite?.existing_account ? t.acceptInvite.accepted : t.acceptInvite.readyTitle}
             </h2>
-            <p className="text-ink-muted text-sm mt-2">
-              {t.acceptInvite.redirecting}
-            </p>
+            {!invite?.existing_account && (
+              <p className="text-ink-muted text-sm mt-2">
+                {t.acceptInvite.redirecting}
+              </p>
+            )}
           </div>
         ) : !invite ? (
           <div className="bg-surface border border-line rounded-2xl p-6 text-center">
@@ -113,6 +136,36 @@ function AcceptInviteForm() {
             >
               {t.auth.backToSignIn}
             </Link>
+          </div>
+        ) : invite.existing_account ? (
+          <div className="bg-surface border border-line rounded-2xl p-6 text-center space-y-3">
+            <h2 className="text-ink font-semibold text-xl tracking-tight">
+              {t.acceptInvite.join(invite.tenant_name || "Legion")}
+            </h2>
+            <p className="text-ink-muted text-sm">{t.acceptInvite.existingIntro(invite.email)}</p>
+            {signedInAs && signedInAs.toLowerCase() === invite.email.toLowerCase() ? (
+              <button
+                type="button"
+                onClick={handleAcceptExisting}
+                disabled={submitting}
+                className="w-full flex items-center justify-center gap-2 bg-brand hover:bg-brand-hover shadow-glow text-white text-sm font-medium rounded-lg py-2.5 transition-colors disabled:opacity-60"
+              >
+                {submitting && <Loader2 size={14} className="animate-spin" />}
+                {t.acceptInvite.acceptExisting}
+              </button>
+            ) : (
+              <>
+                <p className="text-ink-faint text-xs">
+                  {signedInAs ? t.acceptInvite.wrongAccount(signedInAs, invite.email) : t.acceptInvite.signInFirst}
+                </p>
+                <Link href="/login" className="inline-block text-brand-bright text-sm hover:underline">
+                  {t.auth.backToSignIn}
+                </Link>
+              </>
+            )}
+            {errorText && (
+              <p className="text-critical text-xs bg-critical/10 rounded-lg px-3 py-2">{errorText}</p>
+            )}
           </div>
         ) : (
           <>

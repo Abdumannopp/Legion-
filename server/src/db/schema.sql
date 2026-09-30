@@ -521,8 +521,11 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS region text;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS timezone text NOT NULL DEFAULT 'UTC';
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS locale text NOT NULL DEFAULT 'en';
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS currency text NOT NULL DEFAULT 'USD' CHECK (currency ~ '^[A-Z]{3}$');
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS date_format text NOT NULL DEFAULT 'YYYY-MM-DD';
-ALTER TABLE tenants ADD COLUMN IF NOT EXISTS time_format text NOT NULL DEFAULT '24h';
+-- 'locale': follow the reader's language (the behaviour before these settings existed).
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS date_format text NOT NULL DEFAULT 'locale';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS time_format text NOT NULL DEFAULT 'locale';
+ALTER TABLE tenants ALTER COLUMN date_format SET DEFAULT 'locale';
+ALTER TABLE tenants ALTER COLUMN time_format SET DEFAULT 'locale';
 -- Personal overrides (NULL: the workspace's setting).
 ALTER TABLE users ADD COLUMN IF NOT EXISTS timezone text;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS locale text;

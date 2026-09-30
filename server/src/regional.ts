@@ -14,9 +14,10 @@ export function isTimeZone(v: string): boolean {
   return typeof v === "string" && v.length <= 64 && ZONES.has(v);
 }
 
-export const DATE_FORMATS = ["YYYY-MM-DD", "DD.MM.YYYY", "DD/MM/YYYY", "MM/DD/YYYY"] as const;
+/** "locale": follow the reader's language (the default). */
+export const DATE_FORMATS = ["locale", "YYYY-MM-DD", "DD.MM.YYYY", "DD/MM/YYYY", "MM/DD/YYYY"] as const;
 export type DateFormat = (typeof DATE_FORMATS)[number];
-export const TIME_FORMATS = ["24h", "12h"] as const;
+export const TIME_FORMATS = ["locale", "24h", "12h"] as const;
 export type TimeFormat = (typeof TIME_FORMATS)[number];
 
 export interface RegionalSettings {
@@ -36,8 +37,8 @@ export function effectiveSettings(
   return {
     timezone: user.timezone && isTimeZone(user.timezone) ? user.timezone : isTimeZone(workspace.timezone) ? workspace.timezone : "UTC",
     locale: user.locale || workspace.locale || "en",
-    date_format: pick(user.date_format, workspace.date_format, DATE_FORMATS, "YYYY-MM-DD"),
-    time_format: pick(user.time_format, workspace.time_format, TIME_FORMATS, "24h"),
+    date_format: pick(user.date_format, workspace.date_format, DATE_FORMATS, "locale"),
+    time_format: pick(user.time_format, workspace.time_format, TIME_FORMATS, "locale"),
   };
 }
 

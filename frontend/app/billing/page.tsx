@@ -110,8 +110,9 @@ export default function BillingPage() {
     setCheckoutBusy(true);
     setError(null);
     try {
-      const { checkout_token } = await getCheckoutContext();
-      await openCheckout(PRICE_ID, checkout_token, me.email, locale);
+      // The server picks the price for this workspace's billing currency when it has one.
+      const { checkout_token, price_id } = await getCheckoutContext();
+      await openCheckout(price_id || PRICE_ID, checkout_token, me.email, locale);
     } catch (err) {
       setError(err instanceof Error ? err.message : t.billing.checkoutError);
     } finally {

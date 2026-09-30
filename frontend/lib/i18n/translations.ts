@@ -34,6 +34,7 @@ import { site } from "./ns/site";
 import { pricing } from "./ns/pricing";
 import { notFound } from "./ns/notFound";
 import { meta } from "./ns/meta";
+import { workspaces } from "./ns/workspaces";
 
 export { LOCALES, DEFAULT_LOCALE, isLocale } from "./core";
 export type { Locale } from "./core";
@@ -68,6 +69,7 @@ const namespaces = {
   pricing,
   notFound,
   meta,
+  workspaces,
 };
 
 type Namespaces = typeof namespaces;

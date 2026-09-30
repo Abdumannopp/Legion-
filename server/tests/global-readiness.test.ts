@@ -33,9 +33,9 @@ beforeEach(async () => {
 });
 
 describe("workspace settings", () => {
-  it("defaults are English, UTC, USD, ISO dates, 24h; the region is this deployment's", async () => {
+  it("defaults are English, UTC, USD, dates and times as the language writes them; the region is this deployment's", async () => {
     const res = await request(app).get("/workspace/settings").set(...bearer(viewerA));
-    expect(res.body).toMatchObject({ region: config.region, timezone: "UTC", locale: "en", currency: "USD", date_format: "YYYY-MM-DD", time_format: "24h" });
+    expect(res.body).toMatchObject({ region: config.region, timezone: "UTC", locale: "en", currency: "USD", date_format: "locale", time_format: "locale" });
     expect(res.body.options.currencies).toEqual(expect.arrayContaining(["USD", "EUR"]));
   });
 
@@ -85,7 +85,7 @@ describe("personal preferences", () => {
 
   it("an unknown stored value never breaks presentation", () => {
     expect(effectiveSettings({ timezone: "Bad/Zone", locale: "en", date_format: "??", time_format: "25h" }, { timezone: "Also/Bad" }))
-      .toEqual({ timezone: "UTC", locale: "en", date_format: "YYYY-MM-DD", time_format: "24h" });
+      .toEqual({ timezone: "UTC", locale: "en", date_format: "locale", time_format: "locale" });
   });
 });
 

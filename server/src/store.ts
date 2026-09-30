@@ -39,7 +39,7 @@ const toTenant = (r: any): Tenant => ({
   ai_enabled: typeof r.ai_enabled === "boolean" ? r.ai_enabled : null,
   ai_data_mode: r.ai_data_mode === "strict" ? "strict" : "standard",
   region: r.region ?? null, timezone: r.timezone ?? "UTC", locale: r.locale ?? "en", currency: r.currency ?? "USD",
-  date_format: r.date_format ?? "YYYY-MM-DD", time_format: r.time_format ?? "24h",
+  date_format: r.date_format ?? "locale", time_format: r.time_format ?? "locale",
 });
 
 const toUser = (r: any): User => ({

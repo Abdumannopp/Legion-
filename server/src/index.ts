@@ -1125,6 +1125,10 @@ app.get("/auth/me", auth, async (req: AuthedRequest, res) => {
     workspace: tenant ? { id: tenant.id, name: tenant.name, role: req.user!.role, region: regionOf(tenant), currency: tenant.currency } : null,
     home_workspace_id: req.user!.home_tenant_id ?? req.user!.tenant_id,
     settings: tenant ? effectiveSettings(tenant, req.user!) : null,
+    // The person's own choices only (null = not chosen). A browser shows
+    // times in its own zone unless the person picked one; the workspace's
+    // zone is the organisation's reference (reports, emails).
+    preferences: { timezone: req.user!.timezone ?? null, locale: req.user!.locale ?? null, date_format: req.user!.date_format ?? null, time_format: req.user!.time_format ?? null },
   });
 });
 

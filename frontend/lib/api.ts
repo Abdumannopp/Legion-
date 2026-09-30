@@ -1,6 +1,7 @@
 import type { Locale } from "./i18n/core";
 import { translations } from "./i18n/translations";
 import { createRefresher, type LockManagerLike } from "./session-refresh";
+import { setDisplaySettings, type DateFormat, type TimeFormat } from "./i18n/format";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -336,10 +337,69 @@ export interface CurrentUser {
   tenant_name: string | null;
   trial_ends_at: string | null;
   access_state: AccessState;
+  /** The workspace this session acts in (a person can belong to several). */
+  workspace?: { id: string; name: string; role: Role; region: string; currency: string } | null;
+  home_workspace_id?: string;
+  /** Effective regional settings (the person's, else the workspace's). */
+  settings?: RegionalSettings | null;
+  /** The person's own choices only; null = not chosen. */
+  preferences?: Partial<Record<keyof RegionalSettings, string | null>>;
 }
 
-export function getMe(): Promise<CurrentUser> {
-  return request<CurrentUser>("/auth/me");
+type Role = "admin" | "analyst" | "viewer";
+export interface RegionalSettings { timezone: string; locale: string; date_format: DateFormat; time_format: TimeFormat }
+
+export async function getMe(): Promise<CurrentUser> {
+  const me = await request<CurrentUser>("/auth/me");
+  // Present times the way this person chose; the browser's zone unless they picked one.
+  if (me.settings) {
+    setDisplaySettings({
+      timeZone: me.preferences?.timezone ?? undefined,
+      dateFormat: me.settings.date_format, timeFormat: me.settings.time_format,
+    });
+  }
+  return me;
+}
+
+// ---------- Workspaces ----------
+
+export interface WorkspaceSummary { id: string; name: string; role: Role; status: "active" | "invited"; home: boolean; region: string }
+
+export function getWorkspaces(): Promise<{ current: string; default: string | null; workspaces: WorkspaceSummary[] }> {
+  return request("/workspaces");
+}
+
+/** Starts a session in another workspace (new cookies); the page should reload. */
+export function switchWorkspace(workspaceId: string): Promise<{ workspace: { id: string; name: string; role: Role } }> {
+  return request("/workspaces/switch", { method: "POST", body: JSON.stringify({ workspace_id: workspaceId }) });
+}
+
+export function createWorkspace(input: { name: string; currency?: string; timezone?: string }): Promise<{ id: string; name: string }> {
+  return request("/workspaces", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function leaveWorkspace(workspaceId: string): Promise<{ status: string }> {
+  return request("/workspaces/leave", { method: "POST", body: JSON.stringify({ workspace_id: workspaceId }) });
+}
+
+/** Accepts an invitation to another workspace while signed in (existing accounts). */
+export function acceptWorkspaceInvite(token: string): Promise<{ workspace_id: string; role: Role }> {
+  return request("/workspaces/invitations/accept", { method: "POST", body: JSON.stringify({ token }) });
+}
+
+export interface WorkspaceSettings {
+  id: string; name: string; region: string; timezone: string; locale: string; currency: string;
+  date_format: DateFormat; time_format: TimeFormat;
+  options: { currencies: string[]; locales: string[]; date_formats: DateFormat[]; time_formats: TimeFormat[] };
+}
+export function getWorkspaceSettings(): Promise<WorkspaceSettings> {
+  return request("/workspace/settings");
+}
+export function updateWorkspaceSettings(patch: Partial<Pick<WorkspaceSettings, "name" | "timezone" | "currency" | "date_format" | "time_format">>): Promise<WorkspaceSettings> {
+  return request("/workspace/settings", { method: "PATCH", body: JSON.stringify(patch) });
+}
+export function updatePreferences(patch: Partial<Record<"timezone" | "date_format" | "time_format", string | null>>): Promise<{ settings: RegionalSettings }> {
+  return request("/auth/me/preferences", { method: "PATCH", body: JSON.stringify(patch) });
 }
 
 /** Emails a reset link if the address has an account; the answer is the same either way. */
@@ -370,6 +430,8 @@ export interface InvitePreview {
   email: string;
   role: "admin" | "analyst" | "viewer";
   tenant_name: string | null;
+  /** The address already has a Legion account: accept by signing in, not by choosing a password. */
+  existing_account?: boolean;
 }
 
 /** Public: reads an invitation so the accept page can show who it's for. */
@@ -539,8 +601,8 @@ export function openBillingPortal(): Promise<{ url: string }> {
   return request<{ url: string }>("/billing/portal", { method: "POST" });
 }
 
-export function getCheckoutContext(): Promise<{ checkout_token: string }> {
-  return request<{ checkout_token: string }>("/billing/checkout-context", { method: "POST" });
+export function getCheckoutContext(): Promise<{ checkout_token: string; currency?: string; price_id?: string | null }> {
+  return request<{ checkout_token: string; currency?: string; price_id?: string | null }>("/billing/checkout-context", { method: "POST" });
 }
 
 // ---------- Users / RBAC ----------

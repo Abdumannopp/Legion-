@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
+import WorkspaceSwitcher from "@/components/WorkspaceSwitcher";
 import LegionLogo from "@/components/brand/LegionLogo";
 
 export default function Sidebar() {
@@ -87,6 +88,7 @@ export default function Sidebar() {
       </nav>
 
       <div className="mt-auto pt-4 flex flex-col gap-3">
+        <WorkspaceSwitcher />
         <LanguageSwitcher compact />
         <div className="flex flex-col gap-0.5 px-2">
           {LEGAL_LINKS.map(({ label, href }) => (

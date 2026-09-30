@@ -48,6 +48,10 @@ const REVIEWED: Exception[] = [
     reason: "touch on use (after signature verification) / rotate after a tenant-scoped SELECT … FOR UPDATE" },
   // --- maintenance, not request paths
   { file: "secrets-migration.ts", table: "users", reason: "boot-time re-encryption of MFA seeds across all rows; no data leaves the process" },
+  { file: "store.ts", table: "tenants", match: /^UPDATE tenants SET \$\{cols\.map/i,
+    reason: "updateTenantSettings(tenantId): whitelisted columns, WHERE id = $1; the only caller passes req.user.tenant_id (PATCH /workspace/settings)" },
+  { file: "store.ts", table: "users", match: /^UPDATE users SET \$\{cols\.map/i,
+    reason: "updateUserPreferences(userId): whitelisted presentation columns of the signed-in person's own row (PATCH /auth/me/preferences)" },
   { file: "workspaces.ts", table: "users", match: /^UPDATE users SET default_workspace_id = (NULL|\$2) WHERE id = \$1/i,
     reason: "the signed-in person's own landing workspace, by their user id; the workspace was checked to be an active membership of theirs" },
   { file: "secrets-migration.ts", table: "webhook_credentials", reason: "boot-time re-encryption across all rows" },

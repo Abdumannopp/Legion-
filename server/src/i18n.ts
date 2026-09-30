@@ -395,10 +395,72 @@ export const CATALOG: Record<string, Translation> = {
     ru: "В запросе отсутствует или указано неверное значение",
     uz: "So'rovdagi qiymat yo'q yoki noto'g'ri",
   },
+  // --- workspaces, integrations, regions (global SaaS)
+  "You are no longer a member of this workspace": {
+    ru: "Вы больше не участник этого рабочего пространства",
+    uz: "Siz endi bu ish maydonining a'zosi emassiz",
+  },
+  "The billing currency cannot change while a subscription is active": {
+    ru: "Валюту оплаты нельзя изменить, пока действует подписка",
+    uz: "Obuna faol bo'lganda to'lov valyutasini o'zgartirib bo'lmaydi",
+  },
+  "Choose a period of at most a year, with from before to": {
+    ru: "Выберите период не длиннее года, где начало раньше конца",
+    uz: "Boshlanishi tugashidan oldin bo'lgan, bir yildan oshmaydigan davrni tanlang",
+  },
+  "Only administrators can create workspaces on this installation": {
+    ru: "В этой установке рабочие пространства могут создавать только администраторы",
+    uz: "Bu o'rnatmada ish maydonlarini faqat administratorlar yaratishi mumkin",
+  },
+  "Confirm your email address first": {
+    ru: "Сначала подтвердите адрес электронной почты",
+    uz: "Avval elektron pochta manzilingizni tasdiqlang",
+  },
+  "Workspace not found": {
+    ru: "Рабочее пространство не найдено",
+    uz: "Ish maydoni topilmadi",
+  },
+  "This invitation is invalid, has expired, or was sent to another account": {
+    ru: "Приглашение недействительно, истекло или отправлено другой учётной записи",
+    uz: "Taklifnoma yaroqsiz, muddati o'tgan yoki boshqa hisobga yuborilgan",
+  },
+  "This is the workspace your account belongs to; it cannot be left": {
+    ru: "Это рабочее пространство, которому принадлежит ваша учётная запись; его нельзя покинуть",
+    uz: "Bu hisobingiz tegishli bo'lgan ish maydoni; uni tark etib bo'lmaydi",
+  },
+  "A workspace must keep at least one admin": {
+    ru: "В рабочем пространстве должен остаться хотя бы один администратор",
+    uz: "Ish maydonida kamida bitta administrator qolishi kerak",
+  },
+  "You already have a Legion account. Sign in to accept this invitation.": {
+    ru: "У вас уже есть учётная запись Legion. Войдите, чтобы принять приглашение.",
+    uz: "Sizda allaqachon Legion hisobi bor. Taklifni qabul qilish uchun tizimga kiring.",
+  },
+  "That person is already a member of this workspace": {
+    ru: "Этот человек уже состоит в этом рабочем пространстве",
+    uz: "Bu shaxs allaqachon ushbu ish maydonining a'zosi",
+  },
+  "Integration not found.": {
+    ru: "Интеграция не найдена.",
+    uz: "Integratsiya topilmadi.",
+  },
+  "This workspace is hosted in another region.": {
+    ru: "Это рабочее пространство размещено в другом регионе.",
+    uz: "Bu ish maydoni boshqa mintaqada joylashgan.",
+  },
+  "That integration is not available.": {
+    ru: "Эта интеграция недоступна.",
+    uz: "Bu integratsiya mavjud emas.",
+  },
 };
 
 /** Messages with a variable part (an address, an upstream error). */
 const PATTERNS: Array<{ re: RegExp; ru: (m: RegExpMatchArray) => string; uz: (m: RegExpMatchArray) => string }> = [
+  {
+    re: /^You can belong to at most (\d+) workspaces$/,
+    ru: (m) => `Можно состоять не более чем в ${m[1]} рабочих пространствах`,
+    uz: (m) => `Ko'pi bilan ${m[1]} ta ish maydoniga a'zo bo'lish mumkin`,
+  },
   {
     re: /^Too many active webhook credentials \(maximum (\d+)\)$/,
     ru: (m) => `Слишком много действующих учётных данных вебхука (максимум ${m[1]})`,
