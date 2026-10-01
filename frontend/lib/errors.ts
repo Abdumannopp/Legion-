@@ -47,7 +47,8 @@ export function describeError(err: unknown, t: T, opts: { isAdmin?: boolean } = 
   if (err.status === 404) return base(e.notFound);
   if (err.status === 409) return base(e.conflict);
   if (err.status === 400 || err.status === 422) return base(e.invalid);
-  if (err.status === 429) {
+  // Sign-in is busy (password hashing saturated on the server): a short wait, not a fault.
+  if (err.status === 429 || err.code === "auth_busy") {
     return { ...base(e.rateLimited, true), next: err.retryAfter ? e.rateLimited.nextSeconds(err.retryAfter) : e.rateLimited.next };
   }
   if (err.status >= 500) return base(e.server, true);

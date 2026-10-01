@@ -24,6 +24,7 @@
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# shellcheck source=ops/lib/common.sh
 source ops/lib/common.sh
 
 STAGE="startup"

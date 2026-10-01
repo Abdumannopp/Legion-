@@ -1,15 +1,23 @@
 # Legion — final production validation (2026-10-01)
 
 Independent validation of the codebase after phases 1–6, at commit
-`351c591` plus the dependency fix made during this validation (see RED-2).
+`351c591`, followed by the fixes for every release blocker it found.
 Roles: Principal Engineer, AppSec reviewer, SRE, QA lead.
 
 ## Verdict
 
-**Not production ready.** One open release blocker:
+**Release blockers: none open in code.** The validation found three; all are
+fixed and verified here:
 
-- **RED-1:** unauthenticated sign-in attempts block the event loop. That stalls
-  the whole API instance and weakens the cross-instance brute-force limit.
+- **RED-1:** unauthenticated sign-in attempts blocked the event loop. Fixed;
+  `auth-load-probe.mjs` 4/4 (it was 0/4).
+- **RED-2:** high-severity advisories in nodemailer. Fixed; `npm audit` clean.
+- **RED-3:** GitHub CI was red at `351c591` (the release gate failed on three
+  jobs). Fixed in the workflow and scripts.
+
+**Not yet "production ready":** that needs GitHub Actions green on the fix
+commit (RED-3), and the staging checks in the YELLOW list (real SMTP, Paddle
+sandbox, TLS to Wazuh, soak test).
 
 Everything else that could be tested here is verified. That includes a real
 Wazuh manager, a black-box attack run on the production build, and load across
@@ -35,7 +43,7 @@ script that reproduces it.
 | G-8 | **WebSocket**: foreign Origin, no Origin and no session all refused before any database work; a live socket gets only its own workspace's alerts, also across instances | Probe §WebSocket (6 checks). Load test: every alert reached its own workspace's socket across 3 instances, none foreign (20 workspaces, 3,000 alerts) | — |
 | G-9 | **CORS / CSRF**: foreign origin gets no ACAO; the dashboard origin exact, with credentials, never `*`; cross-site state change refused | Probe §headers (3 checks) | — |
 | G-10 | **CSP / security headers**: API `default-src 'none'`, nosniff, framing refused, Referrer-Policy, HSTS when served for https, no X-Powered-By, `/health` up/down only. Dashboard: a fresh nonce per response with `strict-dynamic`, no `unsafe-eval`, `object-src 'none'`, `frame-ancestors 'none'`, X-Frame-Options DENY | Probe §headers (dashboard via `next start` of the production build) | See Y-9 |
-| G-11 | **Rate limiting (per address)**: sign-in attempts per address → 429 + Retry-After; webhook auth failures; an untrusted peer cannot choose its address with X-Forwarded-For | Probe §rate limiting (the spoofing check binds the API to the LAN interface) | The per-account limit across instances is RED-1 |
+| G-11 | **Rate limiting**: sign-in attempts per address → 429 + Retry-After; webhook auth failures; an untrusted peer cannot choose its address with X-Forwarded-For; after the RED-1 fix, the per-account limit holds at exactly 20 across 3 instances under concurrency | Probe §rate limiting (the spoofing check binds the API to the LAN interface); `authload-after-fix.log`, `load-after-fix.log` | — |
 | G-12 | **Unsafe production config refused**: e.g. `COOKIE_SECURE=false` refuses to boot; demo data never seeded in production even when asked | Probe §boot; `config-safety`, `secret-placeholders` | — |
 | G-13 | **PostgreSQL failure/restart**: the sensor spools while Postgres is down; events land exactly once on return; a blip mid-burst loses and duplicates nothing; 503 + Retry-After rather than 500 | `reliability-failover`, `reliability-ingestion` (real processes; `LEGION_REQUIRE_FAILURE_INJECTION=1`, nothing skipped) | — |
 | G-14 | **Redis failure/restart**: frames wait in Postgres and go out when Redis returns; tabs never miss or duplicate an alert | `alert-delivery-durability`, `realtime-recovery`, `reliability-failover` (real `redis-server` restarts) | — |
@@ -47,7 +55,7 @@ script that reproduces it.
 | G-20 | **Recovery after reconnect**: a real Wazuh manager kept firing while Legion was stopped; the integration spooled on the manager; after restart the spooled and the new event each arrived exactly once and the spool emptied | `e2e-wazuh-manager.mjs` (`wazuh-manager.log`, Legion-down section) | — |
 | G-21 | **Real end-to-end Wazuh flow**: **real Wazuh manager 4.9.2** (Docker) analysing sshd log lines → its brute-force rule (level 10, T1110) → `integrations/custom-legion` inside the manager → Legion webhook (production build) → PostgreSQL → outbox → worker → **email to the confirmed address** (SMTP) and **WebSocket frame to the open dashboard** → API. About 3.3 s from log line to API. The manager's own CIS benchmark findings also flowed in. No secret in the manager's integration log | `e2e-wazuh-manager.mjs`: 22/22 (`wazuh-manager.log`); `e2e-wazuh.mjs`: 34/34 | Y-4 |
 | G-22 | **AI security**: prompt injection (direct and indirect), malicious logs, malicious and changed MCP tool descriptions, tool abuse, privilege escalation, exfiltration, MCP and A2A abuse, unauthorized sensitive actions, impersonation, compromised agents, kill switch and quarantine bypass | Attack assessment: **63 scenarios: 61 DEFENDED, 2 PARTIAL, 0 NOT DEFENDED**; provenance VALID for commit `351c591`, clean tree (`assessment-results.txt`). Agent security suite 459/459; package 802/802. Built API: the poisoned Wazuh username cannot make the agent resolve alerts (`e2e-wazuh`); cross-workspace SQL quarantines the agent; approve-once; resume; emergency stop with key revocation (`e2e-journeys`) | Y-1, Y-2, Y-3 |
-| G-23 | **Scalability**: 3 instances, shared Postgres and Redis; 20 workspaces signed up concurrently; 100 dashboard users reading during the burst; 3,300 webhooks at concurrency 64 → **351 req/s, p95 324 ms, p99 459 ms, 0 errors**. Dashboard reads (45k requests): p95 43–51 ms, p99 ≈ 310 ms, no 5xx. Peak Postgres connections 31 (pool bound 30 + sampler). 1,500 emails, exactly one each | `load-validation.mjs` (`load.log`, `load.json`): 20/21 (the failure is RED-1) | Y-5 |
+| G-23 | **Scalability**: 3 instances, shared Postgres and Redis; 20 workspaces signed up concurrently; 100 dashboard users reading during the burst; 3,300 webhooks at concurrency 64 → **351 req/s, p95 324 ms, p99 459 ms, 0 errors**. Dashboard reads (45k requests): p95 43–51 ms, p99 ≈ 310 ms, no 5xx. Peak Postgres connections 31 (pool bound 30 + sampler). 1,500 emails, exactly one each | `load-validation.mjs` (`load.log`, `load.json`): 20/21 (the failure was RED-1); after the fix 21/21, reads max 0.56 s (`load-after-fix.log`) | Y-5 |
 | G-24 | **Quality gates**: all pass (table in §4) | `quality-gates-summary.txt`, `server-tests-after-nodemailer-upgrade.txt` | — |
 | G-25 | **Main user journeys** in a browser against the built API and dashboard (sign-up → workspace → connect Wazuh → first alert → incident → agent → permission change → approve/block → kill switch → billing → error → another language): 77/77 | `e2e-journeys.mjs` (gate log) | — |
 | G-26 | **Backup / restore** against real Postgres (dump, verify, restore, failure modes) | `test-backup-restore.sh`: all checks pass | — |
@@ -66,18 +74,18 @@ script that reproduces it.
 | Y-8 | External AI tested with stubs and timeouts, not a live provider (no keys here) | `ai-hardening`, `ai-provider` | AI explanations / copilot | Smoke test with real OpenRouter/Groq keys in staging, including provider errors and rate limits |
 | Y-9 | Dashboard CSP keeps `style-src 'unsafe-inline'` (Tailwind/React inline styles). Script execution is nonce-locked | probe §headers (dashboard CSP recorded) | Frontend | Low risk; move to style nonces or hashes when practical |
 | Y-10 | The response leak scan is a sample (credential list, issuance and error responses), not every response | probe §secret leakage | — | Extend the probe to record every response body |
-| Y-11 | The real-Wazuh, load and auth-load scripts need Docker, several minutes and a dedicated host, so they are **not in CI** (the production probe and browser journeys are) | — | Release process | Run them as a pre-release job on a self-hosted runner |
-| Y-12 | Validation ran at `351c591` plus this commit's changes. The new CI step (production probe) and the dependency fix have not yet run in GitHub Actions | — | CI | Confirm the pipeline is green on this commit before tagging |
+| Y-11 | The real-Wazuh and load scripts need Docker, several minutes and a dedicated host, so they are **not in CI**. The production probe, browser journeys and the sign-in-under-load check are | — | Release process | Run them as a pre-release job on a self-hosted runner |
+| Y-12 | Under a sign-in flood, sign-in itself now answers 503 + Retry-After once the hashing queue is full (8 jobs per worker). The rest of the API is unaffected, but a large enough botnet can still make sign-in slow or briefly unavailable | `password-busy.test.ts`; `authload-after-fix.log` | Sign-in availability | Per-address limits at the edge (WAF/CDN) in front of `/auth/*`; tune `PASSWORD_HASH_WORKERS` / `PASSWORD_HASH_MAX_PENDING` per host |
 
 ## 3. RED — release blocker
 
-### RED-1 (OPEN): password hashing blocks the event loop
+### RED-1 (RESOLVED): password hashing blocked the event loop
 
 `bcryptjs` (pure JS, cost 12) runs on the main thread. This yields an
 unauthenticated, low-rate denial of service and a weakened brute-force limit.
 
-**Evidence** (`ops/tests/auth-load-probe.mjs`, `authload.log`; also
-`load.log` §rate limits):
+**Evidence before the fix** (`ops/tests/auth-load-probe.mjs`,
+`authload-before-fix.log`; also `load.log` §rate limits):
 
 - **`/health` latency during 30 concurrent failed sign-ins:** p50 3 ms → p50
   1,531–2,796 ms, max 9.8–24.4 s (two runs). Everything on the instance
@@ -98,19 +106,40 @@ unauthenticated, low-rate denial of service and a weakened brute-force limit.
 change-password, MFA disable via `bcrypt.*`) and `server/src/ratelimit.ts`
 (`ResilientStore` timeout and cooldown).
 
-**Recommended next action:**
+**Fix:**
 
-1. Move password hashing off the event loop: a `worker_threads` pool running
-   bcryptjs, or a native/threadpool implementation such as `bcrypt` or
-   argon2. Existing `$2a/$2b` hashes stay valid.
-2. Bound concurrent hashing with a small queue per instance. Answer
-   `503 + Retry-After` when it is full, rather than queueing without limit.
-3. Stop treating event-loop lag as a Redis failure for the account limiters.
-   Keep sending the remote `INCR` during the cooldown, and prefer
-   "remote unknown → count locally **and** retry remote" over skipping it.
-4. Add `auth-load-probe.mjs` to the pre-release job. It must pass: `/health`
-   p50 < 250 ms under 30 concurrent sign-ins, and ≤ 20 accepted failures at
-   concurrency 1, 12 and 30.
+1. **`server/src/passwords.ts`:** password and recovery-code hashing run on a
+   pool of worker threads, using the same bcryptjs, so every existing
+   `$2a/$2b` hash keeps working. By default there is one worker per CPU,
+   keeping one CPU for the event loop, at most 4.
+2. **Bounded queue:** at most 8 pending jobs per worker
+   (`PASSWORD_HASH_WORKERS`, `PASSWORD_HASH_MAX_PENDING`). Past that, sign-in
+   answers `503 + Retry-After: 2` with `code: "auth_busy"`, translated. A
+   busy 503 does not count as a failed attempt against the account.
+3. **`server/src/ratelimit.ts`:** a Redis reply that was only late puts the
+   instance back on the shared count at once. Previously it counted
+   per-instance for the whole 5 s cooldown. A Redis that never answers still
+   gets the cooldown.
+
+**Evidence after the fix:**
+
+| Measure | Before | After |
+|---|---|---|
+| `/health` during 30 concurrent failed sign-ins | p50 1,531–2,796 ms, max 9.8–24.4 s | **p50 3 ms, max 14 ms** |
+| Accepted failures for one account, 3 instances (limit 20), concurrency 1 / 12 / 30 | 23 / 48 / 48 (and 36–55 in other runs) | **20 / 20 / 20** |
+| "Redis unavailable, counting locally" while Redis was healthy | 79 / 7 / 10 | **0 / 0 / 0** |
+| Load test: account limit across instances | 36 | **20** |
+| Load test: worst dashboard read | ~6.1 s | **0.56 s** |
+
+Sources: `authload-after-fix.log`, `load-after-fix.log`.
+
+Regression tests: `tests/password-hashing.test.ts` (round-trip, legacy-hash
+compatibility, event-loop lag < 100 ms with 8 hashes in flight, saturation →
+`HashingBusyError`, worker restart); `tests/password-busy.test.ts` (API:
+503 + Retry-After + `auth_busy` in the caller's language, `/health` still
+answering, sign-in works after the flood); `tests/edge-ratelimit.test.ts`
+(a late reply restores the shared count; a hang keeps the cooldown; 503 is
+not a failure). `auth-load-probe.mjs` now runs in CI.
 
 ### RED-2 (RESOLVED during validation): high-severity advisories in nodemailer
 
@@ -134,7 +163,29 @@ Legion runs Node 22) and ip-address 10.5.0 → 10.7.2 via `npm audit fix`.
   upgraded mailer: 2 sign-up confirmations, an invitation, and 2,500 alert
   emails with no duplicates.
 
-**Next action:** confirm CI is green on this commit (Y-12).
+**Next action:** none beyond RED-3.
+
+### RED-3 (RESOLVED in code, CI confirmation pending): GitHub CI was red
+
+The earlier report said CI was "not yet run". That was wrong: GitHub
+Actions runs 14–17 on this branch had all failed. At `351c591` the release
+gate failed on three jobs:
+
+- `dependencies`: the nodemailer advisories (RED-2);
+- `deploy-scripts`: `shellcheck` findings — `cd` without `|| exit` in
+  `ops/check-backup.sh`, `export VAR=$(…)` in `test-backup-restore.sh`, and
+  sourced `ops/lib/common.sh` not followed. That failure also skipped the
+  backup/restore and integration-script steps after it;
+- `agent-identity`: the Wazuh e2e step ran from `packages/agent-identity`
+  (script not found) with that job's database, and failed in 0 s.
+
+**Fix:** the scripts are corrected and CI now runs `shellcheck -x`, which also
+checks the shared library (`shellcheck-after-fix.txt`: clean). The e2e step
+moved into the `app` job, which builds the server and has the matching
+database (`e2e-wazuh-after-fix.log`: 34/34).
+
+**Next action:** GitHub Actions green on the fix commit; until then the
+release is not cleared.
 
 ---
 
@@ -156,8 +207,10 @@ Legion runs Node 22) and ip-address 10.5.0 → 10.7.2 via `npm audit fix`.
 | E2E — browser journeys (`e2e-journeys.mjs`) | **77 / 77** | 〃 |
 | E2E — real Wazuh manager (`e2e-wazuh-manager.mjs`, new) | **22 / 22** | `wazuh-manager.log` |
 | Black-box production probe (`production-probe.mjs`, new) | **106 / 106** | `probe.log`, `probe.json` |
-| Load / scalability (`load-validation.mjs`, new) | **20 / 21** (fail = RED-1) | `load.log`, `load.json` |
-| Auth under load (`auth-load-probe.mjs`, new) | **0 / 4** (= RED-1, expected until fixed) | `authload.log` |
+| Load / scalability (`load-validation.mjs`, new) | **20 / 21** (fail = RED-1) → after fix **21 / 21** | `load.log`, `load-after-fix.log` |
+| Auth under load (`auth-load-probe.mjs`, new) | **0 / 4** (RED-1) → after fix **4 / 4** | `authload-before-fix.log`, `authload-after-fix.log` |
+| After the RED-1 fix: server suite / server security / probe / journeys / e2e-wazuh | **1081 / 1081**, **236 / 236**, **106 / 106**, **77 / 77**, **34 / 34** | `*-after-fix.*` |
+| shellcheck (`-x`) | fail at `351c591` → clean | `shellcheck-after-fix.txt` |
 | Integration script (`test_custom_legion.py`) | **23 / 23** | gate log |
 | Backup / restore against Postgres | pass | gate log |
 | CI gate self-test | 10 / 10 | gate log |
@@ -175,7 +228,7 @@ node ops/tests/production-probe.mjs         # black-box security probe (in CI)
 node ops/tests/e2e-journeys.mjs             # browser journeys (in CI)
 node ops/tests/e2e-wazuh-manager.mjs        # real Wazuh manager (needs Docker)
 node ops/tests/load-validation.mjs          # 3 instances + Redis load test
-node ops/tests/auth-load-probe.mjs          # RED-1 regression (fails until fixed)
+node ops/tests/auth-load-probe.mjs          # RED-1 regression (in CI)
 ```
 
 Each script creates and drops its own database. They share helpers in

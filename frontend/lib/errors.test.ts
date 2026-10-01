@@ -44,6 +44,13 @@ describe("every important error says what happened, why, and what to do next", (
     expect(describeError(new ApiError("x", 421, "wrong_region", { region_url: "https://eu.example.com" }), en).action?.href).toBe("https://eu.example.com");
   });
 
+  it("a busy sign-in (503 auth_busy) is a short wait, not 'something went wrong'", () => {
+    const x = describeError(new ApiError("busy", 503, "auth_busy", undefined, 2), en);
+    expect(x.title).toBe(en.errors.rateLimited.title);
+    expect(x.next).toBe(en.errors.rateLimited.nextSeconds(2));
+    expect(x.retryable).toBe(true);
+  });
+
   it("says how long to wait when the server said", () => {
     expect(describeError(new ApiError("x", 429, undefined, undefined, 30), en).next).toBe(en.errors.rateLimited.nextSeconds(30));
   });

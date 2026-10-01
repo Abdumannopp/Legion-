@@ -23,7 +23,8 @@ export BACKUP_STATUS_FILE="$WORK/status.json"
 # Backups are always encrypted: a throwaway key pair for the test. Only the
 # PUBLIC key is given to backup.sh; the private one is used to restore.
 age-keygen -o "$WORK/private.key" >/dev/null 2>&1
-export BACKUP_AGE_RECIPIENTS="$(age-keygen -y "$WORK/private.key")"
+BACKUP_AGE_RECIPIENTS="$(age-keygen -y "$WORK/private.key")"
+export BACKUP_AGE_RECIPIENTS
 export BACKUP_AGE_IDENTITY_FILE="$WORK/private.key"
 FAILS=0
 

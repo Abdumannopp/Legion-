@@ -1,0 +1,13 @@
+
+> legion-node-api@1.0.0 test:security
+> vitest run tests/first-admin.test.ts tests/webhook-auth.test.ts tests/tenant-isolation-sweep.test.ts tests/ai-output-is-data.test.ts tests/notification-outbox.test.ts tests/config-safety.test.ts tests/sessions.test.ts tests/mfa.test.ts tests/db-app-role.test.ts tests/agents.test.ts tests/agent-security.test.ts tests/saas-signup-billing.test.ts
+
+
+ RUN  v4.1.11 /home/user/Legion-/server
+
+
+ Test Files  12 passed (12)
+      Tests  236 passed (236)
+   Start at  01:21:28
+   Duration  84.71s (transform 1.86s, setup 0ms, import 12.77s, tests 70.04s, environment 1ms)
+

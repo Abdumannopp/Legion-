@@ -1,0 +1,42 @@
+▶ 1. fresh database legion_e2e_b927bbe8; db-setup creates the API role
+  PASS db-setup succeeds
+▶ 2. the API starts self-hosted (plain http, no SMTP), as the app role
+  PASS API is healthy
+  PASS no superuser warning at boot
+  PASS API is not reachable on the machine's own network address (192.0.2.2) — LEGION_BIND_ADDRESS defaults to loopback
+  PASS every API connection is the app role
+▶ 3. first administrator, with the setup token from the log
+  PASS setup token printed
+  PASS first administrator created
+  PASS a second registration is refused
+  PASS administrator signs in
+▶ 4. Wazuh delivers alerts through integrations/custom-legion.py
+  PASS administrator creates a webhook credential (secret shown once)
+  PASS all five alerts accepted (exit 0)
+  PASS integration log shows 202 for each
+  PASS a Wazuh retry of the same alert is not duplicated
+  PASS a wrong secret is refused
+  PASS an unknown credential id is refused
+  PASS the old TENANT_ID:global-secret api_key no longer authenticates
+  PASS the credential list never contains a secret
+  PASS a replayed request is refused
+▶ 4b. rotation with overlap, then immediate revocation
+  PASS rotation issues a new credential
+  PASS old and new both work during the overlap
+  PASS revoking the old credential succeeds
+  PASS the revoked credential is refused at once; the new one still works
+  PASS no secret was written to the integration log
+  PASS five alerts in the dashboard
+  PASS level 10 → high, level 3 → low, level 7 → medium
+  PASS MITRE, source IP and host carried over
+  PASS the Wazuh agent appears as an asset
+▶ 5. an AI agent reads them through the agent API and runs skills
+  PASS administrator creates an agent
+  PASS agent reads the alerts (marked untrusted)
+  PASS threat detection flags the injection hidden in the username
+  PASS vulnerability analysis finds log4j on web-01 from Wazuh's detector
+  PASS attack investigation links login attempts, login and file change
+  PASS the poisoned alert cannot make the agent resolve alerts
+  PASS the alert is still open
+
+✓ all end-to-end checks passed

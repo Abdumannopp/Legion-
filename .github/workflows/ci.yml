@@ -32,7 +32,8 @@ jobs:
       - name: CI gate cannot be switched off quietly (self-test)
         run: bash ops/tests/test-ci-gate.sh
       - name: shellcheck
-        run: shellcheck ops/*.sh ops/tests/*.sh
+        # -x follows `source ops/lib/common.sh`, so the shared library is checked too.
+        run: shellcheck -x ops/*.sh ops/tests/*.sh
       - name: PostgreSQL client tools are available
         run: |
           if ! command -v pg_dump >/dev/null || ! command -v pg_restore >/dev/null || ! command -v psql >/dev/null; then
@@ -87,13 +88,6 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: npm run build
-      # The built API, self-hosted, as its own hardened database role;
-      # Wazuh alerts delivered by the real integration script; an AI agent
-      # reading them and running skills. See ops/tests/e2e-wazuh.mjs.
-      - name: End-to-end (provision-cli, API as app role, Wazuh integration, agents)
-        env:
-          E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
-        run: node ops/tests/e2e-wazuh.mjs
 
   app:
     name: Typecheck, tests and build
@@ -144,6 +138,15 @@ jobs:
         env:
           LEGION_REQUIRE_FAILURE_INJECTION: "1"
       - run: npm run build
+      # The built API, self-hosted, as its own hardened database role;
+      # Wazuh alerts delivered by the real integration script; an AI agent
+      # reading them and running skills. See ops/tests/e2e-wazuh.mjs.
+      # (Runs here, not in the agent-identity job: it needs the built server
+      # and this job's database.)
+      - name: End-to-end (provision-cli, API as app role, Wazuh integration, agents)
+        env:
+          E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+        run: node ops/tests/e2e-wazuh.mjs
       # The main user journeys in a real browser against the built API and
       # dashboard: sign up, workspace, connect Wazuh, first alert, incident,
       # first agent, permission change, approve/block, billing, errors,
@@ -162,6 +165,13 @@ jobs:
         env:
           E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
         run: node ops/tests/production-probe.mjs
+      # Password hashing must not stall the instance, and the per-account
+      # sign-in limit must hold across instances under concurrency
+      # (PRODUCTION-VALIDATION-2026-10-01.md, RED-1). See ops/tests/auth-load-probe.mjs.
+      - name: Sign-in under load (event loop, limit across instances)
+        env:
+          E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+        run: node ops/tests/auth-load-probe.mjs
 
   # ---------------------------------------------------------------------------
   # Security gate. Separate from the normal test jobs above so its result is

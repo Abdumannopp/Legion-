@@ -14,7 +14,8 @@
 # (BACKUP_REQUIRE_OFFSITE=true also requires that one has succeeded).
 # The same rules answer GET /health/backup on the API.
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
+# shellcheck source=ops/lib/common.sh
 source ops/lib/common.sh
 if [[ "${1:-}" == "--test-alert" ]]; then
   send_alert "Legion backup alert TEST from $(hostname)" "If you can read this, backup failures will reach you."

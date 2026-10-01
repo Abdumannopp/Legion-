@@ -456,6 +456,10 @@ export const CATALOG: Record<string, Translation> = {
     ru: "Это тестовое оповещение, отправленное со страницы «Подключения». Оно показывает, как выглядит настоящее оповещение, и что обновления и уведомления до вас доходят. Его можно спокойно закрыть.",
     uz: "Bu «Ulanishlar» sahifasidan yuborilgan sinov ogohlantirishi. U haqiqiy ogohlantirish qanday ko'rinishini hamda yangilanishlar va bildirishnomalar sizga yetib borishini ko'rsatadi. Uni bemalol hal qilingan deb belgilash mumkin.",
   },
+  "Too many sign-ins are being processed right now. Try again in a few seconds.": {
+    ru: "Сейчас обрабатывается слишком много входов. Повторите через несколько секунд.",
+    uz: "Hozir juda ko'p kirish so'rovlari ishlanmoqda. Bir necha soniyadan keyin qayta urinib ko'ring.",
+  },
   "Too many test alerts. Try again later.": {
     ru: "Слишком много тестовых оповещений. Попробуйте позже.",
     uz: "Sinov ogohlantirishlari juda ko'p. Keyinroq urinib ko'ring.",

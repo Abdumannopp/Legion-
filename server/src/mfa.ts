@@ -6,7 +6,7 @@
  * it is the first item on every vendor security questionnaire.
  */
 import { randomBytes, randomUUID } from "node:crypto";
-import bcrypt from "bcryptjs";
+import { comparePassword, hashPassword } from "./passwords.js";
 import * as OTPAuth from "otpauth";
 import { config } from "./config.js";
 import { query, queryAll, queryOne, transaction } from "./db/pool.js";
@@ -169,7 +169,9 @@ export async function regenerateRecoveryCodes(userId: string): Promise<string[]>
   const codes = Array.from({ length: RECOVERY_CODE_COUNT }, newRecoveryCode);
   // Cost 10 rather than 12: a login may verify against all ten hashes in turn,
   // and these are 50-bit random strings, not user-chosen passwords.
-  const hashes = await Promise.all(codes.map((code) => bcrypt.hash(code, 10)));
+  // One after another: ten at once would take a whole hashing queue slot each.
+  const hashes: string[] = [];
+  for (const code of codes) hashes.push(await hashPassword(code, 10));
 
   await transaction(async (client) => {
     await client.query("DELETE FROM mfa_recovery_codes WHERE user_id = $1", [userId]);
@@ -195,7 +197,7 @@ export async function consumeRecoveryCode(userId: string, code: string): Promise
   );
 
   for (const row of rows) {
-    if (!(await bcrypt.compare(cleaned, row.code_hash))) continue;
+    if (!(await comparePassword(cleaned, row.code_hash))) continue;
     // Conditional update: if a concurrent request just spent this code, the
     // WHERE clause matches nothing and this attempt correctly fails.
     const claimed = await queryOne(

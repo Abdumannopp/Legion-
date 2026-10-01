@@ -1,0 +1,45 @@
+
+▶ setup
+  PASS 3 API instances up (shared Postgres + Redis)
+
+▶ workspaces: 20 organisations sign up concurrently
+  PASS all 20 workspaces signed up, confirmed, keyed
+  PASS every workspace has a live socket
+
+▶ burst 1: 3000 sensor events (10% re-sent) across 3 instances, concurrency 64
+  INFO burst 1 throughput: 350 requests/s (3300 in 9.4 s)
+  INFO webhook latency (ms): {"n":3300,"p50":175,"p95":304,"p99":378,"max":918,"codes":{"202":3300}}
+  PASS no event lost to an error after the sensor's retries
+  PASS no 5xx or connection error on the webhook during burst 1
+  PASS exactly one alert per distinct event, per workspace (duplicates collapsed)
+  PASS outbox fully drained after burst 1
+  PASS one email per high/critical alert (1500), none twice
+  PASS every alert reached its own workspace's socket (across instances), and no other workspace's
+
+▶ burst 2: mail server failing + one instance SIGKILLed mid-burst
+  PASS burst 2: every event accepted despite the killed instance (sensor retries elsewhere)
+  INFO outbox while mail fails: {"pending":1623,"retrying":133,"in_flight":218,"dead":0,"oldest_pending_age_seconds":3,"by_kind":{"alert_email":{"pending":878,"retrying":133,"in_flight":122,"dead":0,"oldest_pending_age_seconds":3},"realtime_alert":{"pending":745,"retrying":0,"in_flight":96,"dead":0,"oldest_pending_age_seconds":3}},"worker":{"running":true,"last_tick_seconds_ago":1}}
+  PASS backlog is visible in queue health while mail fails
+  PASS killed instance restarted
+  INFO drain time after mail recovers: 119.9 s (includes the 120 s lease on jobs the killed instance held)
+  PASS outbox drained after the mail server recovered (no dead letters)
+  PASS burst 2: exactly one alert per event
+  INFO alert emails received: {"total":2500,"duplicate_message_ids":0,"expected":2500}
+  PASS every due email delivered after recovery
+  PASS duplicate deliveries (SIGKILL mid-send) are at most the in-flight sends, and carry the same Message-ID
+
+▶ rate limits under concurrency, across instances
+  INFO account lockout across instances: {"failures_accepted_before_429":20,"limit":20}
+  PASS failed sign-ins for one account are capped globally (Redis), not per instance
+  INFO read /alerts/stats latency (ms): {"n":15527,"p50":8,"p95":51,"p99":285,"max":555,"codes":{"200":15429,"ERR:UND_ERR_SOCKET":3,"ERR:ECONNRESET":2,"ERR:ECONNREFUSED":93}}
+  INFO read /alerts latency (ms): {"n":15528,"p50":9,"p95":56,"p99":281,"max":510,"codes":{"200":15429,"ERR:UND_ERR_SOCKET":3,"ERR:ECONNRESET":1,"ERR:ECONNREFUSED":95}}
+  INFO read /overview latency (ms): {"n":15526,"p50":10,"p95":58,"p99":293,"max":560,"codes":{"200":15428,"ERR:ECONNRESET":2,"ERR:UND_ERR_SOCKET":1,"ERR:ECONNREFUSED":95}}
+  INFO dashboard read non-200s: read /alerts/stats:ERR:UND_ERR_SOCKET=3 read /alerts/stats:ERR:ECONNRESET=2 read /alerts/stats:ERR:ECONNREFUSED=93 read /alerts:ERR:UND_ERR_SOCKET=3 read /alerts:ERR:ECONNRESET=1 read /alerts:ERR:ECONNREFUSED=95 read /overview:ERR:ECONNRESET=2 read /overview:ERR:UND_ERR_SOCKET=1 read /overview:ERR:ECONNREFUSED=95
+  PASS dashboard reads: no 5xx under load
+  PASS dashboard reads p95 < 1000 ms during the burst
+  PASS webhook p95 < 1000 ms during burst 1
+  INFO peak Postgres connections: 31 (pool max 10 × 3 instances + background)
+  PASS Postgres connections stay within the pools' bound
+  INFO read errors only from session expiry / rate limit: true
+
+load validation: 21 passed, 0 failed

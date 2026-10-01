@@ -135,11 +135,18 @@ export class ResilientStore implements Store {
   private async viaRemote<T>(call: (s: Store) => Promise<T> | T): Promise<T | undefined> {
     const remote = this.remote;
     if (!remote || Date.now() < this.downUntil) return undefined;
+    const work = Promise.resolve().then(() => call(remote));
     try {
-      return await withTimeout(Promise.resolve(call(remote)), this.timeoutMs);
+      return await withTimeout(work, this.timeoutMs);
     } catch (error) {
       this.downUntil = Date.now() + (this.opts.cooldownMs ?? REDIS_COOLDOWN_MS);
       console.error("Rate limit: Redis unavailable, counting locally:", (error as Error).message);
+      // A reply that was only late (a busy process, not a dead Redis) proves
+      // Redis is answering: go back to the shared count at once instead of
+      // counting per instance for the whole cooldown. Otherwise a burst of
+      // slow requests would quietly multiply every limit by the number of
+      // instances (validation 2026-10-01, RED-1).
+      work.then(() => { if (this.remote === remote) this.downUntil = 0; }, () => {});
       return undefined;
     }
   }
@@ -263,6 +270,9 @@ export function makeLimiter({ windowMs, limit, prefix, failuresOnly, key, messag
     // counter, so an unbounded MemoryStore is never in play.
     store: store ?? new ResilientStore(prefix),
     skipSuccessfulRequests: Boolean(failuresOnly),
+    // "Busy, retry shortly" (503, passwords.ts) is not a failed attempt: it
+    // must not count against the account it was trying to sign in to.
+    requestWasSuccessful: (_req, res) => res.statusCode < 400 || res.statusCode === 503,
     // Backstop only. A limiter bug must not take the API down with it.
     passOnStoreError: true,
     skip: bypassed,

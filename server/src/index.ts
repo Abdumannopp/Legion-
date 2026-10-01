@@ -5,7 +5,7 @@ import { hashForComparison, notifyAccountOwner, networkOf, recentLoginFailures, 
 import { backupHealthReport } from "./backup-health.js";
 import { applyTrustedProxies, checkWebSocketOrigin, clientAddress, corsMiddleware, originGuard, securityHeaders, upgradeRateLimited } from "./edge.js";
 import { signToken, verifyLegacyCheckoutToken, verifyTokenOf } from "./auth-jwt.js";
-import bcrypt from "bcryptjs";
+import { comparePassword, hashPassword, HashingBusyError } from "./passwords.js";
 import { createHash, createHmac, randomBytes, timingSafeEqual, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
@@ -573,7 +573,7 @@ app.post("/auth/register", authLimiter, async (req, res) => {
 
   if (isSelfHosted()) return registerFirstAdmin(body, req, res);
 
-  const passwordHash = await bcrypt.hash(body.password, 12);
+  const passwordHash = await hashPassword(body.password, 12);
   try {
     // Uniqueness is enforced by a database constraint rather than a prior
     // SELECT, so concurrent registrations for one address cannot both succeed.
@@ -607,7 +607,7 @@ async function registerFirstAdmin(
   res: Response
 ) {
   // Hash before taking the lock: the lock should be held for milliseconds.
-  const passwordHash = await bcrypt.hash(body.password, 12);
+  const passwordHash = await hashPassword(body.password, 12);
 
   const outcome = await transaction(async (client) => {
     await client.query("SELECT pg_advisory_xact_lock($1)", [SETUP_LOCK_KEY]);
@@ -646,7 +646,7 @@ app.post("/auth/login", authLimiter, loginAccountLimiter, async (req, res) => {
   // real dummy hash when the address is unknown or has no password yet, so
   // the response time does not reveal whether the address exists.
   const { hash, real } = hashForComparison(user);
-  const ok = (await bcrypt.compare(String(body.password || "").slice(0, 128), hash)) && real;
+  const ok = (await comparePassword(String(body.password || "").slice(0, 128), hash)) && real;
   if (!user || !ok) {
     // Recorded against a real account only (an unknown address has no tenant
     // to audit into): the owner's administrators see guessing, and a later
@@ -847,7 +847,7 @@ app.post("/auth/mfa/disable", authLimiter, stepUpLimiter, auth, async (req: Auth
 
   // Password AND a current code: turning off a security control should be at
   // least as hard as using it, so a borrowed session alone is not enough.
-  if (!(await bcrypt.compare(body.password, user.password_hash))) {
+  if (!(await comparePassword(body.password, user.password_hash))) {
     return res.status(400).json({ detail: "Password is incorrect" });
   }
   const codeOk = body.code
@@ -869,7 +869,7 @@ app.post("/auth/mfa/recovery-codes", authLimiter, stepUpLimiter, auth, async (re
   const body = parse(z.object({ password: z.string().min(1).max(128) }), req.body, res); if (!body) return;
   const user = req.user!;
   if (!user.mfa_enabled) return res.status(400).json({ detail: "Two-factor authentication is not enabled" });
-  if (!(await bcrypt.compare(body.password, user.password_hash))) {
+  if (!(await comparePassword(body.password, user.password_hash))) {
     return res.status(400).json({ detail: "Password is incorrect" });
   }
   // Regenerating invalidates every previous code — the point when a list may
@@ -1171,7 +1171,7 @@ app.post("/auth/reset-password", authLimiter, async (req, res) => {
   // Hash the new password first, then consume the token and set the password in
   // ONE statement: an unknown, expired or already-used token changes nothing,
   // and two requests racing with the same token cannot both succeed.
-  const passwordHash = await bcrypt.hash(body.new_password, 12);
+  const passwordHash = await hashPassword(body.new_password, 12);
   const user = await store.consumeResetToken(hashOneTimeToken(body.token), passwordHash);
   if (!user) return res.status(400).json({ detail: "Token is invalid or has expired" });
   // token_version kills access tokens; this kills the refresh tokens that
@@ -1187,11 +1187,11 @@ app.post("/auth/reset-password", authLimiter, async (req, res) => {
 app.post("/auth/change-password", authLimiter, stepUpLimiter, auth, async (req: AuthedRequest, res) => {
   const body = parse(z.object({ current_password: z.string().min(1).max(128), new_password: passwordField }), req.body, res); if (!body) return;
   const user = req.user!;
-  if (!(await bcrypt.compare(body.current_password, user.password_hash))) {
+  if (!(await comparePassword(body.current_password, user.password_hash))) {
     return res.status(400).json({ detail: "Current password is incorrect" });
   }
   await store.updateUser(user.id, {
-    password_hash: await bcrypt.hash(body.new_password, 12),
+    password_hash: await hashPassword(body.new_password, 12),
     bump_token_version: true,
   });
   await revokeUserEverywhere(user.id);
@@ -1207,7 +1207,7 @@ app.post("/auth/change-password", authLimiter, stepUpLimiter, auth, async (req: 
  *  creates a new tenant. */
 app.post("/auth/accept-invite", authLimiter, async (req, res) => {
   const body = parse(z.object({ token: z.string().min(20), password: passwordField }), req.body, res); if (!body) return;
-  const passwordHash = await bcrypt.hash(body.password, 12);
+  const passwordHash = await hashPassword(body.password, 12);
   const user = await store.consumeInviteToken(hashOneTimeToken(body.token), passwordHash);
   if (!user) {
     // An invitation to join another workspace, sent to someone who already
@@ -2083,6 +2083,12 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   const e = error as { name?: string; code?: string; message?: string; status?: number; expose?: boolean };
   // A body the parser refused (malformed JSON, too large) is the sender's
   // mistake, not ours: 4xx, and nothing worth logging as an error.
+  // Password hashing is saturated (passwords.ts): sign-in is busy, the rest of
+  // the API is not. Retry shortly; nothing went wrong with the request.
+  if (error instanceof HashingBusyError) {
+    res.setHeader("Retry-After", "2");
+    return res.status(503).json({ detail: error.message, code: "auth_busy" });
+  }
   if (typeof e?.status === "number" && e.status >= 400 && e.status < 500 && e.expose) {
     return res.status(e.status).json({ detail: "Invalid request" });
   }

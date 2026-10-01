@@ -313,6 +313,13 @@ export const config = {
   /** Bounded in-memory rate-limit table: the most distinct clients tracked at once per limiter. */
   rateLimitMaxKeys: Math.max(1_000, Math.floor(Number(process.env.RATE_LIMIT_MAX_KEYS || 50_000)) || 50_000),
   /** A Redis call slower than this is abandoned and counted locally instead. */
+  /**
+   * Password hashing runs on worker threads (passwords.ts). 0 = default: one
+   * worker per CPU minus one (for the event loop), at most 4; and 8 jobs
+   * waiting per worker before sign-ins are answered 503 + Retry-After.
+   */
+  passwordHashWorkers: Math.max(0, Math.floor(Number(process.env.PASSWORD_HASH_WORKERS || 0)) || 0),
+  passwordHashMaxPending: Math.max(0, Math.floor(Number(process.env.PASSWORD_HASH_MAX_PENDING || 0)) || 0),
   rateLimitRedisTimeoutMs: Math.max(50, Math.floor(Number(process.env.RATE_LIMIT_REDIS_TIMEOUT_MS || 250)) || 250),
   /** Failed logins for one account (any address) before it is slowed down, per 15 minutes. */
   loginAccountFailures: Math.max(3, Math.floor(Number(process.env.LOGIN_ACCOUNT_FAILURES || 20)) || 20),
@@ -527,6 +534,8 @@ const INTEGER_SETTINGS: Record<string, [min: number, max: number]> = {
   AUTH_RATE_LIMIT: [1, 10_000],
   API_RATE_LIMIT: [1, 1_000_000],
   SMTP_PORT: [1, 65_535],
+  PASSWORD_HASH_WORKERS: [0, 64],
+  PASSWORD_HASH_MAX_PENDING: [0, 10_000],
 };
 
 export function settingProblems(env: Record<string, string | undefined>): string[] {

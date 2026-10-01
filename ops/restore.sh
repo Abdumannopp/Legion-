@@ -19,6 +19,7 @@
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# shellcheck source=ops/lib/common.sh
 source ops/lib/common.sh
 
 : "${DATABASE_URL:?DATABASE_URL must be set to the database to restore INTO}"

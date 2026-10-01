@@ -1,0 +1,94 @@
+▶ setup: fresh database, API (hosted mode, no SMTP), dashboard
+  PASS database provisioned
+  PASS API and dashboard are up
+▶ 1. sign up
+  PASS sign-up asks to confirm the email
+  PASS confirmation link issued
+  PASS email confirmed
+▶ 2. first screen: honest status and what to do first
+  PASS status says nothing is connected yet
+  PASS the reason is explained
+  PASS getting-started checklist is shown
+  PASS first step: connect a sensor
+  PASS no misleading security score
+  PASS no internal persona names on the first screen
+▶ 3. workspace creation
+  PASS new workspace created and opened
+  PASS the new workspace starts with its own empty status
+  PASS switched back to the first workspace
+▶ 4. connect an integration (Wazuh)
+  PASS connect page explains itself without Wazuh jargon
+  PASS setup opens straight away when nothing is connected
+  PASS other integrations are listed as coming soon
+  PASS key is shown once, with a warning
+  PASS config block carries the new key and this API's address
+  PASS waits for the first event
+  PASS Wazuh integration script delivers the event with that key
+  PASS the page notices the first event by itself
+  PASS test alert sent and labelled as a test
+▶ 5. first alert
+  PASS status now asks for attention (a high threat is open)
+  PASS and says why
+  PASS the Wazuh source shows as receiving
+  PASS the alert is listed
+  PASS alerts show where they came from
+  PASS the test alert is marked as a test
+  PASS connect and first-event steps are no longer asked for
+  PASS alert explains what to do
+▶ 6. incident review
+  PASS incident shows its source in plain words
+  PASS incident source is Wazuh
+  PASS status changes to investigating
+▶ 7. first AI agent
+  PASS agents page explains what Legion does for agents
+  PASS empty state says what to do
+  PASS the preset shows what it can do in words
+  PASS and what no agent can ever do
+  PASS secret shown once, with instructions
+  PASS agent ID and secret are shown
+  PASS agent page: can do
+  PASS agent page: can't do
+  PASS agent is working
+▶ 8. agent permission change
+  PASS saved, with when it applies
+  PASS new permission listed
+▶ 9. allow: a risky action waits for a person, who approves it
+  PASS admin requires approval for alert status changes
+  PASS the agent is told to wait for approval
+  PASS approval explains what the agent wants, in words
+  PASS approval explains it is once only
+  PASS approved
+  PASS the approved action goes through, once
+▶ 10. block: Legion stops an agent reaching another workspace, and says why
+  PASS the API refuses and contains the agent
+  PASS agent shows as paused
+  PASS and why it can't act
+  PASS activity names the decision in words
+  PASS activity explains why
+  PASS activity says what to do
+  PASS the approval request shows in the history
+  PASS and the approved action, as approved
+  PASS rule ids stay out of the main text (they are under technical details)
+  PASS dashboard reports what Legion blocked
+  PASS dashboard names the agent and the reason
+  PASS dashboard reason is in words
+▶ 11. resume, then emergency stop
+  PASS resumed
+  PASS working again
+  PASS stop dialog offers two plain choices
+  PASS stop needs a reason first
+  PASS stopped, and admins told
+  PASS after a confirmed compromise the old key no longer works
+▶ 12. billing / plan visibility
+  PASS plan: free trial with days left and end date
+  PASS what the plan includes
+▶ 13. an error, explained
+  PASS what happened
+  PASS why
+  PASS what to do
+▶ 14. the same screens in another language and time zone
+  PASS dashboard in Russian
+  PASS block explained in Russian
+  PASS no uncaught errors in the browser
+
+All journey checks passed

@@ -47,7 +47,7 @@ describe("BoundedCounter", () => {
 
 // --- A shared backend that misbehaves ------------------------------------------
 
-type Mode = "ok" | "throw" | "hang";
+type Mode = "ok" | "throw" | "hang" | "slow";
 function fakeRemote(mode: () => Mode): Store & { calls: number } {
   const counts = new Map<string, number>();
   const self = {
@@ -57,6 +57,7 @@ function fakeRemote(mode: () => Mode): Store & { calls: number } {
       self.calls++;
       if (mode() === "throw") throw new Error("ECONNREFUSED");
       if (mode() === "hang") return new Promise<never>(() => {});
+      if (mode() === "slow") await new Promise((r) => setTimeout(r, 150));
       const n = (counts.get(key) ?? 0) + 1; counts.set(key, n);
       return { totalHits: n, resetTime: new Date(Date.now() + 60_000) };
     },
@@ -135,6 +136,52 @@ describe("brute force is capped whatever Redis does", () => {
       await post(port, { user: "z", pass: "x" });
       expect(remote.calls).toBeGreaterThanOrEqual(2);
     } finally { close(); }
+  });
+
+  it("a reply that was only late puts the shared count back at once, not after the cooldown", async () => {
+    // Validation 2026-10-01 (RED-1): a busy process made healthy Redis replies
+    // miss the timeout, and every instance then counted on its own for the
+    // whole cooldown — tripling the per-account limit across three instances.
+    let mode: Mode = "slow";
+    const store = new ResilientStore("late", { redisTimeoutMs: 50, cooldownMs: 60_000 });
+    const { port, close } = await serve(store, 1000);
+    const remote = fakeRemote(() => mode);
+    store.attachRemote(remote);
+    try {
+      await post(port, { user: "late", pass: "x" });     // times out at 50 ms; the reply lands at 150 ms
+      mode = "ok";
+      await new Promise((r) => setTimeout(r, 200));
+      await post(port, { user: "late", pass: "x" });
+      expect(remote.calls).toBe(2);                      // consulted again despite a 60 s cooldown
+    } finally { close(); }
+  });
+
+  it("a Redis that never answers still gets the cooldown (no stall per request)", async () => {
+    const store = new ResilientStore("late-hang", { redisTimeoutMs: 50, cooldownMs: 60_000 });
+    const { port, close } = await serve(store, 1000);
+    const remote = fakeRemote(() => "hang");
+    store.attachRemote(remote);
+    try {
+      for (let i = 0; i < 5; i++) await post(port, { user: "h", pass: "x" });
+      expect(remote.calls).toBe(1);
+    } finally { close(); }
+  });
+
+  it("'busy, retry shortly' (503) does not count as a failed sign-in", async () => {
+    const store = new ResilientStore("busy", { redisTimeoutMs: 50 });
+    const app = express();
+    app.use(express.json());
+    app.post("/login", makeLimiter({ windowMs: 60_000, limit: 2, prefix: "busy", store, failuresOnly: true, key: (req) => `acct:${req.body?.user}` }),
+      (req, res) => res.status(req.body?.pass === "busy" ? 503 : 401).json({}));
+    const server = http.createServer(app);
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      for (let i = 0; i < 5; i++) expect(await post(port, { user: "b", pass: "busy" })).toBe(503);
+      expect(await post(port, { user: "b", pass: "wrong" })).toBe(401);
+      expect(await post(port, { user: "b", pass: "wrong" })).toBe(401);
+      expect(await post(port, { user: "b", pass: "wrong" })).toBe(429);
+    } finally { server.close(); }
   });
 
   it("a successful login does not count against the account", async () => {
