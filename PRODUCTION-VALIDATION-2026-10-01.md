@@ -13,11 +13,13 @@ fixed and verified here:
   `auth-load-probe.mjs` 4/4 (it was 0/4).
 - **RED-2:** high-severity advisories in nodemailer. Fixed; `npm audit` clean.
 - **RED-3:** GitHub CI was red at `351c591` (the release gate failed on three
-  jobs). Fixed in the workflow and scripts.
+  jobs, and a fourth failure was hidden behind them). Fixed. **GitHub Actions
+  run #20 on `aafdead` is green, including the release gate:**
+  https://github.com/Abdumannopp/Legion-/actions/runs/36802186042
 
-**Not yet "production ready":** that needs GitHub Actions green on the fix
-commit (RED-3), and the staging checks in the YELLOW list (real SMTP, Paddle
-sandbox, TLS to Wazuh, soak test).
+**Technically ready to release from CI's point of view.** "Production ready"
+still needs the staging checks in the YELLOW list: real SMTP, Paddle
+sandbox, TLS between Wazuh and Legion, a soak test, and an external pentest.
 
 Everything else that could be tested here is verified. That includes a real
 Wazuh manager, a black-box attack run on the production build, and load across
@@ -165,7 +167,7 @@ Legion runs Node 22) and ip-address 10.5.0 → 10.7.2 via `npm audit fix`.
 
 **Next action:** none beyond RED-3.
 
-### RED-3 (RESOLVED in code, CI confirmation pending): GitHub CI was red
+### RED-3 (RESOLVED): GitHub CI was red
 
 The earlier report said CI was "not yet run". That was wrong: GitHub
 Actions runs 14–17 on this branch had all failed. At `351c591` the release
@@ -189,8 +191,11 @@ moved into the `app` job, which builds the server and has the matching
 database (`e2e-wazuh-after-fix.log`: 34/34). The backup job installs `age`, and
 the test now names any missing tool instead of exiting silently.
 
-**Next action:** GitHub Actions green on the fix commit; until then the
-release is not cleared.
+**Verified on GitHub:** run #20 (`aafdead`) — every job green: dependencies;
+deploy scripts (shellcheck, backup/restore with age, integration script);
+agent identity; security tests and attack assessment; app (server suite with
+failure injection, build, Wazuh e2e, browser journeys, production probe,
+sign-in under load); release gate.
 
 ---
 
