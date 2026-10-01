@@ -34,10 +34,11 @@ jobs:
       - name: shellcheck
         # -x follows `source ops/lib/common.sh`, so the shared library is checked too.
         run: shellcheck -x ops/*.sh ops/tests/*.sh
-      - name: PostgreSQL client tools are available
+      # Backups are always encrypted with age, so the test needs it too.
+      - name: Tools for the backup test (PostgreSQL client, age)
         run: |
-          if ! command -v pg_dump >/dev/null || ! command -v pg_restore >/dev/null || ! command -v psql >/dev/null; then
-            sudo apt-get update && sudo apt-get install -y postgresql-client
+          if ! command -v pg_dump >/dev/null || ! command -v pg_restore >/dev/null || ! command -v psql >/dev/null || ! command -v age >/dev/null; then
+            sudo apt-get update && sudo apt-get install -y postgresql-client age
           fi
       - name: Backup, verify and restore against real Postgres
         run: bash ops/tests/test-backup-restore.sh

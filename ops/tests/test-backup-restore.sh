@@ -17,6 +17,10 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 : "${DATABASE_URL:?set DATABASE_URL to a throwaway database for this test (its role needs CREATEDB)}"
 
+for tool in age age-keygen pg_dump pg_restore psql; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "$tool is not installed (apt install age postgresql-client)" >&2; exit 1; }
+done
+
 WORK="$(mktemp -d)"
 export BACKUP_DIR="$WORK/backups"
 export BACKUP_STATUS_FILE="$WORK/status.json"

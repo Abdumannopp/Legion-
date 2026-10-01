@@ -179,10 +179,15 @@ gate failed on three jobs:
 - `agent-identity`: the Wazuh e2e step ran from `packages/agent-identity`
   (script not found) with that job's database, and failed in 0 s.
 
+Once shellcheck passed, a fourth failure surfaced that it had been hiding.
+The backup/restore test exited 127 because the job never installed `age`
+(backups are always encrypted), so that test had not actually run in CI.
+
 **Fix:** the scripts are corrected and CI now runs `shellcheck -x`, which also
 checks the shared library (`shellcheck-after-fix.txt`: clean). The e2e step
 moved into the `app` job, which builds the server and has the matching
-database (`e2e-wazuh-after-fix.log`: 34/34).
+database (`e2e-wazuh-after-fix.log`: 34/34). The backup job installs `age`, and
+the test now names any missing tool instead of exiting silently.
 
 **Next action:** GitHub Actions green on the fix commit; until then the
 release is not cleared.
