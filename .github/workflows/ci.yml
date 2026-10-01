@@ -154,6 +154,14 @@ jobs:
         env:
           E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
         run: node ops/tests/e2e-journeys.mjs
+      # Black-box attack on the built API in production mode: headers, CORS,
+      # CSRF, cookies, forged/replayed webhooks, IDOR between two real orgs,
+      # RBAC, MFA, sessions, WebSocket origin, rate limits, secret leakage.
+      # See ops/tests/production-probe.mjs.
+      - name: Production-mode security probe (black box)
+        env:
+          E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+        run: node ops/tests/production-probe.mjs
 
   # ---------------------------------------------------------------------------
   # Security gate. Separate from the normal test jobs above so its result is

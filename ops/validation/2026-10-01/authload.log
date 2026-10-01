@@ -1,0 +1,21 @@
+
+▶ event loop under concurrent sign-in attempts (one instance)
+  INFO /health latency idle (ms): {"p50":3,"max":5}
+  INFO /health latency during 30 concurrent failed sign-ins (ms): {"p50":1531,"max":9765}
+  INFO sign-in attempts processed: 171
+  FAIL an unrelated request is not stalled by concurrent sign-ins (p50 < 250 ms) — {"p50":1531,"max":9765}
+
+▶ per-account failed sign-in limit across 3 instances (Redis)
+  INFO failed attempts accepted at concurrency 1: 23
+  FAIL limit of 20 holds at concurrency 1 — 23
+  INFO failed attempts accepted at concurrency 12: 48
+  FAIL limit of 20 holds at concurrency 12 — 48
+  INFO failed attempts accepted at concurrency 30: 48
+  FAIL limit of 20 holds at concurrency 30 — 48
+  INFO 'Redis unavailable, counting locally' per instance (Redis was healthy throughout): [79,7,10]
+
+auth under load: 0 passed, 4 failed
+  FAILED [event loop under concurrent sign-in attempts (one instance)] an unrelated request is not stalled by concurrent sign-ins (p50 < 250 ms): {"p50":1531,"max":9765}
+  FAILED [per-account failed sign-in limit across 3 instances (Redis)] limit of 20 holds at concurrency 1: 23
+  FAILED [per-account failed sign-in limit across 3 instances (Redis)] limit of 20 holds at concurrency 12: 48
+  FAILED [per-account failed sign-in limit across 3 instances (Redis)] limit of 20 holds at concurrency 30: 48

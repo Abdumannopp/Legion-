@@ -1,0 +1,131 @@
+
+▶ boot
+  PASS the built API boots in production mode with a safe configuration
+  PASS …and refuses to boot with an unsafe one (COOKIE_SECURE=false)
+  PASS demo data is never seeded in production, even when asked
+
+▶ security headers, CORS, health disclosure
+  PASS public /health says only up/down
+  PASS no X-Powered-By
+  PASS X-Content-Type-Options: nosniff
+  PASS framing refused (X-Frame-Options DENY or frame-ancestors 'none')
+  PASS API responses carry a restrictive CSP
+  PASS Referrer-Policy set
+  PASS HSTS sent (FRONTEND_URL is https)
+  PASS platform queue metrics need the metrics token
+  PASS …and work with it
+  PASS CORS: a foreign origin gets no Access-Control-Allow-Origin
+  PASS CORS: the dashboard origin is allowed exactly, with credentials, never *
+  PASS CSRF: a cross-site state-changing request is refused
+  PASS dashboard: CSP with a fresh nonce per response
+  PASS dashboard: scripts need the nonce ('unsafe-inline' only as a CSP2 fallback), never 'unsafe-eval'
+  PASS dashboard: object-src 'none', base-uri and frame-ancestors restricted
+  PASS dashboard: X-Frame-Options DENY, nosniff, no X-Powered-By
+  INFO dashboard CSP: default-src 'self'; script-src 'self' 'nonce-wH1BxfgKkzXwfHf0jlcT6A==' 'strict-dynamic' https://cdn.paddle.com https://*.paddle.com; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.paddle.com; font-src 'self' data:; connect-src 'self' http://localhost:8000 ws://localhost:8000 https://cdn.paddle.com https://*.paddle.com; frame-src https://cdn.paddle.com https://*.paddle.com; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'
+  PASS malformed JSON → 400 without a stack trace
+
+▶ sign-up, email confirmation (real SMTP), authentication
+  PASS org A: sign-up accepted
+  PASS org A: confirmation email delivered over SMTP
+  PASS org A: cannot sign in before confirming
+  PASS org A: link confirms
+  PASS org A: the link works once
+  PASS org B: sign-up accepted
+  PASS org B: confirmation email delivered over SMTP
+  PASS org B: cannot sign in before confirming
+  PASS org B: link confirms
+  PASS org B: the link works once
+  PASS session cookie: HttpOnly, Secure, SameSite
+  PASS refresh cookie: HttpOnly, Secure, SameSite=Strict, narrow path
+  PASS access token lifetime ≤ 15 minutes
+  PASS access token is bound to issuer/audience
+  PASS wrong password and unknown account are indistinguishable
+  PASS forged token (payload-tampered) refused
+  PASS forged token (alg=none) refused
+  PASS forged token (signed with another key) refused
+
+▶ MFA
+  PASS MFA setup returns a secret once, not cacheable
+  PASS MFA enabled with a valid code; recovery codes issued
+  PASS enabling MFA ends the old session
+  PASS password alone yields a challenge, not a session
+  PASS the challenge token is not a session
+  PASS a wrong code is refused
+  PASS the code used to enrol cannot be reused to sign in
+  PASS the right code completes sign-in
+  PASS a code that already worked cannot be replayed
+  PASS guessing codes is cut off per account, whatever the address
+
+▶ RBAC
+  PASS admin invites a viewer (link is not in the response in production)
+  PASS viewer signed in via the emailed invitation
+  PASS viewer cannot create a sensor key
+  PASS viewer cannot invite people
+  PASS viewer cannot read the audit log
+  PASS viewer cannot create an AI agent
+  PASS viewer cannot change workspace settings
+  PASS viewer cannot promote itself to admin
+
+▶ webhook forgery and replay
+  PASS a correctly signed event is accepted
+  PASS forged webhook refused: no signature headers
+  PASS forged webhook refused: wrong secret
+  PASS forged webhook refused: unknown key id
+  PASS forged webhook refused: timestamp 10 minutes old
+  PASS forged webhook refused: timestamp 10 minutes ahead
+  PASS forged webhook refused: another org's secret with this org's key id
+  PASS forged webhook refused: body changed after signing
+  PASS a byte-for-byte replay is refused
+  PASS an oversized body is refused before parsing
+  PASS a tenant id inside the payload cannot steer the event into another org
+  PASS repeated failed webhook authentication from one address is throttled
+  PASS …while the real sensor (another address) keeps working
+
+▶ tenant isolation / IDOR (org A attacking org B)
+  PASS org A's alert list has none of org B's alerts
+  PASS A cannot read B's alert
+  PASS A cannot change B's alert status
+  PASS A cannot explain B's alert
+  PASS A cannot revoke B's sensor key
+  PASS A cannot rotate B's sensor key
+  PASS A cannot read B's agent
+  PASS A cannot change B's agent permissions
+  PASS A cannot pause B's agent
+  PASS A cannot kill B's agent
+  PASS A cannot read B's agent activity
+  PASS A cannot change B's owner's role
+  PASS A cannot delete B's owner
+  PASS A cannot switch into B's workspace
+  PASS A sees none of B's agent decisions
+  PASS B's alert is untouched after the attempts
+  PASS B's agent is untouched after the attempts
+
+▶ WebSocket
+  PASS cross-site WebSocket hijack refused (foreign Origin)
+  PASS WebSocket without Origin refused
+  PASS WebSocket without a session refused
+  PASS WebSocket with the dashboard Origin and a session opens
+  PASS B's socket receives B's live alert
+  PASS …and never A's
+
+▶ sessions
+  PASS refresh rotates the refresh token
+  PASS after logout, the old refresh token is dead
+  PASS password change succeeds
+  PASS …and every older access token stops working
+
+▶ rate limiting
+  PASS sign-in attempts per address are limited (429 + Retry-After)
+  PASS failed sign-ins per ACCOUNT are limited across many addresses
+  PASS X-Forwarded-For from an untrusted peer does not evade the address limit
+
+▶ secret leakage
+  PASS no secret, password or key appears in the server log
+  PASS no secret appears in any non-issuing response
+  PASS sensor secrets are not stored in plaintext
+  PASS TOTP seed and password are not stored in plaintext
+  PASS agent secrets are not stored in plaintext
+  PASS no email carries a password or secret
+  PASS no 5xx was logged as an unhandled error during the probe
+
+production probe: 106 passed, 0 failed
