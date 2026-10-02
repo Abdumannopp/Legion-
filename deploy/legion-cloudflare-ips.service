@@ -1,0 +1,19 @@
+# Refreshes the Cloudflare address ranges nginx trusts for the real visitor
+# address (ops/update-cloudflare-ips.sh). Only needed when the site is behind
+# Cloudflare; see DEPLOY-ONLINE.md §9. Runs as root because it writes
+# /etc/nginx and reloads nginx; a failed download or an invalid list changes
+# nothing, and a config nginx rejects is rolled back.
+[Unit]
+Description=Update the Cloudflare ranges trusted by Legion's nginx
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/legion
+ExecStart=/opt/legion/ops/update-cloudflare-ips.sh --reload
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/etc/nginx

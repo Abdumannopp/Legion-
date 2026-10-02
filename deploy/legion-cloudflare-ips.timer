@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly refresh of the Cloudflare ranges trusted by Legion's nginx
+
+[Timer]
+OnCalendar=weekly
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

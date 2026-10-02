@@ -47,6 +47,31 @@ mirrored to Redis when available. A dead, slow or frozen Redis costs at most
 Trade-off: someone who knows an address can burn that account's failure budget
 and make its owner wait out the window.
 
+Behaviour under a flood from more addresses than `RATE_LIMIT_MAX_KEYS`
+(measured, `ops/tests/ddos-resilience.mjs`): the counter table keeps entries in
+expiry order, so a full table costs O(1) per request (it used to be swept in full
+on every call: ~600 µs, which pinned a CPU), and keys that do not fit are spread
+over 256 overflow counters chosen by a per-process salted hash, so a flood only
+throttles the share of fresh addresses that hash into buckets it saturated, not
+every new address.
+
+## Connections that never speak
+
+`HTTP_FIRST_REQUEST_TIMEOUT_SECONDS` (default 15, `0` disables) closes a TCP
+connection that has not completed a request within that time. Node's own
+header/request timeouts only start once the first byte arrives, so thousands of
+silent sockets used to be held indefinitely. Keep-alive connections that have
+already served a request and WebSocket upgrades are not affected.
+
+## Behind a CDN (Cloudflare)
+
+Per-address limits only work if the real visitor address reaches Legion.
+`ops/update-cloudflare-ips.sh` writes an nginx snippet that believes
+`CF-Connecting-IP` only from Cloudflare's published ranges (validated before use;
+a poisoned or truncated list is refused); nginx then sets `X-Forwarded-For` from
+that address and Legion needs no configuration change (it trusts only the local
+nginx). Setup, origin lockdown and dashboard rules: `DEPLOY-ONLINE.md` §12.
+
 ## Cookies
 
 `legion_token`, `legion_refresh`: HttpOnly; `Secure` when `COOKIE_SECURE=true`

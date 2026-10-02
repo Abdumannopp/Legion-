@@ -3,7 +3,7 @@ import cookieParser from "cookie-parser";
 import { apiLimiter, authLimiter, closeRateLimitStore, initRateLimitStore, redisConnected, loginAccountLimiter, mailPerAddressLimiter, makeMfaLimiter, makeStepUpLimiter } from "./ratelimit.js";
 import { hashForComparison, notifyAccountOwner, networkOf, recentLoginFailures, rememberLoginDevice } from "./account-security.js";
 import { backupHealthReport } from "./backup-health.js";
-import { applyTrustedProxies, checkWebSocketOrigin, clientAddress, corsMiddleware, originGuard, securityHeaders, upgradeRateLimited } from "./edge.js";
+import { applyTrustedProxies, checkWebSocketOrigin, limitSilentConnections, clientAddress, corsMiddleware, originGuard, securityHeaders, upgradeRateLimited } from "./edge.js";
 import { signToken, verifyLegacyCheckoutToken, verifyTokenOf } from "./auth-jwt.js";
 import { comparePassword, hashPassword, HashingBusyError } from "./passwords.js";
 import { createHash, createHmac, randomBytes, timingSafeEqual, randomUUID } from "node:crypto";
@@ -2297,6 +2297,8 @@ if (process.env.NODE_ENV !== "test") {
   // Slow-loris bounds. Generous for a 256 KB body limit; response streaming is unaffected.
   httpServer.headersTimeout = 30_000;
   httpServer.requestTimeout = 60_000;
+  // A connection that opens and sends nothing has no Node timeout of its own.
+  limitSilentConnections(httpServer, config.httpFirstRequestTimeoutSeconds * 1000);
   httpServer.listen(config.port, config.bindAddress, () =>
     console.info(`Legion Node API: http://localhost:${config.port} (listening on ${config.bindAddress})`)
   );

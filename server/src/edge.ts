@@ -13,7 +13,8 @@
  *     and therefore the classic cross-site-hijack target.
  */
 import type { Application, NextFunction, Request, RequestHandler, Response } from "express";
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, Server } from "node:http";
+import type { Socket } from "node:net";
 import cors from "cors";
 import helmet from "helmet";
 import { config } from "./config.js";
@@ -203,4 +204,37 @@ export function upgradeRateLimited(address: string): boolean {
 /** Tests only. */
 export function resetUpgradeLimiter(): void {
   upgradeAttempts.clear();
+}
+
+/**
+ * Cuts connections that never send a request.
+ *
+ * Node closes a connection that trickles its headers (headersTimeout) and an
+ * idle keep-alive one (keepAliveTimeout), but a connection that opens and then
+ * says nothing at all has no deadline: it is held for ever. A few thousand of
+ * them use up the process's file descriptors, and then nobody — not a user, not
+ * the database pool — can open anything (measured with
+ * ops/tests/ddos-resilience.mjs: 3,000 silent sockets were still open after
+ * 100 s). nginx closes these after `client_header_timeout`; this is the same
+ * rule for whatever reaches the API directly.
+ *
+ * The deadline covers the time up to the FIRST request or WebSocket upgrade on
+ * a connection. After that, the connection's life is governed by the request
+ * timeouts and keep-alive as before; long-lived sockets are not affected.
+ */
+export function limitSilentConnections(server: Server, firstRequestMs: number): void {
+  if (firstRequestMs <= 0) return;
+  const timers = new WeakMap<Socket, NodeJS.Timeout>();
+  const stop = (socket: Socket) => {
+    const timer = timers.get(socket);
+    if (timer) { clearTimeout(timer); timers.delete(socket); }
+  };
+  server.on("connection", (socket: Socket) => {
+    const timer = setTimeout(() => socket.destroy(), firstRequestMs);
+    timer.unref();
+    timers.set(socket, timer);
+    socket.once("close", () => stop(socket));
+  });
+  server.on("request", (req: IncomingMessage) => stop(req.socket));
+  server.on("upgrade", (req: IncomingMessage) => stop(req.socket));
 }

@@ -239,6 +239,152 @@ Baza sxemasi o'zi yangilanadi, ma'lumot va sirlar saqlanadi.
 
 ---
 
+## 12. DDoS hujumdan himoya (Cloudflare, tavsiya etiladi)
+
+Serverning o'zi hamma narsani to'xtata olmaydi: hujumchi kanalingizni (Gbit/s)
+to'ldirib qo'ysa, so'rov Legion'ga yetmasdan ham sayt ochilmay qoladi. Buni
+faqat serverdan **oldinda** turuvchi xizmat (CDN) hal qiladi. Eng oddiy yo'l —
+Cloudflare'ning bepul tarifi. Legion va nginx tomoni esa ana shu xizmatning
+ortida to'g'ri ishlashga tayyorlangan (tayyor skriptlar `ops/` va `deploy/`
+papkalarida).
+
+**Nima uchun bu qadam kerak.** Cloudflare ortida nginx har bir tashrif
+buyuruvchini Cloudflare'ning manzili sifatida ko'radi. Natijada "bir manzildan
+ko'p urinish" cheklovlari hamma uchun **bitta** hisoblagich bo'lib qoladi:
+bitta hujumchi hammani kirishdan to'sib qo'yadi. Haqiqiy manzil
+`CF-Connecting-IP` sarlavhasida keladi, lekin sarlavhaga faqat Cloudflare'dan
+kelganda ishonish mumkin. Quyidagi qadamlar aynan shuni sozlaydi.
+
+### 12.1. Domenni Cloudflare'ga o'tkazing
+
+1. cloudflare.com'da bepul hisob oching, domeningizni qo'shing va domen
+   sotib olgan joyingizda nameserver'larni Cloudflare bergan qiymatlarga
+   almashtiring.
+2. DNS bo'limida `legion` yozuvi **proxied** (to'q sariq bulut) bo'lsin.
+3. **SSL/TLS → Overview** da rejim: **Full (strict)**. (Buning uchun serverda
+   haqiqiy sertifikat bo'lishi kerak — 7-qadamdagi `certbot` buni beradi.
+   Sertifikatni **12.4 dan oldin** oling.)
+
+### 12.2. nginx haqiqiy manzilni Cloudflare'dan olsin
+
+```bash
+cd /opt/legion
+sudo ops/update-cloudflare-ips.sh --reload
+```
+
+Skript Cloudflare'ning rasmiy manzillar ro'yxatini yuklaydi, tekshiradi
+(noto'g'ri yoki juda keng diapazonni rad etadi — nginx'ni butun internetga
+ishontirib qo'ymaslik uchun), `/etc/nginx/legion-cloudflare.conf` ni yozadi,
+`nginx -t` bilan sinaydi va qayta yuklaydi. Biror narsa noto'g'ri bo'lsa,
+eski fayl joyida qoladi.
+
+Keyin `/etc/nginx/sites-available/legion` ichida quyidagi qatordan `#` ni
+olib tashlang va nginx'ni qayta yuklang:
+
+```
+    include /etc/nginx/legion-cloudflare.conf;
+```
+
+```bash
+nginx -t && systemctl reload nginx
+```
+
+Cloudflare manzillari o'zgarib turadi, shuning uchun ro'yxatni haftada bir
+yangilab turadigan taymerni yoqing:
+
+```bash
+cp /opt/legion/deploy/legion-cloudflare-ips.service /etc/systemd/system/
+cp /opt/legion/deploy/legion-cloudflare-ips.timer   /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now legion-cloudflare-ips.timer
+```
+
+> Legion'ga (`server/.env`) hech narsa qo'shish shart emas: u faqat shu
+> serverdagi nginx'ga ishonadi va mijoz manzilini nginx qo'ygan sarlavhadan
+> oladi. `TRUSTED_PROXIES` ni o'zgartirmang.
+
+### 12.3. Tekshirib ko'ring
+
+Brauzerda saytni oching va kiring. Keyin serverdan:
+
+```bash
+curl -s https://legion.sizningdomen.uz/api/health
+journalctl -u legion -n 20      # xatolar yo'qligini ko'ring
+```
+
+### 12.4. Serverni to'g'ridan-to'g'ri hujumdan yoping (origin lockdown)
+
+Hujumchi Cloudflare'ni chetlab, server IP manziliga to'g'ridan-to'g'ri
+yuborishi mumkin. Buni oldini olish uchun 80/443 portlarni faqat
+Cloudflare'ga oching:
+
+```bash
+sudo ops/update-cloudflare-ips.sh --ufw            # avval faqat ko'rsatadi (hech narsa o'zgarmaydi)
+sudo ops/update-cloudflare-ips.sh --ufw --apply    # qoidalarni qo'shadi
+ufw status numbered
+ufw delete allow 'Nginx Full'                      # hammaga ochiq qoidani olib tashlang
+```
+
+SSH qoidasiga tegilmaydi. Tekshiruv: `curl -m 5 http://SERVER_IP/` **javob
+bermasligi** kerak, `https://legion.sizningdomen.uz` esa ishlashi kerak.
+
+Diqqat: shundan keyin Wazuh menejeri Legion'ga **IP orqali emas, domen orqali**
+(`https://legion.sizningdomen.uz/api/security-events/webhook`) yuborishi
+kerak, aks holda to'siqqa uchraydi. Yangi Cloudflare diapazoni paydo bo'lsa,
+taymer nginx ro'yxatini yangilaydi, lekin `ufw` qoidalarini **qo'lda**
+qayta ishga tushirishingiz kerak (`--ufw --apply` — ortiqcha qoidalar
+qo'shilmaydi, faqat yetishmaganlari).
+
+### 12.5. Cloudflare panelidagi qoidalar
+
+(Menyu nomlari vaqt o'tishi bilan o'zgarishi mumkin; bepul tarifda qoidalar
+soni cheklangan.)
+
+- **Security → WAF → Rate limiting rules**: `/api/auth/` yo'li uchun
+  bir manzildan daqiqasiga ~30 so'rov, oshsa — blok. (Legion va nginx o'z
+  cheklovlariga ega; Cloudflare'dagisi so'rovni serverga umuman yetkazmaydi.)
+- **Security → Settings**: *Bot Fight Mode* ni yoqish mumkin. Hujum paytida
+  vaqtincha **"I'm Under Attack"** rejimini yoqing.
+- **Wazuh webhook'i.** Cloudflare brauzer bo'lmagan mijozlarni (Wazuh
+  skripti) bot deb tekshiruvga yo'naltirishi mumkin. Agar sensor
+  hodisalari kelmay qolsa, `/api/security-events/webhook` yo'li uchun
+  *Custom rule → Skip (Bot Fight / Rate limiting)* qoidasini qo'shing.
+  Bu qoida Legion'da **sinab ko'rilmagan** — Cloudflare hisobi kerak va
+  panelning joriy ko'rinishiga bog'liq. Webhook baribir o'z imzosi bilan
+  himoyalangan: noto'g'ri imzoli so'rovlar rad etiladi va cheklanadi.
+- WebSocket (jonli ogohlantirishlar) Cloudflare'ning barcha tariflarida ishlaydi.
+
+### 12.6. Quvvat oshirish (agar hujum katta bo'lsa)
+
+Legion bir nechta nusxada ishlashi mumkin: umumiy PostgreSQL va Redis
+(`server/.env` da `REDIS_URL`; tafsilot — [GLOBAL-SAAS-ARCHITECTURE.md](GLOBAL-SAAS-ARCHITECTURE.md))
+va nginx'dagi `upstream legion_api` ga yana bir `server` qatori.
+Sozlanadigan qiymatlar (`server/.env`):
+
+| O'zgaruvchi | Ma'nosi |
+|---|---|
+| `PASSWORD_HASH_WORKERS` | parol tekshiruvchi oqimlar soni (standart: avtomatik; o'lchovda 1–3 oqim o'rtasida sezilarli farq chiqmadi) |
+| `HTTP_FIRST_REQUEST_TIMEOUT_SECONDS` | birinchi so'rovni yubormagan ulanishni yopish (standart 15 s, `0` — o'chirish) |
+
+### 12.7. Halol cheklovlar
+
+- **Katta (hajmiy) hujum** — kanalni to'ldiruvchi L3/L4 hujum — faqat
+  Cloudflare kabi tarmoq oldidan to'xtatiladi. Ularsiz, hosting provayderning
+  o'z himoyasiga tayanasiz.
+- Minglab har xil manzildan kelgan **sekin, "odamga o'xshash"** so'rovlar
+  (L7 botnet) manzil bo'yicha cheklovlarni chetlab o'tadi. Legion buni
+  yumshatadi (hisoblagich xotirasi cheklangan, tizim ishdan chiqmaydi,
+  sensor hodisalari yo'qolmaydi, o'qish ishlaydi), lekin parol bilan
+  kirish — eng qimmat amal — hujum davomida band bo'lib `503` qaytarishi
+  mumkin. Cloudflare qoidalari va Bot Fight Mode aynan shu holat uchun.
+- O'lchovlar bir mashinada olingan (`ops/tests/ddos-resilience.mjs`);
+  ular tizimning **xatti-harakatini** ko'rsatadi, sizning serveringiz
+  quvvatini emas. Natijalar: [PRODUCTION-VALIDATION-2026-10-01.md](PRODUCTION-VALIDATION-2026-10-01.md).
+- Kelajak uchun: kirish/ro'yxatdan o'tish formalariga Cloudflare Turnstile
+  (CAPTCHA) qo'shish — hozircha qo'shilmagan.
+
+---
+
 ## Nimadir ishlamasa
 
 | Belgi | Sabab va yechim |

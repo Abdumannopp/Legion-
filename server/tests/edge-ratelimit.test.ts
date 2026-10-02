@@ -27,12 +27,59 @@ describe("BoundedCounter", () => {
     expect(c.increment("victim").totalHits).toBe(6);
   });
 
-  it("throttles fresh keys collectively once full (fails safe, not open)", () => {
+  it("still counts every fresh key once full — nothing is let through uncounted (fails safe, not open)", () => {
     const c = new BoundedCounter(60_000, 10);
     for (let i = 0; i < 9; i++) c.increment(`k${i}`);
-    const hits = Array.from({ length: 5 }, (_, i) => c.increment(`new-${i}`).totalHits);
-    expect(hits).toEqual([1, 2, 3, 4, 5]);
+    const hits = Array.from({ length: 50 }, (_, i) => c.increment(`new-${i}`).totalHits);
+    expect(hits.every((h) => h >= 1)).toBe(true);
+    // 8 keys fit; the 9th and the 50 fresh ones are all accounted for in the overflow.
+    expect(c.overflowTotal).toBe(51);
     expect(OVERFLOW_KEY).toBeTruthy();
+  });
+
+  it("a flood of fresh keys does not throttle every other fresh key (the blast radius is a share, not everyone)", () => {
+    // Before: all fresh keys shared one counter, so a flood from more than
+    // maxKeys addresses put EVERY new legitimate address at the shared limit.
+    const c = new BoundedCounter(60_000, 10_000);
+    for (let i = 0; i < 9_744; i++) c.increment(`tracked-${i}`);          // table full
+    for (let i = 0; i < 5_000; i++) c.increment(`botnet-${i}`);            // 5,000 distinct fresh keys
+    const legit = c.increment("a-real-user-on-a-new-address").totalHits;
+    expect(c.overflowTotal).toBe(5_001);                                    // all counted…
+    expect(legit).toBeLessThan(100);                                        // …but the user shares with ~1/256 of them, not all 5,000
+  });
+
+  it("a saturated table costs O(1) per call, not a sweep of every entry (the flood must not pin a CPU)", () => {
+    // Measured before the fix: ~600 µs per call once full (1 µs when not).
+    const c = new BoundedCounter(60_000, 50_000);
+    for (let i = 0; i < 50_000; i++) c.increment(`fill-${i}`);
+    const t0 = performance.now();
+    for (let i = 0; i < 20_000; i++) c.increment(`flood-${i}`);
+    const ms = performance.now() - t0;
+    expect(ms).toBeLessThan(1_000);                                          // was ~12,000 ms
+  });
+
+  it("keeps entries in expiry order, so a sweep can stop at the first live one", () => {
+    let now = 0;
+    const c = new BoundedCounter(1_000, 100, () => now);
+    c.increment("a"); c.increment("b");                                      // expire at 1000
+    now = 500; c.increment("c");                                             // expires at 1500
+    now = 1_100; c.increment("a");                                           // a, b expired and are dropped; c is live, so the sweep stops there; a is created again at the back
+    expect(c.size).toBe(2);                                                  // c, a
+    expect(c.peek("c")).toBe(1);
+    expect(c.peek("a")).toBe(1);
+    now = 2_200; c.increment("b");                                           // c (1500) and a (2100) have expired by now, in that order
+    expect(c.size).toBe(1);                                                  // b
+    expect(c.peek("c")).toBe(0);
+    expect(c.peek("a")).toBe(0);
+  });
+
+  it("decrement finds a fresh key's overflow counter again", () => {
+    const c = new BoundedCounter(60_000, 8);
+    for (let i = 0; i < 6; i++) c.increment(`k${i}`);
+    c.increment("late"); c.increment("late");
+    const before = c.overflowTotal;
+    c.decrement("late");
+    expect(c.overflowTotal).toBe(before - 1);
   });
 
   it("frees expired entries so the table recovers", () => {

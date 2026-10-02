@@ -306,6 +306,12 @@ export const config = {
   /** Accept a WebSocket upgrade that carries no Origin header. Browsers always send one,
    *  so only non-browser tooling needs this. Off by default. */
   wsAllowMissingOrigin: process.env.WS_ALLOW_MISSING_ORIGIN === "true",
+  /**
+   * A connection that sends no request within this many seconds is closed
+   * (edge.ts limitSilentConnections). Matches nginx's client_header_timeout.
+   * 0 turns it off.
+   */
+  httpFirstRequestTimeoutSeconds: Math.max(0, Math.floor(Number(process.env.HTTP_FIRST_REQUEST_TIMEOUT_SECONDS ?? 15)) || 0),
   /** HSTS lifetime in seconds (HTTPS production only). */
   hstsMaxAgeSeconds: Math.max(0, Math.floor(Number(process.env.HSTS_MAX_AGE_SECONDS ?? 31_536_000)) || 0),
   /** Add the "preload" directive. A commitment that is hard to undo: leave off until you mean it. */
@@ -534,6 +540,7 @@ const INTEGER_SETTINGS: Record<string, [min: number, max: number]> = {
   AUTH_RATE_LIMIT: [1, 10_000],
   API_RATE_LIMIT: [1, 1_000_000],
   SMTP_PORT: [1, 65_535],
+  HTTP_FIRST_REQUEST_TIMEOUT_SECONDS: [0, 300],
   PASSWORD_HASH_WORKERS: [0, 64],
   PASSWORD_HASH_MAX_PENDING: [0, 10_000],
 };

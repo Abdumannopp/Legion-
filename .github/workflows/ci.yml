@@ -173,6 +173,18 @@ jobs:
         env:
           E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
         run: node ops/tests/auth-load-probe.mjs
+      # Denial of service, measured: a distributed flood must not cost legitimate
+      # users their reads or sensor events, silent/slow connections are reaped,
+      # and the real nginx config (limits, real client address behind a CDN,
+      # forged CF-Connecting-IP ignored) behaves as documented.
+      # See ops/tests/ddos-resilience.mjs and DEPLOY-ONLINE.md §12.
+      - name: nginx for the edge tests
+        run: sudo apt-get install -y nginx
+      - name: Denial-of-service resilience (API under flood, real nginx in front)
+        env:
+          E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+          DOS_SCALE: "0.5"
+        run: node ops/tests/ddos-resilience.mjs
 
   # ---------------------------------------------------------------------------
   # Security gate. Separate from the normal test jobs above so its result is

@@ -229,6 +229,65 @@ sign-in under load); release gate.
 Environment: Node 22.22, PostgreSQL 16.13, Redis 7.0.15, Chromium (Playwright
 1.56), Docker 29.3 with `wazuh/wazuh-manager:4.9.2`.
 
+## 4a. Addendum 2026-10-02 — denial-of-service resilience
+
+Question asked: can the platform withstand a DDoS? Measured with
+`ops/tests/ddos-resilience.mjs` (attackers in separate processes; a legitimate
+dashboard user, a signing Wazuh sensor and a person signing in are measured the
+whole time). One machine, so the numbers describe **behaviour**, not capacity.
+
+**Found and fixed (each with a regression test):**
+
+| Finding | Evidence | Fix |
+|---|---|---|
+| Once the rate-limit table was full, every call swept all 50 000 entries: ~600 µs per call per limiter, so a flood from many addresses pinned a CPU inside the limiter | CPU profile of the main thread | Entries kept in expiry order, sweep stops at the first live entry: ~1.5 µs (`server/src/bounded-counter.ts`, `server/tests/edge-ratelimit.test.ts`) |
+| Keys that did not fit shared ONE overflow counter: a flood from more than `RATE_LIMIT_MAX_KEYS` addresses throttled every new legitimate address | unit test | 256 overflow counters chosen by a per-process salted hash, so an attacker cannot aim at a bucket |
+| TCP connections that never sent a byte were never closed (Node's header timeout starts at the first byte); 3 500 silent sockets stayed forever | A4 | `HTTP_FIRST_REQUEST_TIMEOUT_SECONDS` (15 s): `server/src/edge.ts`, `server/tests/silent-connections.test.ts` |
+| nginx had no per-address connection limit, no timeouts for slow clients, no real-IP handling behind a CDN (all visitors one bucket) | Part B | `deploy/nginx.conf`, `ops/update-cloudflare-ips.sh` + systemd timer, `DEPLOY-ONLINE.md` §12 |
+
+**Measured, Part A (API alone, production mode, full scale, 39 checks pass):**
+distributed floods from thousands of source addresses, 2 × 120 connections:
+
+| Flood | Throughput absorbed | API CPU | Legitimate traffic during it |
+|---|---|---|---|
+| unauthenticated reads / 404s | 2 900 req/s | 1.2 cores | reads and sensor events succeed, 0 lost; latency up from ~6 ms to ~0.5–2 s |
+| forged webhooks | 1 800 req/s | 1.2 cores | same |
+| sign-in guesses (a password hash each) | 1 060 req/s | 4 cores (hash workers) | sensor + reads OK; **sign-in returns 503 `auth_busy` for most attempts (1 of 7 succeeded)** — the hash queue is the part an attacker can crowd |
+| all combined | 1 500 req/s | 3.8 cores | reads/sensor OK, 0 lost; sign-in mostly 503 |
+
+Recovery: latency back to baseline (p95 < 20 ms) within the 4 s window after
+every flood. 10 MB bodies: refused 413 (2 499 refused, none accepted), memory
+plateaus (second round +10 MB). 3 500 idle / slow-loris sockets: all closed by
+the server in 15.0–15.3 s, legitimate traffic unaffected. API healthy and no
+unhandled errors in its log afterwards.
+
+**Measured, Part B (real nginx 1.24 running `deploy/nginx.conf`, 17 checks pass):**
+`nginx -t` accepts the config with the generated Cloudflare snippet; 80
+sign-ins in a burst → 59 refused by nginx itself (never reach Node), 10 reach
+the API and the 11 after that are refused by Legion's own limit; 400 junk API
+requests → ≥150 cut at nginx; the sensor webhook is never rate-limited by
+nginx; behind a trusted CDN the throttled visitor stays throttled while a second
+visitor is unaffected, and Legion itself sees the real addresses (its per-address
+sign-in limit holds for X, not Y); from an **untrusted** sender, rotating a forged
+`CF-Connecting-IP` over 60 values escapes nothing; slow-loris dropped at 15.0 s;
+320 half-sent requests from one address make the 321st connection a 429 while
+another visitor is served.
+
+**YELLOW (new, remaining):**
+- Volumetric (L3/L4) attacks cannot be mitigated on the server at all; they need
+  a CDN/scrubbing provider in front (DEPLOY-ONLINE.md §12).
+- Sign-in is the cheapest thing for a botnet to crowd: while the flood lasts,
+  most sign-ins get `503 auth_busy` (the rest of the API keeps working). Needs a
+  Cloudflare rate rule / Bot Fight Mode / CAPTCHA (Turnstile — not implemented).
+- Per-address limits remain weak against more distinct addresses than the
+  tables hold; the blast radius is now bounded (see above) but not zero.
+- Not tested: Cloudflare itself (needs an account) — in particular the
+  recommended WAF skip rule for the Wazuh webhook path, and `ufw` origin
+  lockdown (only the dry-run output is generated and shellchecked).
+- The tests run on one machine; capacity planning needs a load test on the real server.
+
+Reproduce: `node ops/tests/ddos-resilience.mjs [--part a|b]` (in CI at half scale).
+
 ## 5. Reproduce
 
 ```bash
@@ -239,6 +298,7 @@ node ops/tests/e2e-journeys.mjs             # browser journeys (in CI)
 node ops/tests/e2e-wazuh-manager.mjs        # real Wazuh manager (needs Docker)
 node ops/tests/load-validation.mjs          # 3 instances + Redis load test
 node ops/tests/auth-load-probe.mjs          # RED-1 regression (in CI)
+node ops/tests/ddos-resilience.mjs          # flood / slow clients / real nginx (in CI)
 ```
 
 Each script creates and drops its own database. They share helpers in
