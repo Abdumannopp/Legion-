@@ -305,12 +305,22 @@ systemctl enable --now legion-cloudflare-ips.timer
 
 ### 12.3. Tekshirib ko'ring
 
-Brauzerda saytni oching va kiring. Keyin serverdan:
+Brauzerda saytni oching va kiring. Keyin hammasini bitta skript tekshiradi
+(hech narsani o'zgartirmaydi, faqat o'qiydi):
 
 ```bash
-curl -s https://legion.sizningdomen.uz/api/health
-journalctl -u legion -n 20      # xatolar yo'qligini ko'ring
+# serverning o'zida — nginx, taymer, firewall, loglarda haqiqiy IP ko'rinishi:
+sudo /opt/legion/ops/check-cloudflare-setup.sh --domain legion.sizningdomen.uz --local
+
+# BOSHQA kompyuterdan (masalan, o'zingiznikidan) — DNS, HTTPS, Wazuh webhook'i,
+# server IP orqali to'g'ridan-to'g'ri kirib bo'lmasligi:
+ops/check-cloudflare-setup.sh --domain legion.sizningdomen.uz --server-ip SERVER_IP
 ```
+
+Har bir qator `OK`, `WARN` yoki `FAIL` bo'ladi; `FAIL` qatorida nima qilish
+kerakligi yozilgan. Hammasi `OK` bo'lsa — sozlama to'g'ri. Natijani menga
+(yoki texnik yordamchingizga) yuborsangiz, nima noto'g'riligini aytib beradi.
+(12.4 ni bajarmaguningizcha `--server-ip` tekshiruvi `FAIL` beradi — bu kutilgan.)
 
 ### 12.4. Serverni to'g'ridan-to'g'ri hujumdan yoping (origin lockdown)
 
@@ -346,11 +356,17 @@ soni cheklangan.)
 - **Security → Settings**: *Bot Fight Mode* ni yoqish mumkin. Hujum paytida
   vaqtincha **"I'm Under Attack"** rejimini yoqing.
 - **Wazuh webhook'i.** Cloudflare brauzer bo'lmagan mijozlarni (Wazuh
-  skripti) bot deb tekshiruvga yo'naltirishi mumkin. Agar sensor
-  hodisalari kelmay qolsa, `/api/security-events/webhook` yo'li uchun
-  *Custom rule → Skip (Bot Fight / Rate limiting)* qoidasini qo'shing.
-  Bu qoida Legion'da **sinab ko'rilmagan** — Cloudflare hisobi kerak va
-  panelning joriy ko'rinishiga bog'liq. Webhook baribir o'z imzosi bilan
+  skripti) bot deb tekshiruvga yo'naltirishi mumkin. `check-cloudflare-setup.sh`
+  buni aniqlaydi ("Cloudflare blocks the webhook"). Shunda
+  `/api/security-events/webhook` yo'li uchun *Security → WAF → Custom rules*:
+  **URI Path equals `/api/security-events/webhook` → Skip** (Bot Fight /
+  Rate limiting) qoidasini qo'shing. Bu qoida Cloudflare hisobida
+  **sinab ko'rilmagan** (panelning joriy ko'rinishiga bog'liq) — shuning
+  uchun qo'shgandan keyin skriptni qayta ishga tushiring.
+  To'siq paytida hodisalar **yo'qolmaydi**: Wazuh skripti Cloudflare to'sig'ini
+  taniydi, hodisani o'z navbatida (spool) saqlaydi, logga
+  (`/var/ossec/logs/integrations.log`) aniq sababni yozadi va to'siq
+  olingach avtomatik qayta yuboradi. Webhook baribir o'z imzosi bilan
   himoyalangan: noto'g'ri imzoli so'rovlar rad etiladi va cheklanadi.
 - WebSocket (jonli ogohlantirishlar) Cloudflare'ning barcha tariflarida ishlaydi.
 
@@ -365,8 +381,100 @@ Sozlanadigan qiymatlar (`server/.env`):
 |---|---|
 | `PASSWORD_HASH_WORKERS` | parol tekshiruvchi oqimlar soni (standart: avtomatik; o'lchovda 1–3 oqim o'rtasida sezilarli farq chiqmadi) |
 | `HTTP_FIRST_REQUEST_TIMEOUT_SECONDS` | birinchi so'rovni yubormagan ulanishni yopish (standart 15 s, `0` — o'chirish) |
+| `PASSWORD_HASH_MAX_PRIORITY` | tanish qurilmalar uchun zaxira navbat hajmi (12.8; standart — oddiy navbat bilan teng) |
 
-### 12.7. Halol cheklovlar
+### 12.7. Kirish formalariga Turnstile (CAPTCHA) — ixtiyoriy
+
+Turnstile — Cloudflare'ning bepul "siz odammisiz?" tekshiruvi. Odatda odam
+hech narsa bosmaydi (tekshiruv o'zi o'tadi), botlar esa o'ta olmaydi. Yoqilsa,
+**kirish, ro'yxatdan o'tish, birinchi sozlash va parolni tiklash** so'rovlari
+tekshiruvsiz qabul qilinmaydi — parol tekshirilishidan (eng qimmat amal) va
+email yuborilishidan **oldin**.
+
+1. Cloudflare panelida: **Turnstile → Add widget**. Domen:
+   `legion.sizningdomen.uz`, rejim: **Managed**. Ikki kalit beriladi:
+   **Site key** (ochiq) va **Secret key** (maxfiy).
+2. Serverda ikkala faylga qo'shing:
+
+   ```bash
+   # server/.env  (maxfiy kalit — hech kimga ko'rsatmang)
+   TURNSTILE_SECRET_KEY=0x4AAAA...sizning-secret-key
+
+   # frontend/.env.local  (ochiq kalit)
+   NEXT_PUBLIC_TURNSTILE_SITE_KEY=0x4AAAA...sizning-site-key
+   ```
+3. Dashboard'ni qayta quring va qayta ishga tushiring (ochiq kalit qurish
+   paytida sahifaga yoziladi):
+
+   ```bash
+   cd /opt/legion && sudo -u legion npm run build && systemctl restart legion
+   ```
+4. Tekshiring: kirish sahifasida tekshiruv oynachasi chiqadi; u o'tmaguncha
+   "Kirish" tugmasi bosilmaydi.
+
+Bilish kerak:
+- Ikkala kalit **birga** kerak. Faqat serverda bo'lsa — hamma kirish
+  `captcha_required` bilan rad etiladi; faqat dashboard'da bo'lsa — tekshiruv
+  ko'rinadi, lekin server uni talab qilmaydi.
+- Cloudflare tekshiruv xizmatiga ulanib bo'lmasa, kirish vaqtincha `503`
+  qaytaradi (**yopiq holatda ishdan chiqadi** — hujum paytida eshikni ochib
+  qo'ymaslik uchun). Qolgan API ishlayveradi.
+- Yoqilgandan keyin `/auth/login` ga skript/terminal orqali parol bilan kirib
+  bo'lmaydi (bu maqsad). Wazuh sensori va AI agentlar kalit bilan ishlaydi —
+  ularga ta'sir qilmaydi.
+- Brauzerdagi reklama/kontent bloklovchi tekshiruvni to'sib qo'ysa, sahifa
+  buni aniq yozadi.
+- Legion tomoni brauzerda sinab ko'rilgan (`ops/tests/e2e-turnstile.mjs`),
+  lekin Cloudflare'ning haqiqiy xizmati bilan emas (sinov muhitidan unga
+  ulanib bo'lmadi) — yoqqaningizdan keyin o'zingiz bir marta kirib ko'ring.
+
+### 12.8. Tanish qurilmalar hujum paytida ham kira oladi (avtomatik)
+
+Hujum paytida parol tekshiruvchi navbat to'lib qolsa, yangi kirishlar `503`
+oladi. Lekin shu brauzerdan avval **to'liq** kirgan (parol + 2FA) odam uchun
+Legion alohida, hujum to'ldira olmaydigan navbat ajratadi. Hech narsa sozlash
+shart emas: muvaffaqiyatli kirishdan keyin brauzerga 90 kunlik imzolangan
+cookie (`legion_device`) beriladi.
+
+- Cookie faqat **o'zi nomlangan akkaunt** uchun ishlaydi va parolni
+  almashtirmaydi — parol baribir to'liq tekshiriladi.
+- O'g'irlangan cookie faqat shu akkauntga kirishni tezlashtiradi, daqiqasiga
+  10 martadan ko'p emas.
+- O'lchov (bir mashinada): sign-in hujumi paytida yangi brauzerdan 15
+  urinishdan 12 tasi `503` oldi, tanish brauzerdan 5/5 muvaffaqiyatli kirdi.
+
+### 12.9. O'z serveringizda o'lchash
+
+Yuqoridagi raqamlar sinov mashinasida olingan. Sizning serveringiz qancha
+ko'tarishini bilish uchun xuddi shu testni **o'z serveringizda** ishga
+tushiring. U alohida vaqtinchalik baza va alohida Legion nusxasini ochadi —
+ishlab turgan Legion'ga va ma'lumotlarga tegmaydi, lekin ~5 daqiqa davomida
+**butun CPU'ni band qiladi**. Shuning uchun uni foydalanuvchilar yo'q paytda
+(yoki ishga tushirishdan oldin) bajaring.
+
+```bash
+cd /opt/legion
+sudo -u legion npm run build              # agar oxirgi yangilanishdan keyin qurilmagan bo'lsa
+sudo E2E_ADMIN_DATABASE_URL="postgresql://postgres:POSTGRES-PAROLI@127.0.0.1:5432/postgres" \
+  node ops/tests/ddos-resilience.mjs --json /root/legion-dos.json 2>&1 | tee /root/legion-dos.txt
+```
+
+(`POSTGRES-PAROLI` — 3-qadamda o'rnatgan administrator paroli.) Oxirida
+`N passed, 0 failed` chiqsa — tizim hujum ostida kutilganidek ishlaydi.
+Natijada qarash kerak bo'lgan qatorlar:
+
+- `responses: {... "per_second": …, "api_cpu_percent_of_one_core": …}` —
+  bitta Legion nusxasi soniyasiga qancha keraksiz so'rovni ko'tardi;
+- `legitimate traffic by phase` — hujum paytida oddiy foydalanuvchi va
+  sensor qanchalik sekinlashdi (`p95`, millisekund);
+- `sign-in from a known device` — tanish qurilmadan kirish.
+
+Bu test **faqat shu serverning o'zida** ishlaydi (hujum `127.0.0.1` ga
+qaratilgan). Uni hech qachon boshqa birovning serveriga qarshi ishlatmang.
+`/root/legion-dos.txt` ni texnik yordamchingizga yuborsangiz, kerakli
+quvvatni (CPU, nusxalar soni) hisoblashda yordam beradi.
+
+### 12.10. Halol cheklovlar
 
 - **Katta (hajmiy) hujum** — kanalni to'ldiruvchi L3/L4 hujum — faqat
   Cloudflare kabi tarmoq oldidan to'xtatiladi. Ularsiz, hosting provayderning
@@ -374,14 +482,16 @@ Sozlanadigan qiymatlar (`server/.env`):
 - Minglab har xil manzildan kelgan **sekin, "odamga o'xshash"** so'rovlar
   (L7 botnet) manzil bo'yicha cheklovlarni chetlab o'tadi. Legion buni
   yumshatadi (hisoblagich xotirasi cheklangan, tizim ishdan chiqmaydi,
-  sensor hodisalari yo'qolmaydi, o'qish ishlaydi), lekin parol bilan
-  kirish — eng qimmat amal — hujum davomida band bo'lib `503` qaytarishi
-  mumkin. Cloudflare qoidalari va Bot Fight Mode aynan shu holat uchun.
+  sensor hodisalari yo'qolmaydi, o'qish ishlaydi), lekin **yangi**
+  brauzerdan parol bilan kirish — eng qimmat amal — hujum davomida band
+  bo'lib `503` qaytarishi mumkin. Tanish qurilmalar (12.8) kira oladi;
+  Turnstile (12.7), Cloudflare qoidalari va Bot Fight Mode qolgan holat uchun.
 - O'lchovlar bir mashinada olingan (`ops/tests/ddos-resilience.mjs`);
   ular tizimning **xatti-harakatini** ko'rsatadi, sizning serveringiz
   quvvatini emas. Natijalar: [PRODUCTION-VALIDATION-2026-10-01.md](PRODUCTION-VALIDATION-2026-10-01.md).
-- Kelajak uchun: kirish/ro'yxatdan o'tish formalariga Cloudflare Turnstile
-  (CAPTCHA) qo'shish — hozircha qo'shilmagan.
+- Cloudflare hisobining o'zi (DNS proxy, WAF qoidalari, Turnstile'ning
+  haqiqiy xizmati) bu yerda sinab ko'rilmagan — hisob kerak. Shuning uchun
+  12.3 dagi tekshiruv skripti bor: u sizning haqiqiy sozlamangizni tekshiradi.
 
 ---
 

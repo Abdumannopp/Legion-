@@ -6,6 +6,8 @@ import { backupHealthReport } from "./backup-health.js";
 import { applyTrustedProxies, checkWebSocketOrigin, limitSilentConnections, clientAddress, corsMiddleware, originGuard, securityHeaders, upgradeRateLimited } from "./edge.js";
 import { signToken, verifyLegacyCheckoutToken, verifyTokenOf } from "./auth-jwt.js";
 import { comparePassword, hashPassword, HashingBusyError } from "./passwords.js";
+import { captchaEnabled, requireHuman } from "./turnstile.js";
+import { DEVICE_COOKIE, DEVICE_MAX_AGE_MS, issueDeviceToken, knownDevicePriority } from "./known-device.js";
 import { createHash, createHmac, randomBytes, timingSafeEqual, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
@@ -523,7 +525,8 @@ app.get("/auth/setup-status", async (_req, res) => {
   const setupRequired = isSelfHosted() && !(await store.hasAnyTenant());
   // The mode tells the sign-in page whether to offer "Create an account";
   // /health already says the same thing publicly.
-  res.json({ setup_required: setupRequired, deployment_mode: config.deploymentMode, trial_days: isSelfHosted() ? null : config.trialDays });
+  // `captcha`: the sign-in forms must show the Turnstile widget (turnstile.ts).
+  res.json({ setup_required: setupRequired, deployment_mode: config.deploymentMode, trial_days: isSelfHosted() ? null : config.trialDays, captcha: captchaEnabled() });
 });
 
 // --- Email verification (hosted sign-up) ------------------------------------
@@ -559,7 +562,7 @@ app.post("/auth/verify-email", authLimiter, async (req, res) => {
 });
 
 /** Always the same answer, so it cannot be used to learn which addresses exist. */
-app.post("/auth/resend-verification", authLimiter, mailPerAddressLimiter, async (req, res) => {
+app.post("/auth/resend-verification", authLimiter, requireHuman, mailPerAddressLimiter, async (req, res) => {
   const email = String(req.body?.email || "").toLowerCase().slice(0, 254);
   const user = email ? await store.findUserByEmail(email) : null;
   if (user && !user.email_verified_at && user.status === "active" && !isSelfHosted()) {
@@ -568,7 +571,7 @@ app.post("/auth/resend-verification", authLimiter, mailPerAddressLimiter, async 
   res.status(202).json({ message: "If that account is waiting for confirmation, a new link has been sent." });
 });
 
-app.post("/auth/register", authLimiter, async (req, res) => {
+app.post("/auth/register", authLimiter, requireHuman, async (req, res) => {
   const body = parse(registerSchema, req.body, res); if (!body) return;
 
   if (isSelfHosted()) return registerFirstAdmin(body, req, res);
@@ -638,7 +641,7 @@ async function registerFirstAdmin(
   return res.status(201).json(publicUser(user));
 }
 
-app.post("/auth/login", authLimiter, loginAccountLimiter, async (req, res) => {
+app.post("/auth/login", authLimiter, requireHuman, loginAccountLimiter, async (req, res) => {
   const body = req.body ?? {};
   const email = String(body.username || "").toLowerCase();
   const user = await store.findUserByEmail(email);
@@ -646,7 +649,7 @@ app.post("/auth/login", authLimiter, loginAccountLimiter, async (req, res) => {
   // real dummy hash when the address is unknown or has no password yet, so
   // the response time does not reveal whether the address exists.
   const { hash, real } = hashForComparison(user);
-  const ok = (await comparePassword(String(body.password || "").slice(0, 128), hash)) && real;
+  const ok = (await comparePassword(String(body.password || "").slice(0, 128), hash, { priority: knownDevice(req, user) })) && real;
   if (!user || !ok) {
     // Recorded against a real account only (an unknown address has no tenant
     // to audit into): the owner's administrators see guessing, and a later
@@ -677,6 +680,7 @@ app.post("/auth/login", authLimiter, loginAccountLimiter, async (req, res) => {
   }
 
   const accessToken = await startSession(req, res, user);
+  rememberDevice(res, user);
   await store.audit({ tenant_id: user.tenant_id, user_id: user.id, user_email: user.email, action: "auth.login", resource_type: "user", resource_id: user.id, detail: null, ip_address: req.ip || null });
   await completeSignIn(req, user);
   return res.json({ access_token: accessToken, token_type: "bearer" });
@@ -717,6 +721,17 @@ async function startSession(req: Request, res: Response, user: User, workspace?:
   }, member.tenant_id);
   setSessionCookies(res, accessToken, refreshToken);
   return accessToken;
+}
+
+// --- Known devices: who goes first when sign-in is flooded (known-device.ts) ---
+function rememberDevice(res: Response, user: User): void {
+  res.cookie(DEVICE_COOKIE, issueDeviceToken(user.id), {
+    ...cookieBase(), sameSite: "strict", httpOnly: true, path: config.refreshCookiePath, maxAge: DEVICE_MAX_AGE_MS,
+  });
+}
+
+function knownDevice(req: Request, user: User | null | undefined): boolean {
+  return Boolean(user) && knownDevicePriority(req.cookies?.[DEVICE_COOKIE], user!.id);
 }
 
 // --- MFA ---------------------------------------------------------------------
@@ -774,6 +789,7 @@ app.post("/auth/mfa/verify", authLimiter, mfaAccountLimiter, async (req, res) =>
   }
 
   const accessToken = await startSession(req, res, user);
+  rememberDevice(res, user);
   const remaining = usedRecovery ? await mfa.countRecoveryCodes(user.id) : null;
   await store.audit({ tenant_id: user.tenant_id, user_id: user.id, user_email: user.email, action: "auth.login", resource_type: "user", resource_id: user.id, detail: usedRecovery ? "mfa:recovery" : "mfa:totp", ip_address: req.ip || null });
   await completeSignIn(req, user);
@@ -847,7 +863,7 @@ app.post("/auth/mfa/disable", authLimiter, stepUpLimiter, auth, async (req: Auth
 
   // Password AND a current code: turning off a security control should be at
   // least as hard as using it, so a borrowed session alone is not enough.
-  if (!(await comparePassword(body.password, user.password_hash))) {
+  if (!(await comparePassword(body.password, user.password_hash, { priority: true }))) {
     return res.status(400).json({ detail: "Password is incorrect" });
   }
   const codeOk = body.code
@@ -869,7 +885,7 @@ app.post("/auth/mfa/recovery-codes", authLimiter, stepUpLimiter, auth, async (re
   const body = parse(z.object({ password: z.string().min(1).max(128) }), req.body, res); if (!body) return;
   const user = req.user!;
   if (!user.mfa_enabled) return res.status(400).json({ detail: "Two-factor authentication is not enabled" });
-  if (!(await comparePassword(body.password, user.password_hash))) {
+  if (!(await comparePassword(body.password, user.password_hash, { priority: true }))) {
     return res.status(400).json({ detail: "Password is incorrect" });
   }
   // Regenerating invalidates every previous code — the point when a list may
@@ -1144,7 +1160,7 @@ app.get("/auth/me", auth, async (req: AuthedRequest, res) => {
   });
 });
 
-app.post("/auth/forgot-password", authLimiter, mailPerAddressLimiter, async (req, res) => {
+app.post("/auth/forgot-password", authLimiter, requireHuman, mailPerAddressLimiter, async (req, res) => {
   const email = String(req.body.email || "").toLowerCase();
   const user = await store.findUserByEmail(email);
   if (user && user.status === "active") {
@@ -1187,11 +1203,11 @@ app.post("/auth/reset-password", authLimiter, async (req, res) => {
 app.post("/auth/change-password", authLimiter, stepUpLimiter, auth, async (req: AuthedRequest, res) => {
   const body = parse(z.object({ current_password: z.string().min(1).max(128), new_password: passwordField }), req.body, res); if (!body) return;
   const user = req.user!;
-  if (!(await comparePassword(body.current_password, user.password_hash))) {
+  if (!(await comparePassword(body.current_password, user.password_hash, { priority: true }))) {
     return res.status(400).json({ detail: "Current password is incorrect" });
   }
   await store.updateUser(user.id, {
-    password_hash: await hashPassword(body.new_password, 12),
+    password_hash: await hashPassword(body.new_password, 12, { priority: true }),
     bump_token_version: true,
   });
   await revokeUserEverywhere(user.id);

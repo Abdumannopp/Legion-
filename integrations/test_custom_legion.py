@@ -46,9 +46,13 @@ class Server:
                 body = self.rfile.read(int(self.headers["Content-Length"]))
                 outer.requests.append({"headers": {k.lower(): v for k, v in self.headers.items()}, "body": body})
                 status = outer.statuses.pop(0) if outer.statuses else outer.default
-                self.send_response(status)
+                # A status may be (code, headers, body): e.g. a CDN's challenge page.
+                code, headers, reply = status if isinstance(status, tuple) else (status, {}, b'{"status":"ok"}')
+                self.send_response(code)
+                for k, v in headers.items():
+                    self.send_header(k, v)
                 self.end_headers()
-                self.wfile.write(b'{"status":"ok"}')
+                self.wfile.write(reply)
 
             def log_message(self, *args):
                 pass
@@ -141,6 +145,29 @@ class RetryTests(unittest.TestCase):
     def test_does_not_retry_a_rejected_request(self):
         code, reqs = self.run_with([401])
         self.assertEqual((code, len(reqs)), (1, 1))
+
+    def test_sends_a_named_user_agent_not_pythons_default(self):
+        _, requests = self.run_with([])
+        self.assertTrue(requests[0]["headers"]["user-agent"].startswith("Legion-Wazuh-Integration/"))
+
+    def test_a_cloudflare_challenge_is_kept_for_later_not_set_aside_as_refused(self):
+        challenge = (403, {"Server": "cloudflare", "cf-mitigated": "challenge", "Content-Type": "text/html"}, b"<html>Just a moment...</html>")
+        code, requests = self.run_with([challenge])
+        self.assertEqual(code, 1)
+        self.assertEqual(len(requests), 1)  # no pointless retries against the CDN
+        spool = os.path.join(self.mod.SPOOL_DIR, KEY_ID)
+        self.assertEqual(len([n for n in os.listdir(spool) if n.endswith(".json")]), 1)
+        self.assertFalse(os.path.isdir(os.path.join(spool, "dead")))
+        self.assertIn("blocked by Cloudflare", self.logged())
+        self.assertIn("DEPLOY-ONLINE.md", self.logged())
+
+    def test_legions_own_refusal_through_cloudflare_is_still_a_refusal(self):
+        refused = (403, {"Server": "cloudflare", "Content-Type": "application/json"}, b'{"detail":"Invalid webhook signature"}')
+        code, requests = self.run_with([refused])
+        self.assertEqual(code, 1)
+        self.assertEqual(len(requests), 1)
+        self.assertTrue(os.path.isdir(os.path.join(self.mod.SPOOL_DIR, KEY_ID, "dead")))
+        self.assertNotIn("blocked by Cloudflare", self.logged())
 
     def test_retries_when_legion_is_unreachable(self):
         server = Server([])

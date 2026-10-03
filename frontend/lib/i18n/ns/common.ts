@@ -33,6 +33,7 @@ export const common = defineMessages({
     yes: "Yes",
     no: "No",
     genericError: "Something went wrong. Please try again.",
+    captchaUnavailable: "The security check could not load. Check your connection or turn off content blockers for this site, then reload the page.",
     networkError: "Can't reach the Legion server. Check your connection and try again.",
     severity: {
       critical: "Critical",
@@ -116,6 +117,7 @@ export const common = defineMessages({
     yes: "Да",
     no: "Нет",
     genericError: "Что-то пошло не так. Попробуйте ещё раз.",
+    captchaUnavailable: "Не удалось загрузить проверку безопасности. Проверьте подключение или отключите блокировщики для этого сайта и обновите страницу.",
     networkError: "Нет связи с сервером Legion. Проверьте подключение и попробуйте снова.",
     severity: {
       critical: "Критический",
@@ -199,6 +201,7 @@ export const common = defineMessages({
     yes: "Ha",
     no: "Yo'q",
     genericError: "Nimadir xato ketdi. Qayta urinib ko'ring.",
+    captchaUnavailable: "Xavfsizlik tekshiruvi yuklanmadi. Internetni tekshiring yoki bu sayt uchun reklama/kontent bloklovchini o'chirib, sahifani yangilang.",
     networkError: "Legion serveriga ulanib bo'lmadi. Internetni tekshirib, qayta urinib ko'ring.",
     severity: {
       critical: "Kritik",

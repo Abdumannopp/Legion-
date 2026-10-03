@@ -24,15 +24,16 @@ import { createHash, hkdfSync } from "node:crypto";
 import jwt, { type JwtPayload } from "jsonwebtoken";
 import { config } from "./config.js";
 
-export type TokenKind = "access" | "mfa" | "checkout";
+export type TokenKind = "access" | "mfa" | "checkout" | "device";
 
 export const ISSUER = "legion";
 export const AUDIENCE: Record<TokenKind, string> = {
   access: "legion-api",
   mfa: "legion-mfa-challenge",
   checkout: "legion-paddle-checkout",
+  device: "legion-known-device",
 };
-const TYP: Record<TokenKind, string> = { access: "at+jwt", mfa: "mfa+jwt", checkout: "checkout+jwt" };
+const TYP: Record<TokenKind, string> = { access: "at+jwt", mfa: "mfa+jwt", checkout: "checkout+jwt", device: "device+jwt" };
 
 interface Key { kid: string; key: Buffer }
 const cache = new Map<string, Key>();

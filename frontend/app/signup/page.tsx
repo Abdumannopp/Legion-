@@ -7,6 +7,7 @@ import { Loader2, MailCheck } from "lucide-react";
 import AuthShell, { authButton, authInput } from "@/components/AuthShell";
 import { ApiError, DeploymentMode, getSetupStatus, resendVerification, signUp } from "@/lib/api";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
+import { useTurnstile } from "@/components/Turnstile";
 
 export default function SignUpPage() {
   const { t } = useLanguage();
@@ -20,6 +21,8 @@ export default function SignUpPage() {
   const [error, setError] = useState<unknown>(null);
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [resent, setResent] = useState(false);
+  const captcha = useTurnstile("signup");
+  const resendCaptcha = useTurnstile("resend");
 
   useEffect(() => {
     getSetupStatus().then((s) => { setMode(s.deployment_mode ?? "self-hosted"); if (s.trial_days) setTrialDays(s.trial_days); }).catch(() => setMode("self-hosted"));
@@ -30,19 +33,21 @@ export default function SignUpPage() {
     setError(null);
     setBusy(true);
     try {
-      await signUp({ company: company.trim(), email: email.trim(), password });
+      await signUp({ company: company.trim(), email: email.trim(), password }, captcha.token);
       setSentTo(email.trim());
       setPassword("");
     } catch (err) {
       setError(err instanceof ApiError ? err : new Error(t.signup.createFailed));
     } finally {
+      captcha.reset();
       setBusy(false);
     }
   }
 
   async function resend() {
     if (!sentTo) return;
-    await resendVerification(sentTo).catch(() => {});
+    await resendVerification(sentTo, resendCaptcha.token).catch(() => {});
+    resendCaptcha.reset();
     setResent(true);
   }
 
@@ -68,7 +73,8 @@ export default function SignUpPage() {
             {t.signup.checkEmail.sentAfter}
           </p>
         </div>
-        <button onClick={resend} disabled={resent} className="mt-5 text-xs text-ink-faint hover:text-ink-muted disabled:opacity-60">
+        {!resent && <div className="mt-5">{resendCaptcha.element}</div>}
+        <button onClick={resend} disabled={resent || !resendCaptcha.ready} className="mt-5 text-xs text-ink-faint hover:text-ink-muted disabled:opacity-60">
           {resent ? t.signup.checkEmail.resent : t.signup.checkEmail.resend}
         </button>
         <Link href="/login" className={`${authButton} mt-5`}>{t.auth.goToSignIn}</Link>
@@ -115,8 +121,10 @@ export default function SignUpPage() {
             {t.signup.agree.after}
           </span>
         </label>
+        {captcha.element}
+        {captcha.failed && <ErrorNotice error={new Error(t.common.captchaUnavailable)} />}
         {error != null && <ErrorNotice error={error} />}
-        <button type="submit" disabled={busy || mode === null} className={authButton}>
+        <button type="submit" disabled={busy || mode === null || !captcha.ready} className={authButton}>
           {busy && <Loader2 size={14} className="animate-spin" />}
           {t.signup.createAccount}
         </button>

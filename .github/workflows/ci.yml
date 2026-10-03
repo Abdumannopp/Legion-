@@ -44,6 +44,8 @@ jobs:
         run: bash ops/tests/test-backup-restore.sh
       - name: Wazuh integration script (retries, spool, drain)
         run: python3 -m unittest integrations/test_custom_legion.py
+      - name: Cloudflare setup checker catches each misconfiguration
+        run: bash ops/tests/test-check-cloudflare.sh
 
   dependencies:
     name: Known vulnerabilities in the lockfile
@@ -158,6 +160,13 @@ jobs:
         env:
           E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
         run: node ops/tests/e2e-journeys.mjs
+      # Turnstile (CAPTCHA) on the sign-in forms: the dashboard built with a
+      # site key, the API with a secret key; Cloudflare itself is stood in for.
+      # See ops/tests/e2e-turnstile.mjs and DEPLOY-ONLINE.md §12.7.
+      - name: Turnstile on sign-in (browser, end to end)
+        env:
+          E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+        run: node ops/tests/e2e-turnstile.mjs
       # Black-box attack on the built API in production mode: headers, CORS,
       # CSRF, cookies, forged/replayed webhooks, IDOR between two real orgs,
       # RBAC, MFA, sessions, WebSocket origin, rate limits, secret leakage.

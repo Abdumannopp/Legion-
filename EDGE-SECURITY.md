@@ -71,6 +71,30 @@ Per-address limits only work if the real visitor address reaches Legion.
 a poisoned or truncated list is refused); nginx then sets `X-Forwarded-For` from
 that address and Legion needs no configuration change (it trusts only the local
 nginx). Setup, origin lockdown and dashboard rules: `DEPLOY-ONLINE.md` §12.
+`ops/check-cloudflare-setup.sh` verifies a live setup (DNS proxied, answers via
+Cloudflare, webhook not challenged, origin closed, real addresses in the log).
+
+## Sign-in under a flood
+
+Password hashing has a bounded queue (`server/src/passwords.ts`); past it,
+sign-in answers `503 auth_busy`. Two things keep people signing in anyway:
+
+- **Known devices.** A browser that completed a sign-in (both factors) gets
+  `legion_device`, a signed 90-day cookie (HttpOnly, SameSite=Strict, auth path)
+  naming that account. A sign-in to the SAME account carrying it is hashed from a
+  separate priority lane the flood cannot fill (`PASSWORD_HASH_MAX_PRIORITY`). It
+  is not a session and skips nothing; at most 10 priority sign-ins a minute per
+  account and instance (`server/src/known-device.ts`). Signed-in users confirming
+  their password (change password, MFA changes) use the priority lane too.
+- **Turnstile** (optional): with `TURNSTILE_SECRET_KEY` (server) and
+  `NEXT_PUBLIC_TURNSTILE_SITE_KEY` (dashboard build), `/auth/login`,
+  `/auth/register`, `/auth/forgot-password` and `/auth/resend-verification`
+  require a solved challenge, verified with Cloudflare before any password is
+  hashed or email sent — and before the per-account counters, so requests
+  without one cannot be used to lock a victim's account or spend its email
+  budget. Fails closed (`503 captcha_unavailable`) when Cloudflare cannot be
+  asked; at most 256 verifications in flight, 5 s each (`server/src/turnstile.ts`).
+  The dashboard CSP admits `challenges.cloudflare.com` only when the site key is set.
 
 ## Cookies
 

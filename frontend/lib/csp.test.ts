@@ -46,4 +46,14 @@ describe("dashboard CSP", () => {
     expect(directive(dev, "script-src")).toContain("'unsafe-eval'");
     expect(dev).not.toContain("upgrade-insecure-requests");
   });
+
+  it("Cloudflare Turnstile is allowed only when the widget is configured", () => {
+    expect(prod).not.toContain("challenges.cloudflare.com");
+    const withWidget = buildCsp({ nonce, apiUrl: "https://legion.example.com/api", isDev: false, turnstile: true });
+    expect(directive(withWidget, "script-src")).toContain("https://challenges.cloudflare.com");
+    expect(directive(withWidget, "frame-src")).toContain("https://challenges.cloudflare.com");
+    // Nothing else widens: still no inline script, and no other directive mentions it.
+    expect(directive(withWidget, "script-src")).not.toContain("'unsafe-inline'");
+    expect(directive(withWidget, "connect-src")).not.toContain("cloudflare");
+  });
 });

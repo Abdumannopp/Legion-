@@ -109,11 +109,11 @@ const summarise = (xs) => ({ n: xs.length, p50: pct(xs, 50), p95: pct(xs, 95), p
  * (5/s), and a person signing in (1 every 2 s, spread over 40 legitimate addresses so each stays under the 10/min per-address limit — informational: the password
  * hashing queue is, by design, the part an attacker can crowd).
  */
-function legitTraffic(base, { token, cred }) {
+function legitTraffic(base, { token, cred, deviceCookie }) {
   const phases = {};
   let phase = "idle";
   let running = true;
-  const bucket = () => (phases[phase] ??= { read: [], readFail: 0, sensorFirstTry: 0, sensorTotal: 0, sensorLost: 0, sensor: [], signinOk: 0, signinBusy: 0, signinOther: 0 });
+  const bucket = () => (phases[phase] ??= { read: [], readFail: 0, sensorFirstTry: 0, sensorTotal: 0, sensorLost: 0, sensor: [], signinOk: 0, signinBusy: 0, signinOther: 0, knownOk: 0, knownBusy: 0, knownOther: 0 });
   const user = client(base, { ip: "203.0.113.10", token });
   const loops = [
     (async () => {
@@ -147,6 +147,18 @@ function legitTraffic(base, { token, cred }) {
         const r = await Promise.race([client(base, { ip: `203.0.113.${40 + (signins++ % 40)}` }).call("/auth/login", { method: "POST", body: { username: "legit@example.com", password: "Legit-password-12345" } }), sleep(10_000).then(() => ({ status: 0 }))]).catch(() => ({ status: 0 }));
         if (r.status === 200) b.signinOk++; else if (r.status === 503) b.signinBusy++; else b.signinOther++;
         await sleep(2000);
+      }
+    })(),
+    // The same person from a browser that has signed in before (known-device
+    // cookie): served from the priority lane. Every 7 s stays inside the
+    // per-account priority budget (10 / min).
+    (async () => {
+      let n = 0;
+      while (running && deviceCookie) {
+        const b = bucket();
+        const r = await Promise.race([client(base, { ip: `203.0.113.${100 + (n++ % 40)}`, headers: { cookie: deviceCookie } }).call("/auth/login", { method: "POST", body: { username: "legit@example.com", password: "Legit-password-12345" } }), sleep(10_000).then(() => ({ status: 0 }))]).catch(() => ({ status: 0 }));
+        if (r.status === 200) b.knownOk++; else if (r.status === 503) b.knownBusy++; else b.knownOther++;
+        await sleep(7000);
       }
     })(),
   ];
@@ -184,7 +196,9 @@ async function partA() {
     const cred = await c.call("/security-events/credentials", { method: "POST", body: { label: "sensor" } });
     check("legitimate user and sensor key ready", Boolean(c.token) && cred.status === 201);
 
-    const legit = legitTraffic(api.base, { token: c.token, cred: cred.body });
+    const deviceCookie = login.setCookies.map((x) => x.split(";")[0]).find((x) => x.startsWith("legion_device="));
+    check("a full sign-in hands the browser a known-device cookie", Boolean(deviceCookie));
+    const legit = legitTraffic(api.base, { token: c.token, cred: cred.body, deviceCookie });
     const pid = api.proc.pid;
 
     legit.setPhase("1 baseline"); section("A1. baseline (legitimate traffic only)");
@@ -250,7 +264,7 @@ async function partA() {
     await sleep(10_000);
 
     const phases = await legit.stop();
-    note("legitimate traffic by phase", Object.fromEntries(Object.entries(phases).map(([k, v]) => [k, { read: summarise(v.read), readFail: v.readFail, sensor: summarise(v.sensor), sensorFirstTry: `${v.sensorFirstTry}/${v.sensorTotal}`, sensorLost: v.sensorLost, signin: { ok: v.signinOk, busy503: v.signinBusy, other: v.signinOther } }])));
+    note("legitimate traffic by phase", Object.fromEntries(Object.entries(phases).map(([k, v]) => [k, { read: summarise(v.read), readFail: v.readFail, sensor: summarise(v.sensor), sensorFirstTry: `${v.sensorFirstTry}/${v.sensorTotal}`, sensorLost: v.sensorLost, signin: { ok: v.signinOk, busy503: v.signinBusy, other: v.signinOther }, knownDevice: { ok: v.knownOk, busy503: v.knownBusy, other: v.knownOther } }])));
     const base1 = phases["1 baseline"];
     check("baseline: every read and sensor event succeeded", base1.readFail === 0 && base1.sensorLost === 0 && base1.sensorFirstTry === base1.sensorTotal, JSON.stringify(base1).slice(0, 200));
     for (const name of Object.keys(phases).filter((p) => p !== "1 baseline")) {
@@ -261,6 +275,10 @@ async function partA() {
     const collateral = Object.entries(phases).filter(([, p]) => p.signinOther > 0).map(([k, p]) => `${k}: ${p.signinOther}`);
     check("a legitimate sign-in is never throttled as collateral of a distributed flood (only 'busy' 503 when the hashing queue is full)", collateral.length === 0, collateral.join(", "));
     check("legitimate sign-ins never fail outright outside the flood phases", Object.entries(phases).filter(([k]) => /baseline|recovery|oversized|connection/.test(k)).every(([, p]) => p.signinBusy === 0), "");
+    const known = Object.values(phases).reduce((a, p) => ({ ok: a.ok + p.knownOk, busy: a.busy + p.knownBusy, other: a.other + p.knownOther }), { ok: 0, busy: 0, other: 0 });
+    const knownInFlood = Object.entries(phases).filter(([k]) => /^2[cd] [^→]*$/.test(k)).reduce((a, [, p]) => ({ ok: a.ok + p.knownOk, busy: a.busy + p.knownBusy }), { ok: 0, busy: 0 });
+    note("sign-in from a known device (all phases / during the sign-in floods)", { all: known, duringSignInFloods: knownInFlood });
+    check("a known device signs in throughout — including while the sign-in floods make others wait (priority lane)", known.busy === 0 && known.other === 0 && knownInFlood.ok > 0, JSON.stringify({ known, knownInFlood }));
     const recov = phases["6 recovery"];
     check("recovery: reads back to normal speed (p95 < 300 ms)", pct(recov.read, 95) < 300, JSON.stringify(summarise(recov.read)));
     check("recovery: sign-in works again", recov.signinOk > 0 && recov.signinBusy === 0, JSON.stringify({ ok: recov.signinOk, busy: recov.signinBusy, other: recov.signinOther }));

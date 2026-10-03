@@ -173,7 +173,7 @@ export type DeploymentMode = "self-hosted" | "saas";
 
 /** `setup_required`: a self-hosted install with no administrator yet.
  *  `deployment_mode`: "saas" means anyone may sign up (hosted service). */
-export async function getSetupStatus(): Promise<{ setup_required: boolean; deployment_mode?: DeploymentMode; trial_days?: number | null }> {
+export async function getSetupStatus(): Promise<{ setup_required: boolean; deployment_mode?: DeploymentMode; trial_days?: number | null; captcha?: boolean }> {
   const res = await apiFetch(`${API_URL}/auth/setup-status`, { credentials: "include" });
   if (!res.ok) return { setup_required: false };
   return res.json();
@@ -196,16 +196,21 @@ async function postJson(path: string, body: unknown): Promise<Record<string, unk
 
 /** Hosted sign-up: creates a workspace and emails a confirmation link.
  *  No session is started until the address is confirmed. */
-export async function signUp(input: { company: string; email: string; password: string }): Promise<void> {
-  await postJson("/auth/register", { tenant_name: input.company, email: input.email, password: input.password });
+export async function signUp(input: { company: string; email: string; password: string }, captchaToken?: string | null): Promise<void> {
+  await postJson("/auth/register", { tenant_name: input.company, email: input.email, password: input.password, ...captcha(captchaToken) });
+}
+
+/** The Turnstile token, when the form has one (components/Turnstile.tsx). */
+function captcha(token?: string | null): { turnstile_token?: string } {
+  return token ? { turnstile_token: token } : {};
 }
 
 export async function verifyEmail(token: string): Promise<void> {
   await postJson("/auth/verify-email", { token });
 }
 
-export async function resendVerification(email: string): Promise<void> {
-  await postJson("/auth/resend-verification", { email });
+export async function resendVerification(email: string, captchaToken?: string | null): Promise<void> {
+  await postJson("/auth/resend-verification", { email, ...captcha(captchaToken) });
 }
 
 /** Creates the first administrator. Requires the one-time token the server
@@ -215,7 +220,7 @@ export async function completeSetup(input: {
   organisation: string;
   email: string;
   password: string;
-}): Promise<void> {
+}, captchaToken?: string | null): Promise<void> {
   const res = await apiFetch(`${API_URL}/auth/register`, {
     method: "POST",
     credentials: "include",
@@ -225,10 +230,11 @@ export async function completeSetup(input: {
       tenant_name: input.organisation,
       email: input.email,
       password: input.password,
+      ...captcha(captchaToken),
     }),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new ApiError(data.detail || failed(), res.status);
+  if (!res.ok) throw new ApiError(data.detail || failed(), res.status, data.code);
 }
 
 /** Either the session started, or a second factor is required. */
@@ -236,10 +242,11 @@ export type LoginResult =
   | { mfaRequired: false }
   | { mfaRequired: true; mfaToken: string };
 
-export async function login(email: string, password: string): Promise<LoginResult> {
+export async function login(email: string, password: string, captchaToken?: string | null): Promise<LoginResult> {
   const body = new URLSearchParams();
   body.set("username", email);
   body.set("password", password);
+  if (captchaToken) body.set("turnstile_token", captchaToken);
 
   const res = await apiFetch(`${API_URL}/auth/login`, {
     method: "POST",
@@ -417,8 +424,8 @@ export function updatePreferences(patch: Partial<Record<"timezone" | "date_forma
 }
 
 /** Emails a reset link if the address has an account; the answer is the same either way. */
-export async function forgotPassword(email: string): Promise<void> {
-  await postJson("/auth/forgot-password", { email });
+export async function forgotPassword(email: string, captchaToken?: string | null): Promise<void> {
+  await postJson("/auth/forgot-password", { email, ...captcha(captchaToken) });
 }
 
 export function resetPassword(token: string, newPassword: string): Promise<{ message: string }> {

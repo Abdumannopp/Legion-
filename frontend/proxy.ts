@@ -13,7 +13,7 @@ const WS_URL = process.env.NEXT_PUBLIC_WS_URL;
 
 export function proxy(request: NextRequest) {
   const nonce = newNonce();
-  const csp = buildCsp({ nonce, apiUrl: API_URL, wsUrl: WS_URL, isDev: process.env.NODE_ENV !== "production" });
+  const csp = buildCsp({ nonce, apiUrl: API_URL, wsUrl: WS_URL, isDev: process.env.NODE_ENV !== "production", turnstile: Boolean(process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY) });
 
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", nonce);

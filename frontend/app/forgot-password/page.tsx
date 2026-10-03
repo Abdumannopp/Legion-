@@ -4,7 +4,8 @@ import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { Loader2 } from "lucide-react";
 import AuthShell, { authButton, authInput } from "@/components/AuthShell";
-import { forgotPassword } from "@/lib/api";
+import { ApiError, forgotPassword } from "@/lib/api";
+import { useTurnstile } from "@/components/Turnstile";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 
 export default function ForgotPasswordPage() {
@@ -12,14 +13,26 @@ export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const captcha = useTurnstile("reset");
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
-    // The server answers the same whether or not the address exists.
-    await forgotPassword(email.trim()).catch(() => {});
-    setBusy(false);
-    setSent(true);
+    setError(null);
+    try {
+      // The server answers the same whether or not the address exists.
+      await forgotPassword(email.trim(), captcha.token);
+      setSent(true);
+    } catch (err) {
+      // Only the security check is worth reporting; anything else keeps the
+      // same answer as success, so the page never reveals whether an account exists.
+      if (err instanceof ApiError && err.code?.startsWith("captcha_")) setError(err.message);
+      else setSent(true);
+    } finally {
+      captcha.reset();
+      setBusy(false);
+    }
   }
 
   return (
@@ -39,7 +52,11 @@ export default function ForgotPasswordPage() {
           <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
             // i18n-ignore: example email address
             autoComplete="email" placeholder="you@company.com" className={authInput} />
-          <button type="submit" disabled={busy} className={authButton}>
+          {captcha.element}
+          {(error || captcha.failed) && (
+            <p className="text-critical text-xs bg-critical/10 rounded-lg px-3 py-2">{error ?? t.common.captchaUnavailable}</p>
+          )}
+          <button type="submit" disabled={busy || !captcha.ready} className={authButton}>
             {busy && <Loader2 size={14} className="animate-spin" />}
             {t.forgotPassword.sendLink}
           </button>

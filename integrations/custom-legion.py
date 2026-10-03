@@ -59,6 +59,9 @@ TIMEOUT_SECONDS = 10
 MAX_ATTEMPTS = int(os.environ.get("LEGION_MAX_ATTEMPTS", "4"))
 BACKOFF_BASE_SECONDS = float(os.environ.get("LEGION_BACKOFF_SECONDS", "1"))
 RETRYABLE_STATUS = {408, 429}
+# Named, so a CDN's bot protection in front of Legion does not take this for an
+# abusive client (Python's default "Python-urllib/3.x" is a common block-list entry).
+USER_AGENT = "Legion-Wazuh-Integration/2 (+custom-legion.py)"
 # Legion refuses bodies over WEBHOOK_MAX_BODY_BYTES (1 MB by default) with 413,
 # which is not retryable -- so an oversized event used to be dropped. Legion
 # keeps only the first 4000 characters of full_log anyway, so an event larger
@@ -155,7 +158,7 @@ def main(argv):
         outcome, status = post_once(hook_url, key_id, secret, payload, rule_id, attempt)
         if outcome == "ok":
             return 0
-        if outcome == "fatal" or attempt == MAX_ATTEMPTS:
+        if outcome in ("fatal", "hold") or attempt == MAX_ATTEMPTS:
             break
         time.sleep(BACKOFF_BASE_SECONDS * 2 ** (attempt - 1))
 
@@ -191,6 +194,20 @@ SPOOL_DIR = os.environ.get("LEGION_SPOOL_DIR", "/var/ossec/tmp/legion-spool")
 SPOOL_MAX_FILES = int(os.environ.get("LEGION_SPOOL_MAX_FILES", "50000"))
 DRAIN_BATCH = int(os.environ.get("LEGION_DRAIN_BATCH", "200"))
 STALE_CLAIM_SECONDS = 600
+
+
+def blocked_by_cdn(exc):
+    """A CDN in front of Legion (Cloudflare) refused the request before Legion
+    saw it -- bot protection or a challenge page. That is not Legion's verdict
+    on the event or the credential, so the event is kept (spooled) rather than
+    set aside as refused, and goes out once the CDN lets it through. Legion's
+    own refusals are JSON, even when they pass through Cloudflare."""
+    headers = exc.headers or {}
+    if headers.get("cf-mitigated"):
+        return True
+    server = (headers.get("server") or "").lower()
+    content_type = (headers.get("content-type") or "").lower()
+    return exc.code in (403, 503) and server == "cloudflare" and "json" not in content_type
 
 
 def is_retryable(status):
@@ -334,6 +351,7 @@ def post_once(hook_url, key_id, secret, payload, rule_id, attempt):
         method="POST",
         headers={
             "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
             "x-legion-key-id": key_id,
             "x-legion-timestamp": timestamp,
             "x-legion-nonce": nonce,
@@ -347,6 +365,11 @@ def post_once(hook_url, key_id, secret, payload, rule_id, attempt):
             log(f"OK rule={rule_id} status={response.status} attempt={attempt} {body}")
             return "ok", response.status
     except urllib.error.HTTPError as exc:
+        if blocked_by_cdn(exc):
+            log(f"ERROR rule={rule_id} status={exc.code} attempt={attempt} blocked by Cloudflare before it reached Legion "
+                "(bot protection / challenge). Add a WAF skip rule for /api/security-events/webhook -- "
+                "DEPLOY-ONLINE.md section 12.5. The event is kept and re-sent automatically.")
+            return "hold", None
         detail = exc.read().decode("utf-8", "replace")[:300]
         log(f"ERROR rule={rule_id} status={exc.code} attempt={attempt} {detail}")
         return ("retry" if exc.code >= 500 or exc.code in RETRYABLE_STATUS else "fatal"), exc.code

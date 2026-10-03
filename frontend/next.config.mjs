@@ -24,6 +24,9 @@ if (apiUrl.startsWith("https://") && !isDev) {
 const nextConfig = {
   reactStrictMode: true,
   output: "standalone",
+  // A second build next to the normal one (ops/tests/e2e-turnstile.mjs builds
+  // with a Turnstile site key without touching .next). Default unchanged.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   poweredByHeader: false,
   async headers() {
     return [{ source: "/:path*", headers }];

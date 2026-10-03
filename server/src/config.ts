@@ -307,6 +307,14 @@ export const config = {
    *  so only non-browser tooling needs this. Off by default. */
   wsAllowMissingOrigin: process.env.WS_ALLOW_MISSING_ORIGIN === "true",
   /**
+   * Cloudflare Turnstile (turnstile.ts). With a secret key set, sign-in,
+   * sign-up, password-reset and resend-verification requests must carry a
+   * solved challenge; the dashboard needs the matching SITE key at build time
+   * (NEXT_PUBLIC_TURNSTILE_SITE_KEY). Unset: off.
+   */
+  turnstileSecretKey: process.env.TURNSTILE_SECRET_KEY || "",
+  turnstileVerifyUrl: process.env.TURNSTILE_VERIFY_URL || "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+  /**
    * A connection that sends no request within this many seconds is closed
    * (edge.ts limitSilentConnections). Matches nginx's client_header_timeout.
    * 0 turns it off.
@@ -326,6 +334,7 @@ export const config = {
    */
   passwordHashWorkers: Math.max(0, Math.floor(Number(process.env.PASSWORD_HASH_WORKERS || 0)) || 0),
   passwordHashMaxPending: Math.max(0, Math.floor(Number(process.env.PASSWORD_HASH_MAX_PENDING || 0)) || 0),
+  passwordHashMaxPriority: Math.max(0, Math.floor(Number(process.env.PASSWORD_HASH_MAX_PRIORITY || 0)) || 0),
   rateLimitRedisTimeoutMs: Math.max(50, Math.floor(Number(process.env.RATE_LIMIT_REDIS_TIMEOUT_MS || 250)) || 250),
   /** Failed logins for one account (any address) before it is slowed down, per 15 minutes. */
   loginAccountFailures: Math.max(3, Math.floor(Number(process.env.LOGIN_ACCOUNT_FAILURES || 20)) || 20),
@@ -434,6 +443,13 @@ if (config.encryptionKeys.trim()) {
   if (!trust.ok) throw new Error(`Refusing to start: ${trust.error}`);
   const origins = parseOrigins(config.corsOrigins);
   if (!origins.ok) throw new Error(`Refusing to start: ${origins.error}`);
+  if (config.turnstileSecretKey && (config.turnstileSecretKey.length < 10 || config.turnstileSecretKey.length > 200 || /\s/.test(config.turnstileSecretKey))) {
+    throw new Error("Refusing to start: TURNSTILE_SECRET_KEY does not look like a Turnstile secret key (Cloudflare dashboard → Turnstile → your widget → Secret key)");
+  }
+  // https, or plain http to this machine (a local verification stub in tests).
+  if (!/^https:\/\/[^\s]+$/.test(config.turnstileVerifyUrl) && !/^http:\/\/(127\.0\.0\.1|localhost)[:/][^\s]*$/.test(config.turnstileVerifyUrl)) {
+    throw new Error("Refusing to start: TURNSTILE_VERIFY_URL must be an https URL");
+  }
   if (!/^\/[A-Za-z0-9_\-./]*$/.test(config.refreshCookiePath) || config.refreshCookiePath.includes("..")) {
     throw new Error("Refusing to start: REFRESH_COOKIE_PATH must be a plain absolute path such as /auth or /api/auth");
   }
@@ -543,6 +559,7 @@ const INTEGER_SETTINGS: Record<string, [min: number, max: number]> = {
   HTTP_FIRST_REQUEST_TIMEOUT_SECONDS: [0, 300],
   PASSWORD_HASH_WORKERS: [0, 64],
   PASSWORD_HASH_MAX_PENDING: [0, 10_000],
+  PASSWORD_HASH_MAX_PRIORITY: [0, 10_000],
 };
 
 export function settingProblems(env: Record<string, string | undefined>): string[] {

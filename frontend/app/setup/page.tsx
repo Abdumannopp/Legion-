@@ -15,6 +15,7 @@ import { completeSetup, getSetupStatus, login, ApiError } from "@/lib/api";
 import LegionLogo from "@/components/brand/LegionLogo";
 import { AuthLanguageSwitcher } from "@/components/AuthShell";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
+import { useTurnstile } from "@/components/Turnstile";
 
 const input =
   "w-full bg-canvas border border-line rounded-lg px-3 py-2.5 text-sm text-ink outline-none focus:border-brand-hover";
@@ -29,6 +30,7 @@ export default function SetupPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const captcha = useTurnstile("setup");
 
   useEffect(() => {
     // Already set up (or hosted mode): this screen has nothing to offer.
@@ -42,12 +44,16 @@ export default function SetupPage() {
     setError(null);
     setLoading(true);
     try {
-      await completeSetup({ setupToken, organisation, email, password });
+      await completeSetup({ setupToken, organisation, email, password }, captcha.token);
+      // A security-check token is single-use; with Turnstile on, signing in
+      // needs a fresh one, so the person signs in on the login page.
+      if (captcha.enabled) { router.push("/login"); return; }
       const result = await login(email, password);
       router.push(result.mfaRequired ? "/login" : "/");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t.common.genericError);
     } finally {
+      captcha.reset();
       setLoading(false);
     }
   }
@@ -116,13 +122,14 @@ export default function SetupPage() {
               required minLength={8} maxLength={128} autoComplete="new-password" className={input} />
           </div>
 
-          {error && (
-            <p className="text-critical text-xs bg-critical/10 rounded-lg px-3 py-2">{error}</p>
+          {captcha.element}
+          {(error || captcha.failed) && (
+            <p className="text-critical text-xs bg-critical/10 rounded-lg px-3 py-2">{error ?? t.common.captchaUnavailable}</p>
           )}
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || !captcha.ready}
             className="w-full flex items-center justify-center gap-2 bg-brand hover:bg-brand-hover shadow-glow disabled:opacity-60 text-white font-medium text-sm py-2.5 rounded-lg transition-colors"
           >
             {loading && <Loader2 size={14} className="animate-spin" />}

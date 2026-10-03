@@ -8,10 +8,12 @@ import { getSetupStatus, login, resendVerification, verifyMfa, ApiError, Deploym
 import LegionLogo from "@/components/brand/LegionLogo";
 import { AuthLanguageSwitcher } from "@/components/AuthShell";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
+import { useTurnstile } from "@/components/Turnstile";
 
 export default function LoginPage() {
   const router = useRouter();
   const { t } = useLanguage();
+  const captcha = useTurnstile("login");
 
   // A brand-new self-hosted install has no accounts to sign in to; send the
   // operator to first-run setup instead of a login form that cannot work.
@@ -46,7 +48,7 @@ export default function LoginPage() {
     setError(null);
     setLoading(true);
     try {
-      const result = await login(email, password);
+      const result = await login(email, password, captcha.token);
       if (result.mfaRequired) {
         setMfaToken(result.mfaToken);
         setPassword(""); // no longer needed; don't keep it in memory
@@ -58,6 +60,8 @@ export default function LoginPage() {
       setUnverified(err instanceof ApiError && err.code === "email_unverified");
       setResent(false);
     } finally {
+      // Single-use: the next attempt (or the resend below) needs a fresh one.
+      captcha.reset();
       setLoading(false);
     }
   }
@@ -210,8 +214,8 @@ export default function LoginPage() {
                 {unverified && (
                   <button
                     type="button"
-                    disabled={resent}
-                    onClick={async () => { await resendVerification(email).catch(() => {}); setResent(true); }}
+                    disabled={resent || !captcha.ready}
+                    onClick={async () => { await resendVerification(email, captcha.token).catch(() => {}); captcha.reset(); setResent(true); }}
                     className="block mt-1.5 text-brand-bright hover:text-ink disabled:text-ink-muted"
                   >
                     {resent ? t.login.confirmationResent : t.login.resendConfirmation}
@@ -220,9 +224,14 @@ export default function LoginPage() {
               </div>
             )}
 
+            {captcha.element}
+            {captcha.failed && (
+              <p className="text-critical text-xs bg-critical/10 rounded-lg px-3 py-2">{t.common.captchaUnavailable}</p>
+            )}
+
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || !captcha.ready}
               className="w-full flex items-center justify-center gap-2 bg-brand hover:bg-brand-hover shadow-glow disabled:opacity-60 text-white font-medium text-sm py-2.5 rounded-lg transition-colors"
             >
               {loading && <Loader2 size={14} className="animate-spin" />}

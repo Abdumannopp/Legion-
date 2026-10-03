@@ -7,6 +7,7 @@ server/data/
 server/.env
 server/dist/
 .next/
+.next-turnstile-e2e/
 __pycache__/
 .pytest_cache/
 *.pyc

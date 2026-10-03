@@ -277,16 +277,32 @@ another visitor is served.
 - Volumetric (L3/L4) attacks cannot be mitigated on the server at all; they need
   a CDN/scrubbing provider in front (DEPLOY-ONLINE.md §12).
 - Sign-in is the cheapest thing for a botnet to crowd: while the flood lasts,
-  most sign-ins get `503 auth_busy` (the rest of the API keeps working). Needs a
-  Cloudflare rate rule / Bot Fight Mode / CAPTCHA (Turnstile — not implemented).
+  most sign-ins from a NEW browser get `503 auth_busy` (the rest of the API keeps
+  working). Mitigated since (see the second addendum): known devices use a
+  priority lane, and Turnstile can be switched on.
 - Per-address limits remain weak against more distinct addresses than the
   tables hold; the blast radius is now bounded (see above) but not zero.
-- Not tested: Cloudflare itself (needs an account) — in particular the
-  recommended WAF skip rule for the Wazuh webhook path, and `ufw` origin
-  lockdown (only the dry-run output is generated and shellchecked).
+- Not tested: Cloudflare itself (needs an account; this sandbox cannot reach
+  challenges.cloudflare.com either) — in particular the recommended WAF skip
+  rule for the Wazuh webhook path, and `ufw` origin lockdown (only the dry-run
+  output is generated and shellchecked). `ops/check-cloudflare-setup.sh` checks
+  the operator's real setup instead.
 - The tests run on one machine; capacity planning needs a load test on the real server.
 
 Reproduce: `node ops/tests/ddos-resilience.mjs [--part a|b]` (in CI at half scale).
+
+### Second addendum 2026-10-02 — sign-in under a botnet, and the Cloudflare tooling
+
+| Change | Evidence |
+|---|---|
+| **Priority lane for known devices.** The hash pool now queues jobs in the main thread and gives each worker one at a time, most urgent first. A browser that completed a sign-in (both factors) holds a signed `legion_device` cookie for that account; its next sign-in to the same account is hashed from a separate lane the flood cannot fill (max 10/min per account). Signed-in password confirmations use it too. | `server/tests/password-hashing.test.ts` (priority overtakes the queue; full normal lane still admits priority; own bound), `password-busy.test.ts` (under a flood: known device → 200, same request without cookie → 503, cookie for another account or forged → 503, cookie never replaces the password), `known-device.test.ts`. ddos-resilience A (41 checks): during the sign-in floods, **new-browser sign-ins 3 of 15 succeeded (12 × 503); known-device sign-ins 5 of 5 succeeded**, 19 of 19 over the whole run. |
+| **Turnstile (optional).** `TURNSTILE_SECRET_KEY` + `NEXT_PUBLIC_TURNSTILE_SITE_KEY`: login, register, forgot-password, resend-verification require a solved challenge, verified before any hash or email and **before the per-account counters** (otherwise challenge-less requests could lock a victim's account or spend its email budget). Fails closed (503), bounded (256 in flight, 5 s). CSP admits challenges.cloudflare.com only when configured. | `server/tests/turnstile.test.ts` (15; the two victim-protection tests fail when the middleware order is reversed — checked), `frontend/lib/csp.test.ts`, `ops/tests/e2e-turnstile.mjs` (22 checks in Chromium against the built dashboard and API; Cloudflare's script and siteverify replaced by stand-ins). |
+| **Wazuh sensor behind Cloudflare.** A Cloudflare challenge/block (403/503 page, `cf-mitigated`) used to be treated as Legion refusing the event → set aside in `dead/`, never re-sent. Now it is spooled and re-sent automatically, with a log line naming the fix; the request carries a named User-Agent instead of `Python-urllib`. | `integrations/test_custom_legion.py` (26) |
+| **`ops/check-cloudflare-setup.sh`**: DNS proxied, answers via Cloudflare, dashboard loads, http→https, webhook not challenged, origin closed (`--server-ip`), on the server: snippet loaded and fresh, timer, ufw, access log shows visitor addresses. | `ops/tests/test-check-cloudflare.sh` (20: a correct setup passes; grey-cloud DNS, challenged webhook, unproxied answers, open origin, site down, Cloudflare addresses in the access log are each caught) |
+
+Still not verified: the real Cloudflare service (Turnstile widget and siteverify,
+WAF rules). An operator can run the same DoS test on their own server
+(DEPLOY-ONLINE.md §12.9) to replace the one-machine numbers with their own.
 
 ## 5. Reproduce
 

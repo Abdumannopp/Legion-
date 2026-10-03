@@ -20,6 +20,8 @@ import { closePool, migrate, query } from "../src/db/pool.js";
 import * as store from "../src/store.js";
 import { truncateAll } from "../src/seed.js";
 import { hashingLoad } from "../src/passwords.js";
+import { issueDeviceToken } from "../src/known-device.js";
+import jwt from "jsonwebtoken";
 
 beforeAll(async () => {
   await migrate();
@@ -27,6 +29,7 @@ beforeAll(async () => {
   const t = randomUUID();
   await query("INSERT INTO tenants (id, name) VALUES ($1, 'Busy Co')", [t]);
   await store.insertUser({ email: "busy@example.com", password_hash: await bcrypt.hash("password123", 12), tenant_id: t, role: "admin", status: "active" });
+  await store.insertUser({ email: "other@example.com", password_hash: await bcrypt.hash("password456", 12), tenant_id: t, role: "analyst", status: "active" });
 });
 afterAll(async () => {
   await closePool();
@@ -63,5 +66,59 @@ describe("a sign-in flood", () => {
     const ok = await request(app).post("/auth/login").send({ username: "busy@example.com", password: "password123" });
     expect(ok.status).toBe(200);
     expect(ok.body.access_token).toBeTruthy();
+  });
+});
+
+describe("a browser that has signed in before goes first (known-device cookie)", () => {
+  const deviceCookie = (res: request.Response) =>
+    ([] as string[]).concat(res.headers["set-cookie"] ?? []).find((c) => c.startsWith("legion_device="))?.split(";")[0];
+  /** Six wrong-password sign-ins saturate the one-slot pool; `probe` arrives while they run. */
+  async function underFlood(probe: () => request.Test) {
+    const flood = Array.from({ length: 6 }, (_, i) => request(app).post("/auth/login").send({ username: "busy@example.com", password: `flood-${i}` }));
+    const started = flood.map((r) => r.then((x) => x));
+    await new Promise((r) => setTimeout(r, 60));
+    const res = await probe();
+    const results = await Promise.all(started);
+    await new Promise((r) => setTimeout(r, 1200));
+    return { res, floodBusy: results.filter((r) => r.status === 503).length };
+  }
+
+  it("a full sign-in sets a device cookie (HttpOnly, SameSite=Strict, scoped to the auth path)", async () => {
+    const ok = await request(app).post("/auth/login").send({ username: "busy@example.com", password: "password123" });
+    expect(ok.status).toBe(200);
+    const raw = ([] as string[]).concat(ok.headers["set-cookie"] ?? []).find((c) => c.startsWith("legion_device="))!;
+    expect(raw).toMatch(/HttpOnly/i);
+    expect(raw).toMatch(/SameSite=Strict/i);
+    expect(raw).toMatch(/Path=\/auth/i);
+  });
+
+  it("during the flood, the right password from a known device signs in; the same request without the cookie is refused 503", async () => {
+    const ok = await request(app).post("/auth/login").send({ username: "busy@example.com", password: "password123" });
+    const cookie = deviceCookie(ok)!;
+    await new Promise((r) => setTimeout(r, 800));
+
+    const known = await underFlood(() => request(app).post("/auth/login").set("Cookie", cookie).send({ username: "busy@example.com", password: "password123" }));
+    expect(known.floodBusy).toBeGreaterThan(0);
+    expect(known.res.status).toBe(200);
+
+    const unknown = await underFlood(() => request(app).post("/auth/login").send({ username: "busy@example.com", password: "password123" }));
+    expect(unknown.res.status).toBe(503);
+  });
+
+  it("the cookie only helps the account it names, and a forged one helps nobody", async () => {
+    const forBusy = issueDeviceToken((await store.findUserByEmail("busy@example.com"))!.id);
+    const other = await underFlood(() => request(app).post("/auth/login").set("Cookie", `legion_device=${forBusy}`).send({ username: "other@example.com", password: "password456" }));
+    expect(other.res.status).toBe(503);
+
+    const otherId = (await store.findUserByEmail("other@example.com"))!.id;
+    const forged = jwt.sign({ sub: otherId, iss: "legion", aud: "legion-known-device" }, "not-the-server-secret", { algorithm: "HS256", header: { alg: "HS256", kid: "device-0000000000000000" } as jwt.JwtHeader });
+    const res = await underFlood(() => request(app).post("/auth/login").set("Cookie", `legion_device=${forged}`).send({ username: "other@example.com", password: "password456" }));
+    expect(res.res.status).toBe(503);
+  });
+
+  it("a valid cookie never replaces the password", async () => {
+    const forOther = issueDeviceToken((await store.findUserByEmail("other@example.com"))!.id);
+    const res = await request(app).post("/auth/login").set("Cookie", `legion_device=${forOther}`).send({ username: "other@example.com", password: "wrong-password" });
+    expect(res.status).toBe(401);
   });
 });

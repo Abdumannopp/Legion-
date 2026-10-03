@@ -456,6 +456,18 @@ export const CATALOG: Record<string, Translation> = {
     ru: "Это тестовое оповещение, отправленное со страницы «Подключения». Оно показывает, как выглядит настоящее оповещение, и что обновления и уведомления до вас доходят. Его можно спокойно закрыть.",
     uz: "Bu «Ulanishlar» sahifasidan yuborilgan sinov ogohlantirishi. U haqiqiy ogohlantirish qanday ko'rinishini hamda yangilanishlar va bildirishnomalar sizga yetib borishini ko'rsatadi. Uni bemalol hal qilingan deb belgilash mumkin.",
   },
+  "Complete the security check and try again.": {
+    ru: "Пройдите проверку безопасности и повторите попытку.",
+    uz: "Xavfsizlik tekshiruvidan o'ting va qayta urinib ko'ring.",
+  },
+  "The security check failed or expired. Complete it again.": {
+    ru: "Проверка безопасности не пройдена или устарела. Пройдите её ещё раз.",
+    uz: "Xavfsizlik tekshiruvi o'tmadi yoki muddati tugadi. Uni qayta bajaring.",
+  },
+  "The security check is temporarily unavailable. Try again in a moment.": {
+    ru: "Проверка безопасности временно недоступна. Повторите чуть позже.",
+    uz: "Xavfsizlik tekshiruvi vaqtincha ishlamayapti. Birozdan keyin qayta urinib ko'ring.",
+  },
   "Too many sign-ins are being processed right now. Try again in a few seconds.": {
     ru: "Сейчас обрабатывается слишком много входов. Повторите через несколько секунд.",
     uz: "Hozir juda ko'p kirish so'rovlari ishlanmoqda. Bir necha soniyadan keyin qayta urinib ko'ring.",
