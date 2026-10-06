@@ -279,6 +279,7 @@ yozilgan bo'ladi.
 | `ECONNREFUSED …:5432` | PostgreSQL ishlamayapti — 2-qadamdagi tekshiruvni bajaring |
 | `password authentication failed` | Parol mos emas — `npm run setup` ni qayta ishga tushiring |
 | `EADDRINUSE` | 8000 yoki 3000 port band — boshqa dastur ishlatayapti |
+| `12 vulnerabilities (… high, … critical)` — `npm install` oxirida | Bu ogohlantirish, xato emas: dasturlarning ochiq bazasida topilgan zaifliklar soni. **Hech narsa qilmang, davom eting** (`npm audit fix --force` ni **ishlatmang** — u dasturni buzishi mumkin). Biz ularni tekshiramiz: server ishlaganda ishlatiladiganlari yangilangan; qolgani faqat dizayn faylini yig'ish vaqtida ishlatiladigan vosita bo'lib, sizning ma'lumotingizga yetmaydi. Bu faqat sizning kompyuteringizda sinov. |
 
 ### Noldan boshlash
 

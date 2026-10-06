@@ -25,5 +25,8 @@
   },
   "optionalDependencies": {
     "embedded-postgres": "^18.4.0-beta.17"
+  },
+  "overrides": {
+    "shell-quote": "^1.11.0"
   }
 }

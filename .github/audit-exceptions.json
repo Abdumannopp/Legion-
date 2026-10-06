@@ -1,0 +1,10 @@
+{
+  "exceptions": [
+    {
+      "advisory": "GHSA-vfj7-8cjw-p6xm",
+      "package": "braces",
+      "reason": "Stack exhaustion when braces expands a pattern with very deeply nested {..} groups. No patched version of braces exists (every release is affected). It is reached only through Tailwind CSS 3's build-time scan of our OWN source files (frontend/tailwind.config.ts `content` globs) via micromatch/fast-glob/chokidar: it never runs in the server or the dashboard at runtime, and no user input reaches it. The way out is Tailwind CSS 4, which drops it; that is a visual migration (class defaults changed), planned separately.",
+      "expires": "2027-01-31"
+    }
+  ]
+}

@@ -57,8 +57,12 @@ jobs:
           node-version: 22
       # Fails the build on high/critical advisories. The docs once claimed
       # "0 vulnerabilities" while a critical Next.js RCE sat in the lockfile;
-      # a claim nobody re-checks goes stale silently.
-      - run: npm audit --package-lock-only --audit-level=high
+      # a claim nobody re-checks goes stale silently. A real advisory with no
+      # fix that cannot affect us may be accepted in .github/audit-exceptions.json
+      # — with a reason and an expiry date, after which this fails again.
+      - name: The gate itself (self-test)
+        run: bash ops/tests/test-audit-gate.sh
+      - run: node .github/scripts/audit-gate.mjs
 
   agent-identity:
     name: Agent identity module
