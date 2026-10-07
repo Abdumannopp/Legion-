@@ -275,6 +275,7 @@ yozilgan bo'ladi.
 | `'tsx' is not recognized` yoki `Dependencies are not installed` | `npm install` bajarilmagan — avval shuni ishga tushiring |
 | `The bundled PostgreSQL is installed but incomplete` | npm o'rnatish skriptini bloklagan — pastdagi izohga qarang |
 | `Could not start the database` | Xabar ostida **"What the database reported"** bo'limi bor — sabab o'sha yerda. Windows'da ko'pincha Visual C++ runtime yetishmaydi: https://aka.ms/vs/17/release/vc_redist.x64.exe |
+| `Execution of PostgreSQL by a user with administrative permissions is not permitted` | Qora oyna **administrator** sifatida ochilgan. Uni yoping; `legion` papkasining manzil satriga `powershell` deb yozib oddiy oyna oching; `Remove-Item -Recurse -Force .legion-testdb`, keyin `npm run try`. Yana shu xato chiqsa (kompyuter hamma narsani administrator qilib ochadi): `runas /trustlevel:0x20000 "cmd /k cd /d C:\legion && npm run try"` — yangi oyna ochiladi, uni yopmang. |
 | `Refusing to start: JWT_SECRET…` | Sozlash bajarilmagan — `npm run setup` |
 | `ECONNREFUSED …:5432` | PostgreSQL ishlamayapti — 2-qadamdagi tekshiruvni bajaring |
 | `password authentication failed` | Parol mos emas — `npm run setup` ni qayta ishga tushiring |

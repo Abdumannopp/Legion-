@@ -227,6 +227,31 @@ const capture = (line) => {
   if (pgOutput.length > 60) pgOutput.shift();
 };
 
+/**
+ * PostgreSQL refuses to run with administrator rights. On Windows that is the
+ * commonest first-run failure — an "Administrator" terminal, or an account with
+ * UAC switched off — and its message alone does not say what to do.
+ */
+function adminHint() {
+  if (!pgOutput.some((line) => /administrative permissions|must be started under an unprivileged user|root.*not permitted/i.test(line))) return "";
+  const win = process.platform === "win32";
+  return [
+    "",
+    c.yellow("  The database will not run with administrator rights — this terminal has them."),
+    ...(win
+      ? [
+          "  1. Close this window. Open the legion folder in File Explorer, type",
+          "     powershell in the address bar and press Enter (do NOT use \"Run as administrator\").",
+          `  2. ${c.cyan("Remove-Item -Recurse -Force .legion-testdb")}   then   ${c.cyan("npm run try")}`,
+          "  Still the same? This computer opens everything as administrator. Start it as a",
+          "  basic user instead (a new window opens; keep it open):",
+          `     ${c.cyan(`runas /trustlevel:0x20000 "cmd /k cd /d ${root} && npm run try"`)}`,
+        ]
+      : ["  Run it as your normal user, not root or with sudo."]),
+    "",
+  ].join("\n");
+}
+
 function pgDiagnostics() {
   if (!pgOutput.length) return "  (the database produced no output at all)";
   return pgOutput.slice(-15).map((line) => `    ${line}`).join("\n");
@@ -260,6 +285,7 @@ if (firstRun) {
       "",
       "  What the database reported:",
       pgDiagnostics(),
+      adminHint(),
       "",
       "  Two common causes:",
       "    - npm blocked the package's install step (see below)",
@@ -274,12 +300,14 @@ await postgres.start().catch((error) =>
     "",
     "  What the database reported:",
     pgDiagnostics(),
+    adminHint(),
     "",
     `  Port ${PORT} may already be in use, or the folder`,
     `  ${STATE_DIR}`,
     "  may be damaged — deleting it starts over:",
     "",
-    `    ${c.cyan(process.platform === "win32" ? "rmdir /s /q .legion-testdb" : "rm -rf .legion-testdb")}`,
+    // PowerShell (what people open from the folder's address bar) has no `rmdir /s /q`.
+    `    ${c.cyan(process.platform === "win32" ? "Remove-Item -Recurse -Force .legion-testdb" : "rm -rf .legion-testdb")}`,
     `    ${c.cyan("npm run try")}`,
     "",
     ...(process.platform === "win32"
