@@ -5,6 +5,8 @@ yozilgan — agar boshqacha ko'rinsa, o'sha yerda to'xtang.
 
 Avval o'z kompyuteringizda sinang. Server keyin.
 
+> **Docker Desktop bor bo'lsa**, bu qo'llanmaning o'rniga [DOCKER-WINDOWS.md](DOCKER-WINDOWS.md) ni bajaring.
+
 ---
 
 ## Eng tez yo'l — bitta buyruq

@@ -1,0 +1,22 @@
+# Keep the build context small, and keep secrets and local data OUT of images.
+.git
+**/node_modules
+**/.next
+**/.next-turnstile-e2e
+**/dist
+**/coverage
+.legion-testdb
+backups
+*.zip
+*.md
+docs
+
+# Secrets: never baked into an image. Configuration reaches the containers
+# through docker-compose environment variables instead.
+.env
+.env.*
+!.env.example
+!.env.local.example
+**/.env
+**/.env.*
+**/.legion-setup-token

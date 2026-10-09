@@ -47,6 +47,27 @@ jobs:
       - name: Cloudflare setup checker catches each misconfiguration
         run: bash ops/tests/test-check-cloudflare.sh
 
+  # The Docker path a non-technical customer takes: install.sh generates the
+  # secrets, builds both images and starts the stack. Catches a broken
+  # Dockerfile, a missing build input, or an unsafe default before a customer does.
+  docker:
+    name: Docker stack builds, starts and answers (install.sh)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Legion the way DOCKER-WINDOWS.md describes
+        run: bash install.sh
+      - name: The API and the dashboard answer
+        run: |
+          curl -fsS http://localhost:8000/health
+          curl -fsS -o /dev/null http://localhost:3000/login
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --tail=200
+      - name: Stop and remove the stack
+        if: always()
+        run: docker compose down -v
+
   dependencies:
     name: Known vulnerabilities in the lockfile
     runs-on: ubuntu-latest
