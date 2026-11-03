@@ -15,21 +15,21 @@ afterEach(async () => { await env?.t.pool.end(); env = undefined; });
 const setup = async (...a: Parameters<typeof skillEnv>) => (env = await skillEnv(...a));
 
 describe("discovery and explicit assignment", () => {
-  it("people see the catalogue: thirteen skills, each with version, schemas, capabilities and the permissions they need", async () => {
+  it("people see the catalogue: fourteen skills, each with version, schemas, capabilities and the permissions they need", async () => {
     const e = await setup();
     const res = await request(e.t.app).get("/skills").set(as("anna"));
     expect(res.status).toBe(200);
     const byName = Object.fromEntries(res.body.skills.map((s: { name: string }) => [s.name, s]));
     expect(Object.keys(byName).sort()).toEqual([
       "account_activity_watch", "ai_security_red_team", "alert_analysis", "attack_investigation", "containment_candidates",
-      "data_exfiltration_hunt", "exposure_review", "incident_response", "security_reporting", "threat_detection",
+      "data_exfiltration_hunt", "exposure_review", "incident_response", "security_reporting", "threat_coverage", "threat_detection",
       "threat_intelligence", "triage_priority", "vulnerability_analysis",
     ]);
     // Each skill names the Legion agent it belongs to.
     expect(Object.fromEntries(Object.entries(byName).map(([n, d]) => [n, (d as { agent: string }).agent]))).toEqual({
       threat_detection: "Sentinel", account_activity_watch: "Sentinel",
       attack_investigation: "Hunter", threat_intelligence: "Hunter", data_exfiltration_hunt: "Hunter",
-      vulnerability_analysis: "Guardian", ai_security_red_team: "Guardian", exposure_review: "Guardian",
+      vulnerability_analysis: "Guardian", ai_security_red_team: "Guardian", exposure_review: "Guardian", threat_coverage: "Guardian",
       alert_analysis: "Oracle", security_reporting: "Oracle", triage_priority: "Oracle",
       incident_response: "Executor", containment_candidates: "Executor",
     });

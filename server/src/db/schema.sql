@@ -586,7 +586,7 @@ CREATE INDEX IF NOT EXISTS alerts_tenant_source_ip_idx ON alerts (tenant_id, sou
 CREATE TABLE IF NOT EXISTS attack_campaigns (
   tenant_id    uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   id           text        NOT NULL,
-  rule         text        NOT NULL CHECK (rule IN ('rapid_chain', 'wide_sweep', 'swarm', 'velocity', 'ai_manipulation')),
+  rule         text        NOT NULL,
   -- What the campaign is about: the attacking address, or the attacked host.
   subject      text        NOT NULL CHECK (length(subject) BETWEEN 1 AND 255),
   status       text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed')),
@@ -602,6 +602,12 @@ CREATE TABLE IF NOT EXISTS attack_campaigns (
 );
 -- At most one ACTIVE campaign per rule and subject: concurrent instances
 -- detecting the same thing converge on one row.
+-- The rules, widened as detection grows. NOT VALID: every existing row is
+-- already one of these, so no scan or long lock is needed on upgrade.
+ALTER TABLE attack_campaigns DROP CONSTRAINT IF EXISTS attack_campaigns_rule_check;
+ALTER TABLE attack_campaigns ADD CONSTRAINT attack_campaigns_rule_check CHECK (rule IN (
+  'rapid_chain', 'wide_sweep', 'swarm', 'velocity', 'ai_manipulation',
+  'ransomware', 'mailbox_takeover', 'phishing_execution', 'supply_chain', 'slow_intrusion')) NOT VALID;
 CREATE UNIQUE INDEX IF NOT EXISTS attack_campaigns_active_uniq
   ON attack_campaigns (tenant_id, rule, subject) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS attack_campaigns_tenant_seen_idx ON attack_campaigns (tenant_id, last_seen DESC);

@@ -64,6 +64,9 @@ export { SkillRuntime, recordsOutsideTenant, type SkillInvocationResult } from "
 export { SkillAssignments, type SkillAssignment } from "./skills/assignments.js";
 export { BUILTIN_SKILLS, createBuiltinRegistry } from "./skills/builtin/index.js";
 export { RED_TEAM_CATEGORIES } from "./skills/builtin/red-team.js";
+export { THREATS, THREAT_SIGNS, THREAT_SOURCES, ACTIVITY_AFTER_INSTALL, threatSigns, strongThreats, type Threat, type ThreatSign } from "./skills/threats.js";
+export { assessCoverage, type CoverageEvent, type CoverageStatus, type ThreatCoverage } from "./skills/coverage.js";
+export { readEvent, STAGES, type Stage } from "./skills/knowledge.js";
 export {
   SKILL_CAPABILITIES, SkillError, type SkillCapability, type SkillContext, type SkillDataSource, type SkillDefinition, type SkillModel,
   type SecurityEvent, type Asset, type IntelResult, type Vulnerability,

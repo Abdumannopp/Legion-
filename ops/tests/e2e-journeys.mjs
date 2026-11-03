@@ -223,6 +223,16 @@ async function main() {
   await shot(page, "incident");
 
   // ---------------------------------------------------------------------------
+  console.log("▶ 6b. the seven most dangerous attack types, said plainly");
+  await page.goto(`${WEB}/defense`);
+  await sees(page, "defense page lists the attack types", "The seven most dangerous attack types");
+  for (const name of ["Ransomware", "Business email compromise (BEC)", "Phishing", "DDoS", "AI deception (deepfakes)", "Cyber espionage", "Supply-chain attack"]) {
+    await sees(page, `coverage row: ${name}`, name);
+  }
+  await sees(page, "where Legion is blind, it says so and what to connect", "To see it, connect:");
+  await sees(page, "deepfake calls are honestly only partly visible", "Partly visible");
+  await shot(page, "defense-coverage");
+
   console.log("▶ 7. first AI agent");
   await page.goto(`${WEB}/agents`);
   await sees(page, "agents page explains what Legion does for agents", "Legion checks every action your AI agents take");

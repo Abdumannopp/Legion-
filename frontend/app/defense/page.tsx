@@ -8,12 +8,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Ban, Loader2, Radar, ShieldAlert, ShieldCheck, Zap } from "lucide-react";
+import { Ban, Eye, EyeOff, Loader2, Radar, ShieldAlert, ShieldCheck, TriangleAlert, Zap } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import ErrorNotice from "@/components/ErrorNotice";
 import {
-  ApiError, AttackCampaign, AutoResponseSettings, IpBlock,
-  blockAddress, getAutoResponse, getBlocks, getCampaigns, getMe, isLoggedIn, unblockAddress, updateAutoResponse,
+  ApiError, AttackCampaign, AutoResponseSettings, IpBlock, ThreatCoverage,
+  blockAddress, getAutoResponse, getBlocks, getCampaigns, getCoverage, getMe, isLoggedIn, unblockAddress, updateAutoResponse,
 } from "@/lib/api";
 import { palette } from "@/lib/theme";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
@@ -32,6 +32,7 @@ export default function DefensePage() {
   const [draft, setDraft] = useState<AutoResponseSettings | null>(null);
   const [campaigns, setCampaigns] = useState<AttackCampaign[]>([]);
   const [blocks, setBlocks] = useState<IpBlock[]>([]);
+  const [coverage, setCoverage] = useState<{ windowDays: number; threats: ThreatCoverage[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -44,6 +45,8 @@ export default function DefensePage() {
       const [me, s, c, b] = await Promise.all([getMe(), getAutoResponse(), getCampaigns(), getBlocks(true)]);
       setIsAdmin(me.role === "admin");
       setSettings(s); setDraft(s); setCampaigns(c); setBlocks(b);
+      // Coverage is extra: the page still works if it cannot be read.
+      getCoverage().then(setCoverage).catch(() => {});
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) { router.push("/login"); return; }
       setError(err);
@@ -150,6 +153,35 @@ export default function DefensePage() {
                   </div>
                 )}
               </section>
+
+              {/* The seven most dangerous attack types */}
+              {coverage && (
+                <section className={card} data-testid="coverage">
+                  <h2 className="text-ink font-medium flex items-center gap-2 mb-1"><Eye size={16} color={palette.brandBright} />{d.coverage.title}</h2>
+                  <p className="text-ink-faint text-xs mb-3 leading-relaxed">{d.coverage.intro(coverage.windowDays)}</p>
+                  <ul className="divide-y divide-line">
+                    {coverage.threats.map((t) => {
+                      const tone = t.status === "detected" ? "bg-critical/15 text-critical" : t.status === "watching" ? "bg-success/15 text-success" : t.status === "partial" ? "bg-warning/15 text-warning" : "bg-line text-ink-muted";
+                      const Icon = t.status === "detected" ? TriangleAlert : t.status === "blind" ? EyeOff : Eye;
+                      return (
+                        <li key={t.threat} className="py-3" data-testid={`coverage-${t.threat}`}>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-ink text-sm font-medium">{d.coverage.names[t.threat] ?? t.threat}</span>
+                            <span className={`inline-flex items-center gap-1 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded ${tone}`}>
+                              <Icon size={11} />{d.coverage.status[t.status] ?? t.status}
+                            </span>
+                            {t.detections > 0 && <span className="text-xs text-ink-faint">{d.coverage.detections(t.detections)}{t.lastSeen ? ` · ${timeAgo(t.lastSeen, locale)}` : ""}</span>}
+                          </div>
+                          <p className="text-ink-muted text-xs mt-1 leading-relaxed">{d.coverage.does[t.threat]}</p>
+                          {(t.status === "blind" || t.status === "partial") && (
+                            <p className="text-ink-faint text-[11px] mt-1 leading-relaxed">{d.coverage.connect} {d.coverage.sources[t.threat]}</p>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              )}
 
               {/* Campaigns */}
               <section className={card}>

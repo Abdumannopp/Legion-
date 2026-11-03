@@ -994,3 +994,16 @@ export function assignSkill(identityId: string, skill: string): Promise<SkillAss
 export function unassignSkill(identityId: string, skill: string): Promise<unknown> {
   return request(`/skills/assignments/${encodeURIComponent(identityId)}/${encodeURIComponent(skill)}`, { method: "DELETE" });
 }
+
+// ---- The seven most dangerous attack types: what Legion sees -----------------
+export type ThreatName = "ransomware" | "bec" | "phishing" | "ddos" | "ai_deception" | "espionage" | "supply_chain";
+export interface ThreatCoverage {
+  threat: ThreatName;
+  status: "detected" | "watching" | "blind" | "partial";
+  detections: number;
+  lastSeen: string | null;
+  eventIds: string[];
+}
+export function getCoverage(): Promise<{ windowDays: number; eventsAnalyzed: number; threats: ThreatCoverage[] }> {
+  return request("/security/coverage");
+}

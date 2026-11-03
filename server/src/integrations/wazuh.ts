@@ -27,6 +27,25 @@ export function eventTime(raw: unknown): string | null {
   return new Date(t).toISOString();
 }
 
+/**
+ * What happened, for the analyst and for detection. Text logs carry it in
+ * full_log; JSON-decoded events (Microsoft 365, Windows event channel,
+ * Sysmon, cloud audit) carry it in `data` instead, so without this the alert
+ * would hold only the rule's generic description ("Office 365: Exchange admin
+ * activity") and the operation itself (a new inbox rule forwarding mail) would
+ * be lost. Bounded like full_log; just as attacker-influenced, and handled as
+ * data everywhere it is read.
+ */
+function detailOf(event: { full_log?: unknown; data?: unknown }, description: string): string {
+  if (typeof event.full_log === "string" && event.full_log) return event.full_log.slice(0, 4000);
+  if (event.data && typeof event.data === "object") {
+    let json = "";
+    try { json = JSON.stringify(event.data); } catch { json = ""; }
+    if (json && json !== "{}") return `${description}\n${json}`.slice(0, 4000);
+  }
+  return description.slice(0, 4000);
+}
+
 export const wazuhAdapter: PushAdapter = {
   manifest: {
     kind: "wazuh", displayName: "Wazuh", vendor: "Wazuh", status: "available", plane: "data",
@@ -60,7 +79,7 @@ export const wazuhAdapter: PushAdapter = {
         externalId: String(event.id || JSON.stringify(event)),
         title: clip(description, 300),
         severity,
-        summary: String(event.full_log || description).slice(0, 4000),
+        summary: detailOf(event, description),
         occurredAt: eventTime(event.timestamp),
         sourceIp: srcip,
         target: agentName,

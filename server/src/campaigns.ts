@@ -15,6 +15,22 @@
  *                    logs ("ignore previous instructions", "mark as benign",
  *                    hidden characters) — an attacker who expects AI triage.
  *
+ * And the most damaging attack types, by what they leave in the logs
+ * (signs: packages/agent-identity/src/skills/threats.ts):
+ *
+ *   ransomware          shadow copies deleted, recovery disabled, a ransom note,
+ *                       or a mass of file changes on one host within minutes.
+ *   mailbox_takeover    business email compromise: mail forwarded or hidden by
+ *                       a new rule, an app given mailbox access, the second
+ *                       factor removed, payment details changed, impersonation.
+ *   phishing_execution  an Office document started a script, a macro ran, a
+ *                       malicious link was clicked.
+ *   supply_chain        a signature or checksum failed, a malicious package, or
+ *                       a software install followed by attacker activity.
+ *   slow_intrusion      cyber espionage: on one host over days, persistence
+ *                       plus command-and-control, exfiltration or credential
+ *                       dumping — quiet, patient, the opposite of rapid_chain.
+ *
  * Each detection becomes one campaign row and ONE alert (source
  * 'legion-correlation', agent 'Hunter'), however many further events it
  * absorbs. A campaign silent for QUIET_MS is over; activity after that starts a
@@ -26,19 +42,31 @@
  */
 import { randomBytes } from "node:crypto";
 import { isIP } from "node:net";
+import { ACTIVITY_AFTER_INSTALL, assessCoverage, readEvent, threatSigns, type ThreatCoverage, type SecurityEvent, type ThreatSign } from "@legion/agent-identity";
 import { clip, manipulationSignals } from "./ai-safety.js";
 import { queryAll, queryOne } from "./db/pool.js";
+import { userFromLog } from "./log-fields.js";
 import * as outbox from "./outbox.js";
 import type { Alert, Severity } from "./types.js";
 
 export const CORRELATION_SOURCE = "legion-correlation";
-export type CampaignRule = "rapid_chain" | "wide_sweep" | "swarm" | "velocity" | "ai_manipulation";
+export const CAMPAIGN_RULES = [
+  "rapid_chain", "wide_sweep", "swarm", "velocity", "ai_manipulation",
+  "ransomware", "mailbox_takeover", "phishing_execution", "supply_chain", "slow_intrusion",
+] as const;
+export type CampaignRule = (typeof CAMPAIGN_RULES)[number];
 
 export const THRESHOLDS = {
   rapid_chain: { windowMinutes: 15, techniques: 3 },
   wide_sweep: { windowMinutes: 10, targets: 5 },
   swarm: { windowMinutes: 10, sources: 10 },
   velocity: { windowMinutes: 5, alerts: 30 },
+  /** File changes on one host that look like encryption in progress. */
+  ransomware: { windowMinutes: 10, fileChanges: 50 },
+  /** An install, then attacker activity on the same host. */
+  supply_chain: { windowMinutes: 60 },
+  /** Espionage: stages spread over days on one host. */
+  slow_intrusion: { days: 7, minHours: 6, stages: 3 },
 } as const;
 /** A campaign with no new activity for this long is over. */
 export const QUIET_MS = 60 * 60_000;
@@ -162,6 +190,118 @@ function manipulation(alert: Alert): Detection | null {
   };
 }
 
+const strong = (signs: ThreatSign[], ...threats: ThreatSign["threat"][]) => signs.filter((s) => s.strong && threats.includes(s.threat));
+const labels = (signs: ThreatSign[]) => [...new Set(signs.map((s) => s.label))];
+
+/** Attack types one alert shows on its own. */
+function threatDetections(alert: Alert): Detection[] {
+  const signs = threatSigns(`${alert.title}\n${alert.summary}`);
+  if (!signs.length) return [];
+  const techniques = parentTechniques([alert.mitre_technique]);
+  const host = alert.target ?? alert.source_ip ?? alert.id;
+  const base = { alertCount: 1, sources: alert.source_ip ? [alert.source_ip] : [], targets: alert.target ? [alert.target] : [], techniques, minutes: 0, sourceIp: alert.source_ip, target: alert.target };
+  const found: Detection[] = [];
+  const ransom = strong(signs, "ransomware");
+  if (ransom.length) found.push({ ...base, rule: "ransomware", subject: host, signals: labels(ransom) });
+  const mailbox = strong(signs, "bec", "ai_deception");
+  if (mailbox.length) {
+    const account = userFromLog(alert.summary) ?? userFromLog(alert.title);
+    found.push({ ...base, rule: "mailbox_takeover", subject: account ?? host, signals: labels(mailbox) });
+  }
+  const phish = strong(signs, "phishing");
+  if (phish.length) found.push({ ...base, rule: "phishing_execution", subject: host, signals: labels(phish) });
+  const supply = strong(signs, "supply_chain");
+  if (supply.length) found.push({ ...base, rule: "supply_chain", subject: host, signals: labels(supply) });
+  return found;
+}
+
+const FILE_CHANGE_SQL = "(integrity checksum changed|file (was )?(modified|deleted|added|created|renamed))";
+
+/** Encryption in progress: a mass of file changes on one host within minutes. */
+async function massFileChanges(tenantId: string, target: string): Promise<Detection[]> {
+  const w = THRESHOLDS.ransomware;
+  const row = await queryOne<{ n: number }>(
+    `SELECT count(*)::int AS n FROM alerts
+      WHERE tenant_id = $1 AND target = $2 AND source <> $3
+        AND created_at >= now() - interval '1 day'
+        AND ${EVENT_TIME} >= now() - make_interval(mins => $4)
+        AND title ~* $5`,
+    [tenantId, target, CORRELATION_SOURCE, w.windowMinutes, FILE_CHANGE_SQL],
+  );
+  const n = row?.n ?? 0;
+  if (n < w.fileChanges) return [];
+  return [{
+    rule: "ransomware", subject: target, alertCount: n, sources: [], targets: [target], techniques: ["T1486"], minutes: w.windowMinutes,
+    sourceIp: null, target, signals: [`${n} file changes in ${w.windowMinutes} minutes`],
+  }];
+}
+
+/** A software install followed, on the same host, by attacker activity. */
+async function installThenActivity(tenantId: string, alert: Alert): Promise<Detection[]> {
+  if (!alert.target || !ACTIVITY_AFTER_INSTALL.test(`${alert.title}\n${alert.summary}`)) return [];
+  const w = THRESHOLDS.supply_chain;
+  const rows = await queryAll<{ id: string; title: string; summary: string }>(
+    `SELECT id, title, left(summary, 2000) AS summary FROM alerts
+      WHERE tenant_id = $1 AND target = $2 AND source <> $3 AND id <> $4
+        AND created_at >= now() - interval '1 day'
+        AND ${EVENT_TIME} >= now() - make_interval(mins => $5)
+        AND ${EVENT_TIME} <= $6
+      ORDER BY created_at DESC LIMIT 200`,
+    [tenantId, alert.target, CORRELATION_SOURCE, alert.id, w.windowMinutes, alert.occurred_at ?? alert.created_at],
+  );
+  const install = rows.find((r) => threatSigns(`${r.title}\n${r.summary}`).some((s) => s.id === "software_install"));
+  if (!install) return [];
+  return [{
+    rule: "supply_chain", subject: alert.target, alertCount: 2, sources: alert.source_ip ? [alert.source_ip] : [], targets: [alert.target],
+    techniques: ["T1195", ...parentTechniques([alert.mitre_technique])], minutes: w.windowMinutes, sourceIp: alert.source_ip, target: alert.target,
+    signals: [`software installed (${clip(install.title, 120)}), then: ${clip(alert.title, 120)}`],
+  }];
+}
+
+const ESPIONAGE_STAGES = new Set(["persistence", "command_and_control", "exfiltration", "credential_access"]);
+
+function stagesOf(r: { id: string; title: string; summary: string; mitre_technique: string | null }): string[] {
+  const reading = readEvent({
+    id: r.id, tenantId: "x", title: r.title, summary: r.summary, severity: "low", createdAt: new Date().toISOString(), source: "x",
+    mitreTechniques: parentTechniques([r.mitre_technique]), ruleGroups: [],
+  } as SecurityEvent);
+  const stages = new Set<string>(reading.stages);
+  for (const s of threatSigns(`${r.title}\n${r.summary}`)) {
+    if (s.id === "credential_dumping") stages.add("credential_access");
+    if (s.id === "c2_beacon") stages.add("command_and_control");
+    if (s.id === "persistence") stages.add("persistence");
+  }
+  return [...stages];
+}
+
+/** Espionage: on one host, over days, persistence plus a way to control it or take data. */
+async function slowIntrusion(tenantId: string, alert: Alert): Promise<Detection[]> {
+  if (!alert.target) return [];
+  const own = stagesOf({ id: alert.id, title: alert.title, summary: alert.summary, mitre_technique: alert.mitre_technique });
+  if (!own.some((s) => ESPIONAGE_STAGES.has(s))) return [];
+  const w = THRESHOLDS.slow_intrusion;
+  const rows = await queryAll<{ id: string; t: Date; title: string; summary: string; mitre_technique: string | null; source_ip: string | null }>(
+    `SELECT id, ${EVENT_TIME} AS t, title, left(summary, 2000) AS summary, mitre_technique, source_ip FROM alerts
+      WHERE tenant_id = $1 AND target = $2 AND source <> $3
+        AND created_at >= now() - make_interval(days => $4)
+      ORDER BY created_at DESC LIMIT 2000`,
+    [tenantId, alert.target, CORRELATION_SOURCE, w.days + 1],
+  );
+  const staged = rows.map((r) => ({ r, stages: stagesOf(r) })).filter((x) => x.stages.length);
+  const stages = new Set(staged.flatMap((x) => x.stages));
+  const hasPersistence = stages.has("persistence");
+  const hasControl = stages.has("command_and_control") || stages.has("exfiltration") || stages.has("credential_access");
+  if (!hasPersistence || !hasControl || stages.size < w.stages) return [];
+  const times = staged.map((x) => new Date(x.r.t).getTime());
+  const hours = (Math.max(...times) - Math.min(...times)) / 3_600_000;
+  if (hours < w.minHours) return [];
+  return [{
+    rule: "slow_intrusion", subject: alert.target, alertCount: staged.length, sources: distinct(staged.map((x) => x.r.source_ip)),
+    targets: [alert.target], techniques: parentTechniques(staged.map((x) => x.r.mitre_technique)), minutes: Math.round(hours * 60),
+    sourceIp: null, target: alert.target, signals: [...stages].sort(),
+  }];
+}
+
 function distinct(values: Array<string | null>): string[] {
   return [...new Set(values.filter((v): v is string => typeof v === "string" && v.length > 0))].sort();
 }
@@ -174,6 +314,7 @@ const list = (xs: string[], n = 8) => (xs.length > n ? `${xs.slice(0, n).join(",
 
 const SEVERITY: Record<CampaignRule, Severity> = {
   rapid_chain: "critical", swarm: "critical", wide_sweep: "high", velocity: "high", ai_manipulation: "high",
+  ransomware: "critical", mailbox_takeover: "high", phishing_execution: "high", supply_chain: "high", slow_intrusion: "critical",
 };
 
 /** The announcing alert's wording. English, like every sensor alert title. */
@@ -212,6 +353,39 @@ export function describe(d: Detection): { title: string; summary: string } {
         summary: `An event contains text written to instruct an AI system rather than a person (${(d.signals ?? []).join(", ")}). `
           + "Attackers plant such text in usernames, URLs, user agents or file names, expecting an AI to triage the logs and be told to ignore them. "
           + "Legion does not follow instructions found in alert data, but the attempt itself shows a deliberate attacker who knows AI is watching.",
+      };
+    case "ransomware":
+      return {
+        title: `Ransomware activity on ${d.subject}`,
+        summary: `Signs of ransomware on ${d.subject}: ${list(d.signals ?? [])}. `
+          + "Ransomware deletes the way back (shadow copies, recovery) and then encrypts files; minutes matter. "
+          + "Isolate the host from the network now (keep it powered on), take backups offline, and check other hosts for the same signs. Do not pay before talking to your incident responder.",
+      };
+    case "mailbox_takeover":
+      return {
+        title: `Possible mailbox takeover (business email compromise): ${d.subject}`,
+        summary: `Signs that someone controls the mailbox or payments of ${d.subject}: ${list(d.signals ?? [])}. `
+          + "Business email compromise ends in a payment to the attacker: a forwarding or hiding rule, an app with mailbox access, a removed second factor, or changed bank details come before it. "
+          + "Reset the password, revoke sessions and app consents, remove the rule, and confirm any payment change by calling a known number — never one from the email. A familiar voice or video on a call can be synthetic.",
+      };
+    case "phishing_execution":
+      return {
+        title: `Phishing payload ran on ${d.subject}`,
+        summary: `${list(d.signals ?? [])} on ${d.subject}. A document or link from a phishing message has started code. `
+          + "Isolate the workstation, reset the user's password, find the message and remove it from every mailbox, and block the link or sender.",
+      };
+    case "supply_chain":
+      return {
+        title: `Possible supply-chain compromise on ${d.subject}`,
+        summary: `${list(d.signals ?? [])} on ${d.subject}. Attackers who compromise a vendor, an update or a package reach every customer that trusts it. `
+          + "Stop the update or package on other hosts, check the publisher's advisory, compare hashes with the vendor's, and look for the same activity elsewhere.",
+      };
+    case "slow_intrusion":
+      return {
+        title: `Long-running intrusion (possible espionage) on ${d.subject}`,
+        summary: `Over ${Math.max(1, Math.round(d.minutes / 60))} hours, ${d.subject} showed ${list(d.signals ?? [])} across ${d.alertCount} alert(s). `
+          + "Espionage stays quiet and patient: it sets up persistence, keeps a control channel and takes data over days. "
+          + "Treat the host as compromised: preserve evidence, find the persistence and the control channel, and check which data and accounts it reached.",
       };
   }
 }
@@ -266,6 +440,13 @@ export async function correlate(tenantId: string, alerts: Alert[], opts: { realt
   for (const ip of distinct(fresh.map((a) => a.source_ip)).filter((ip) => isIP(ip) !== 0)) detections.push(...await bySource(tenantId, ip));
   for (const target of distinct(fresh.map((a) => a.target))) detections.push(...await byTarget(tenantId, target));
   for (const a of fresh) { const m = manipulation(a); if (m) detections.push(m); }
+  for (const a of fresh) {
+    detections.push(...threatDetections(a));
+    detections.push(...await installThenActivity(tenantId, a));
+    detections.push(...await slowIntrusion(tenantId, a));
+  }
+  const changedHosts = distinct(fresh.filter((a) => a.target && threatSigns(a.title).some((s) => s.id === "file_change")).map((a) => a.target));
+  for (const target of changedHosts) detections.push(...await massFileChanges(tenantId, target));
 
   const created: Campaign[] = [];
   for (const d of detections) {
@@ -284,4 +465,23 @@ export async function listCampaigns(tenantId: string, limit = 100): Promise<Camp
        FROM attack_campaigns WHERE tenant_id = $1 ORDER BY last_seen DESC LIMIT $2`,
     [tenantId, Math.min(Math.max(1, limit), 500), QUIET_MS / 1000],
   );
+}
+
+export const COVERAGE_DAYS = 7;
+
+/**
+ * For each of the seven most dangerous attack types: detected, watching (the
+ * right data arrives, no sign found) or blind (the data never arrives). Read
+ * from the workspace's own recent alerts; the newest 2000 at most.
+ */
+export async function threatCoverage(tenantId: string): Promise<{ windowDays: number; eventsAnalyzed: number; threats: ThreatCoverage[] }> {
+  const rows = await queryAll<{ id: string; created_at: Date; title: string; summary: string }>(
+    `SELECT id, created_at, title, left(summary, 4000) AS summary FROM alerts
+      WHERE tenant_id = $1 AND source <> $2 AND created_at >= now() - make_interval(days => $3)
+      ORDER BY created_at DESC LIMIT 2000`,
+    [tenantId, CORRELATION_SOURCE, COVERAGE_DAYS],
+  );
+  const events = rows.map((r) => ({ id: r.id, createdAt: new Date(r.created_at).toISOString(), text: `${r.title}\n${r.summary}` }));
+  const aiTextAttempts = events.filter((e) => manipulationSignals(e.text).length > 0).map((e) => e.id);
+  return { windowDays: COVERAGE_DAYS, eventsAnalyzed: rows.length, threats: assessCoverage(events, { aiTextAttempts }) };
 }

@@ -75,6 +75,23 @@ describe("Wazuh is one adapter", () => {
     expect(findingAlertId(tA, "wazuh", "1727650000.123")).toBe(legacy);
   });
 
+  it("an event without full_log (Microsoft 365, Windows event channel) keeps what happened, from its data", () => {
+    const o365 = { id: "o1", rule: { level: 5, description: "Office 365: Exchange admin activity" }, agent: { name: "wazuh-manager" },
+      data: { office365: { Operation: "New-InboxRule", UserId: "dana@acme.example", Parameters: [{ Name: "ForwardTo", Value: "pay@evil.example" }] } } };
+    const r = wazuhAdapter.normalize({ provider: "wazuh", event: o365 });
+    if (r.skipped) throw new Error("expected a finding");
+    expect(r.findings[0]!.summary).toMatch(/^Office 365: Exchange admin activity\n/);
+    expect(r.findings[0]!.summary).toContain('"Operation":"New-InboxRule"');
+    expect(r.findings[0]!.summary).toContain("pay@evil.example");
+    // Bounded, and full_log still wins when present.
+    const big = wazuhAdapter.normalize({ event: { rule: { description: "d" }, data: { x: "y".repeat(10_000) } } });
+    if (big.skipped) throw new Error("expected a finding");
+    expect(big.findings[0]!.summary.length).toBeLessThanOrEqual(4000);
+    const text = wazuhAdapter.normalize({ event: { ...o365, full_log: "raw line" } });
+    if (text.skipped) throw new Error("expected a finding");
+    expect(text.findings[0]!.summary).toBe("raw line");
+  });
+
   it("never throws on hostile input, and skips what is not an alert", () => {
     for (const junk of [null, 42, "x", [], {}, { event: null }, { rule: {} }, { event: { rule: { description: 7, level: "NaN" } } },
       { event: { rule: { description: "d" }, data: { srcip: "not-an-ip" }, agent: { name: "x".repeat(10_000) } } }]) {

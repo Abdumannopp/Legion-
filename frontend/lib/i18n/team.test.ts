@@ -4,7 +4,7 @@ import { team } from "./ns/team";
 const SKILLS = [
   "threat_detection", "account_activity_watch", "attack_investigation", "threat_intelligence", "data_exfiltration_hunt",
   "vulnerability_analysis", "ai_security_red_team", "exposure_review", "alert_analysis", "security_reporting",
-  "triage_priority", "incident_response", "containment_candidates",
+  "triage_priority", "incident_response", "containment_candidates", "threat_coverage",
 ];
 const AGENTS = ["Sentinel", "Hunter", "Guardian", "Oracle", "Executor"];
 

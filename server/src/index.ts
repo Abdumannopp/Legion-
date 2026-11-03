@@ -27,7 +27,7 @@ import { databaseRoleDecision } from "./db/provision.js";
 import { SETUP_LOCK_KEY, consumeSetupToken, ensureSetupToken, removeSetupTokenFile, setupBanner } from "./setup-token.js";
 import { WEBHOOK_REJECTION_DETAIL, isKeyId } from "./webhook-auth.js";
 import { webhookFailureGate } from "./webhook-guard.js";
-import { listCampaigns } from "./campaigns.js";
+import { listCampaigns, threatCoverage } from "./campaigns.js";
 import * as blocklist from "./blocklist.js";
 import * as webhookCredentials from "./webhook-credentials.js";
 import { hashOneTimeToken, newOneTimeToken } from "./auth-tokens.js";
@@ -2047,6 +2047,10 @@ app.post(WEBHOOK_PATH,
 
 app.get("/security/campaigns", auth, async (req: AuthedRequest, res) => {
   res.json({ campaigns: await listCampaigns(req.user!.tenant_id) });
+});
+
+app.get("/security/coverage", auth, async (req: AuthedRequest, res) => {
+  res.json(await threatCoverage(req.user!.tenant_id));
 });
 
 app.get("/security/blocks", auth, async (req: AuthedRequest, res) => {

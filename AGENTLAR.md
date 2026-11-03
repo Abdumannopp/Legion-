@@ -7,17 +7,18 @@ Dashboardda ularni **Legion jamoasi** sahifasida ko'rasiz.
 |---|---|---|
 | **Sentinel** (kuzatadi) | Kirishlar, hisoblar va serverlardagi hodisalarni kuzatadi | `threat_detection`, `account_activity_watch` |
 | **Hunter** (qidiradi) | Alohida hodisalarni bitta hujumga bog'laydi, ma'lumot o'g'irlanishini qidiradi | `attack_investigation`, `threat_intelligence`, `data_exfiltration_hunt` |
-| **Guardian** (himoya qiladi) | Hujumga ochiq joylarni oldindan topadi, Legion'ning o'z himoyasini sinaydi | `vulnerability_analysis`, `ai_security_red_team`, `exposure_review` |
+| **Guardian** (himoya qiladi) | Hujumga ochiq joylarni oldindan topadi, Legion'ning o'z himoyasini sinaydi | `vulnerability_analysis`, `ai_security_red_team`, `exposure_review`, `threat_coverage` |
 | **Oracle** (tushuntiradi) | Ogohlantirishni oddiy tilda tushuntiradi, nimani birinchi ko'rishni aytadi | `alert_analysis`, `security_reporting`, `triage_priority` |
 | **Executor** (javobni tayyorlaydi) | Keyingi qadamni dalillari bilan tayyorlaydi, **inson tasdiqlaydi** | `incident_response`, `containment_candidates` |
 
-## Beshta yangi skill
+## Yangi skill'lar
 
 | Skill | Nima qiladi |
 |---|---|
 | `account_activity_watch` (Sentinel) | O'g'irlangan yoki topilgan hisobni sezadi: ko'p xatodan keyingi kirish, bitta hisobning ko'p manzildan ishlatilishi, bitta manzildan ko'p hisobni sinash (password spraying), kirishdan keyin yangi huquq yoki yangi hisob |
 | `data_exfiltration_hunt` (Hunter) | Ma'lumot avval yig'ilib (baza nusxasi, arxiv), keyin yuborilishini topadi. Hajm va tashqi manzil ham ko'rsatiladi. Faqat yig'ish (masalan tungi zaxira nusxa) xabar qilinmaydi |
 | `exposure_review` (Guardian) | Aktivlarni hujumga ochiqligi bo'yicha tartiblaydi: internetdan ko'rinadimi, ma'lum zaifliklari bormi, tuzatilgan versiya bormi. Eng arzon tuzatishlar birinchi |
+| `threat_coverage` (Guardian) | Eng xavfli yetti hujum turi bo'yicha: Legion nimani aniqladi, nimani kuzatyapti va qayerda ma'lumot kelmagani uchun ko'rmaydi (HUJUMLAR.md) |
 | `triage_priority` (Oracle) | Ochiq ogohlantirishlarni tartiblaydi: hozir / bugun / shu hafta. Har bir ball sababi bilan |
 | `containment_candidates` (Executor) | Bloklashga arziydigan hujumchi manzillar va dalillari. Ichki (private) manzillar "bloklab bo'lmaydi" ro'yxatida. Ko'p manzilli hujumda "bloklash yordam bermaydi" deb ogohlantiradi |
 

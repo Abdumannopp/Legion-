@@ -9,6 +9,7 @@ import { exposureReview } from "./exposure-review.js";
 import { incidentResponse } from "./incident-response.js";
 import { aiSecurityRedTeam } from "./red-team.js";
 import { securityReporting } from "./security-reporting.js";
+import { threatCoverage } from "./threat-coverage.js";
 import { triagePriority } from "./triage-priority.js";
 import { threatDetection } from "./threat-detection.js";
 import { threatIntelligence } from "./threat-intelligence.js";
@@ -28,6 +29,7 @@ export const BUILTIN_SKILLS = [
   exposureReview,
   triagePriority,
   containmentCandidates,
+  threatCoverage,
 ] as const;
 
 /** The skills this Legion build ships. Each registration is validated (read-only capabilities, strict input). */
@@ -37,4 +39,4 @@ export function createBuiltinRegistry(): SkillRegistry {
   return r;
 }
 
-export { accountActivityWatch, containmentCandidates, dataExfiltrationHunt, exposureReview, triagePriority, alertAnalysis, attackInvestigation, incidentResponse, aiSecurityRedTeam, securityReporting, threatDetection, threatIntelligence, vulnerabilityAnalysis };
+export { accountActivityWatch, containmentCandidates, threatCoverage, dataExfiltrationHunt, exposureReview, triagePriority, alertAnalysis, attackInvestigation, incidentResponse, aiSecurityRedTeam, securityReporting, threatDetection, threatIntelligence, vulnerabilityAnalysis };
