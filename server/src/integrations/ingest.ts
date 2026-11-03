@@ -7,6 +7,7 @@
  * same finding sent twice — a sensor retrying, a poll re-run after a crash,
  * two instances racing — is one alert.
  */
+import { stripNul } from "../text.js";
 import { createHmac } from "node:crypto";
 import { clip } from "../ai-safety.js";
 import { config } from "../config.js";
@@ -21,6 +22,23 @@ export function findingAlertId(tenantId: string, source: string, externalId: str
   return `SEC-${createHmac("sha256", config.webhookSecret || "legion-webhook-event-id").update(`${tenantId}:${source}:${externalId}`).digest("hex").slice(0, 16).toUpperCase()}`;
 }
 
+/**
+ * A sensor's text, made safe to store: no NUL characters (the database refuses
+ * them, which would turn one odd event into a request that can never succeed).
+ */
+export function cleanFinding(f: Finding): Finding {
+  return {
+    ...f,
+    externalId: stripNul(f.externalId),
+    title: stripNul(f.title),
+    summary: stripNul(f.summary),
+    sourceIp: f.sourceIp === null ? null : stripNul(f.sourceIp),
+    target: f.target === null ? null : stripNul(f.target),
+    mitre: f.mitre.map(stripNul),
+    asset: f.asset ? { name: stripNul(f.asset.name), ip: f.asset.ip === null ? null : stripNul(f.asset.ip), os: f.asset.os === null ? null : stripNul(f.asset.os) } : f.asset,
+  };
+}
+
 export interface IngestReport { ingested: string[]; duplicates: string[]; campaigns?: string[] }
 
 export async function ingestFindings(
@@ -28,7 +46,8 @@ export async function ingestFindings(
 ): Promise<IngestReport> {
   const report: IngestReport = { ingested: [], duplicates: [] };
   const stored: Alert[] = [];
-  for (const f of findings) {
+  for (const raw of findings) {
+    const f = cleanFinding(raw);
     const id = findingAlertId(tenantId, source, f.externalId);
     const alert = await outbox.insertAlertAndNotify({
       id, tenant_id: tenantId, title: clip(f.title, 300), severity: f.severity, agent: "Sentinel", status: "open",

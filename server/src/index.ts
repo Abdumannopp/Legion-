@@ -30,6 +30,7 @@ import { webhookFailureGate } from "./webhook-guard.js";
 import { listCampaigns, threatCoverage } from "./campaigns.js";
 import * as blocklist from "./blocklist.js";
 import * as payments from "./payments.js";
+import { rejectNul } from "./text.js";
 import * as webhookCredentials from "./webhook-credentials.js";
 import { hashOneTimeToken, newOneTimeToken } from "./auth-tokens.js";
 import { describeReport, migrateSecretsAtRest } from "./secrets-migration.js";
@@ -80,6 +81,8 @@ app.use(cookieParser());
 // Error messages and confirmations in the reader's language (Accept-Language).
 // Before the rate limiter so its "too many attempts" answer is covered too.
 app.use(localizeResponses);
+// After the body, form and cookie parsers and after localisation: the answer is translated like any other.
+app.use(rejectNul);
 
 /**
  * Paths the general API limiter must not touch.
@@ -2062,7 +2065,7 @@ app.post("/security/blocks", requireRole("admin"), async (req: AuthedRequest, re
   const body = parse(z.object({
     ip: z.string().min(2).max(45),
     minutes: z.number().int().min(5).max(10_080).optional(),
-    reason: z.string().max(500).optional(),
+    reason: z.string().max(500).refine((r) => !r.includes("\u0000"), "Text must not contain control characters").optional(),
   }), req.body, res); if (!body) return;
   const settings = await blocklist.getSettings(req.user!.tenant_id);
   try {

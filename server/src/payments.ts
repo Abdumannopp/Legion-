@@ -42,16 +42,20 @@ export const ATTACK_WINDOW_DAYS = 7;
 export const MAILBOX_WINDOW_HOURS = 48;
 export const RELEASE_VALID_DAYS = 7;
 
+// A payment is money: odd text is refused, never silently changed (an account
+// with a hidden character would otherwise be recognised as a different account).
+const text = (min: number, max: number) => z.string().refine((s) => !s.includes("\u0000"), "Text must not contain control characters").pipe(z.string().trim().min(min).max(max));
+
 export const paymentCheckSchema = z.strictObject({
   action: z.literal("payment-check"),
   beneficiary: z.strictObject({
-    account: z.string().trim().min(4).max(64),
-    name: z.string().trim().max(200).optional(),
+    account: text(4, 64),
+    name: text(0, 200).optional(),
   }),
   amount: z.number().finite().nonnegative().max(1e13),
   currency: z.string().trim().regex(/^[A-Za-z0-9]{2,10}$/),
-  requestedBy: z.string().trim().min(1).max(200).optional(),
-  reference: z.string().trim().max(200).optional(),
+  requestedBy: text(1, 200).optional(),
+  reference: text(0, 200).optional(),
 });
 export type PaymentCheckInput = z.infer<typeof paymentCheckSchema>;
 
