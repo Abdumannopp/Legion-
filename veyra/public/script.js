@@ -5,6 +5,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   bindDashboardRange();
   bindShipmentActions();
   bindShipmentDetails();
+  bindTeamManagement();
+  await loadConfig();
   await restoreSession();
   fetchDashboardData();
   loadAdminConsole();
@@ -12,6 +14,60 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 let dashboardDays = 7;
+
+/* ---------- region settings (units, currency, equipment, sign-up) ---------- */
+const DEFAULT_EQUIPMENT = ['Dry Van', 'Tent / Curtainsider', 'Reefer', 'Flatbed', 'LTL', 'Expedited'];
+window.VeyraConfig = { weightUnit: 'kg', currency: 'USD', equipment: DEFAULT_EQUIPMENT, registration: 'open' };
+
+async function loadConfig() {
+  try {
+    const response = await fetch('/api/config');
+    if (response.ok) window.VeyraConfig = { ...window.VeyraConfig, ...(await response.json()) };
+  } catch (_) {
+    // Keep defaults; the API will still validate everything.
+  }
+  applyConfig();
+}
+
+function applyConfig() {
+  const config = window.VeyraConfig;
+  document.querySelectorAll('[data-weight-unit]').forEach((node) => { node.textContent = config.weightUnit; });
+  document.querySelectorAll('[data-currency]').forEach((node) => { node.textContent = config.currency; });
+  document.querySelectorAll('select[data-equipment-select]').forEach((select) => {
+    const placeholder = createTextElement('option', '', 'Choose equipment');
+    placeholder.value = '';
+    select.replaceChildren(placeholder, ...config.equipment.map((item) => createTextElement('option', '', item)));
+  });
+  // Closed sign-up: hide "Create one"; accounts come from an administrator.
+  document.getElementById('authToggle')?.classList.toggle('hidden', config.registration === 'closed');
+}
+
+function formatMoney(value, digits = 2) {
+  if (value === null || value === undefined || value === '' || Number.isNaN(Number(value))) return '—';
+  try {
+    return Number(value).toLocaleString('en-US', { style: 'currency', currency: window.VeyraConfig.currency, maximumFractionDigits: digits, minimumFractionDigits: digits });
+  } catch (_) {
+    return `${Number(value).toLocaleString('en-US', { maximumFractionDigits: digits })} ${window.VeyraConfig.currency}`;
+  }
+}
+
+function formatEta(value) {
+  if (!value) return '';
+  const [day, time] = String(value).split('T');
+  return `${formatDay(day)}${time ? ` ${time}` : ''}`;
+}
+
+// SQLite CURRENT_TIMESTAMP is UTC "YYYY-MM-DD HH:MM:SS"; show it in the viewer's local time.
+function formatTimestamp(value) {
+  if (!value) return '';
+  const date = new Date(`${String(value).replace(' ', 'T')}Z`);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function hasPermission(permission) {
+  const permissions = getCurrentPermissions();
+  return permissions.includes('*') || permissions.includes(permission);
+}
 
 function notify(message, type = 'info') {
   if (window.VeyraViews?.toast) window.VeyraViews.toast(message, type === 'error' ? 'error' : type === 'info' ? 'info' : 'ok');
@@ -133,8 +189,8 @@ function getCurrentPermissions() {
   if (Array.isArray(user?.permissions)) return user.permissions;
   const rolePermissions = {
     admin: ['*'],
-    operations: ['analytics:read', 'dashboard:read', 'carriers:read', 'carriers:write', 'shipments:read', 'shipments:create', 'shipments:status', 'shipments:dispatch', 'users:read'],
-    operator: ['dashboard:read', 'carriers:read', 'shipments:read', 'shipments:create']
+    operations: ['analytics:read', 'dashboard:read', 'carriers:read', 'carriers:write', 'shipments:read', 'shipments:create', 'shipments:status', 'shipments:dispatch', 'shipments:track', 'users:read'],
+    operator: ['dashboard:read', 'carriers:read', 'shipments:read', 'shipments:create', 'shipments:track']
   };
   return rolePermissions[user?.role] || [];
 }
@@ -162,7 +218,7 @@ function bindAuthFlow() {
     if (isSignedIn()) return; // anchor scrolls to the app
     event.preventDefault();
     openAuth();
-    if (!isRegister) authSwitch?.click();
+    if (!isRegister && window.VeyraConfig.registration !== 'closed') authSwitch?.click();
   });
   document.getElementById('signedOutLogin')?.addEventListener('click', openAuth);
 
@@ -220,7 +276,7 @@ function bindAuthFlow() {
         authNameField.style.display = isRegister ? 'grid' : 'none';
       }
       if (authInviteField) {
-        authInviteField.style.display = isRegister ? 'grid' : 'none';
+        authInviteField.style.display = isRegister && window.VeyraConfig.registration === 'invite' ? 'grid' : 'none';
       }
     });
   }
@@ -366,12 +422,14 @@ function allowedShipmentStatuses(status) {
     // 'Dispatched' is set only by the Dispatch control (carrier + rate required).
     Sourcing: ['Pending Approval', 'Cancelled'],
     'Pending Approval': ['Sourcing', 'Cancelled'],
-    Dispatched: ['In Transit', 'Exception'],
+    Dispatched: ['In Transit', 'Exception', 'Cancelled'],
     'In Transit': ['Delivered', 'Exception'],
     Exception: ['In Transit', 'Cancelled']
   };
   return transitions[status] || [];
 }
+
+const TRACKABLE_STATUSES = ['Dispatched', 'In Transit', 'Exception'];
 
 function getAuthHeaders() {
   return { 'Content-Type': 'application/json' };
@@ -433,10 +491,11 @@ async function loadAdminConsole() {
       const userList = document.getElementById('userList');
       const userCountLabel = document.getElementById('userCountLabel');
       if (userList) {
+        const canManage = hasPermission('users:write');
         const userRows = usersData.users.map((user) => {
           const role = String(user.role || 'unknown');
           const safeRoleClass = ['admin', 'operations', 'operator'].includes(role) ? role : 'unknown';
-          const row = createTextElement('div', 'admin-row');
+          const row = createTextElement('div', `admin-row${user.active === false ? ' is-inactive' : ''}`);
           row.dataset.role = role;
           const userMeta = createTextElement('div', 'user-meta');
           userMeta.append(createTextElement('span', 'user-avatar', (user.name || '').charAt(0).toUpperCase()));
@@ -446,11 +505,33 @@ async function loadAdminConsole() {
             createTextElement('small', '', user.email)
           );
           userMeta.append(identity);
-          row.append(userMeta, createTextElement('span', `user-role ${safeRoleClass}`, role));
+          const controls = createTextElement('div', 'user-controls');
+          const isSelf = Number(user.id) === Number(storedUser?.id);
+          if (canManage && !isSelf) {
+            const roleSelect = document.createElement('select');
+            roleSelect.className = 'status-select';
+            roleSelect.setAttribute('aria-label', `Role for ${user.name}`);
+            [['operator', 'Operator'], ['operations', 'Operations'], ['admin', 'Admin']].forEach(([value, label]) => {
+              const option = createTextElement('option', '', label);
+              option.value = value;
+              roleSelect.append(option);
+            });
+            roleSelect.value = role;
+            roleSelect.addEventListener('change', () => updateTeamMember(user, { role: roleSelect.value }, roleSelect));
+            const accessButton = createTextElement('button', 'btn btn-ghost small', user.active === false ? 'Enable' : 'Disable');
+            accessButton.type = 'button';
+            accessButton.addEventListener('click', () => updateTeamMember(user, { active: user.active === false }, accessButton));
+            controls.append(roleSelect, accessButton);
+          } else {
+            controls.append(createTextElement('span', `user-role ${safeRoleClass}`, role));
+          }
+          if (user.active === false) controls.prepend(createTextElement('span', 'user-role inactive', 'Disabled'));
+          row.append(userMeta, controls);
           return row;
         });
         userList.replaceChildren(...userRows);
       }
+      document.getElementById('addUserToggle')?.classList.toggle('hidden', !hasPermission('users:write'));
       if (userCountLabel) userCountLabel.textContent = `${usersData.users.length} users`;
     }
 
@@ -472,7 +553,7 @@ async function loadAdminConsole() {
         const inTransitCount = analyticsData?.statuses?.['In Transit'] || 0;
         const exceptionCount = stats.exceptions || 0;
         const averageRate = Number(stats.averageRate || 0);
-        const bookedRateLabel = averageRate ? averageRate.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }) : '-';
+        const bookedRateLabel = averageRate ? formatMoney(averageRate, 0) : '-';
 
         const metrics = [
           ['Total loads', Number(stats.totalShipments || 0), `${Number(stats.activeShipments || 0)} open`],
@@ -504,7 +585,10 @@ async function loadAdminConsole() {
             createTextElement('small', '', `${shipment.weight || ''} · ${shipment.equipment || ''} · Pickup ${shipment.pickup || ''}`)
           );
           if (shipment.carrierName) {
-            shipmentInfo.append(createTextElement('small', '', `Carrier: ${shipment.carrierName} · $${Number(shipment.rate || 0).toFixed(2)}`));
+            shipmentInfo.append(createTextElement('small', '', `Carrier: ${shipment.carrierName} · ${formatMoney(shipment.rate)}${shipment.truckPlate ? ` · ${shipment.truckPlate}` : ''}`));
+          }
+          if (shipment.lastLocation && TRACKABLE_STATUSES.includes(shipment.status)) {
+            shipmentInfo.append(createTextElement('small', '', `Now: ${shipment.lastLocation}${shipment.eta ? ` · ETA ${formatEta(shipment.eta)}` : ''}`));
           }
 
           const shipmentMeta = document.createElement('div');
@@ -559,7 +643,7 @@ async function loadAdminConsole() {
             rateInput.type = 'number';
             rateInput.min = '1';
             rateInput.step = '0.01';
-            rateInput.placeholder = 'Rate $';
+            rateInput.placeholder = `Rate ${window.VeyraConfig.currency}`;
             rateInput.setAttribute('aria-label', `Rate for ${shipment.id}`);
 
             const dispatchButton = createTextElement('button', 'dispatch-button', 'Dispatch');
@@ -669,6 +753,68 @@ async function loadAdminConsole() {
   } catch (error) {
     console.warn('Admin console unavailable:', error.message);
   }
+}
+
+async function updateTeamMember(user, change, control) {
+  const describe = change.role ? `change ${user.name}'s role to ${change.role}` : `${change.active ? 'enable' : 'disable'} ${user.name}'s account`;
+  if (!window.confirm(`Do you want to ${describe}? They will be signed out.`)) {
+    await loadAdminConsole();
+    return;
+  }
+  control.disabled = true;
+  try {
+    const response = await fetch(`/api/admin/users/${Number(user.id)}`, {
+      method: 'PATCH',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(change)
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || 'Update failed');
+    notify(`${user.name} updated.`, 'ok');
+  } catch (error) {
+    notify(error.message, 'error');
+  }
+  await loadAdminConsole();
+}
+
+function bindTeamManagement() {
+  const toggle = document.getElementById('addUserToggle');
+  const form = document.getElementById('addUserForm');
+  const message = document.getElementById('addUserMessage');
+  if (!toggle || !form) return;
+  toggle.addEventListener('click', () => {
+    const open = form.classList.toggle('hidden') === false;
+    toggle.setAttribute('aria-expanded', String(open));
+    if (open) form.elements.name.focus();
+  });
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const submit = form.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    message.textContent = '';
+    try {
+      const response = await fetch('/api/admin/users', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          name: form.elements.name.value.trim(),
+          email: form.elements.email.value.trim(),
+          role: form.elements.role.value,
+          password: form.elements.password.value
+        })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Could not create the account');
+      form.reset();
+      form.classList.add('hidden');
+      toggle.setAttribute('aria-expanded', 'false');
+      notify(`${result.user.name} can now sign in with ${result.user.email}. Share the starting password privately.`, 'ok');
+      await loadAdminConsole();
+    } catch (error) {
+      message.textContent = error.message;
+    }
+    submit.disabled = false;
+  });
 }
 
 function resetSignedOutDashboard() {
@@ -834,6 +980,8 @@ function updateDashboard(data) {
   window.VeyraAssistant?.sync(data);
 }
 
+let detailsShipmentId = null;
+
 function bindShipmentDetails() {
   const modal = document.getElementById('shipmentDetailsModal');
   const closeButton = document.getElementById('closeShipmentDetails');
@@ -845,6 +993,36 @@ function bindShipmentDetails() {
   }
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && modal) modal.classList.add('hidden');
+  });
+
+  const trackingForm = document.getElementById('trackingForm');
+  const trackingMessage = document.getElementById('trackingFormMessage');
+  trackingForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!detailsShipmentId) return;
+    const submit = trackingForm.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    trackingMessage.textContent = '';
+    try {
+      const response = await fetch(`/api/shipments/${encodeURIComponent(detailsShipmentId)}/tracking`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          location: trackingForm.elements.location.value.trim(),
+          eta: trackingForm.elements.eta.value || undefined,
+          note: trackingForm.elements.note.value.trim() || undefined
+        })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Location update failed');
+      trackingForm.reset();
+      notify(`Location saved for ${detailsShipmentId}.`, 'ok');
+      await openShipmentDetails(detailsShipmentId);
+      window.VeyraViews?.refresh();
+    } catch (error) {
+      trackingMessage.textContent = error.message;
+    }
+    submit.disabled = false;
   });
 }
 
@@ -858,24 +1036,63 @@ async function openShipmentDetails(shipmentId) {
   const timeline = document.getElementById('shipmentDetailTimeline');
   try {
     const id = encodeURIComponent(shipmentId);
-    const [shipmentResponse, eventsResponse] = await Promise.all([
+    const [shipmentResponse, eventsResponse, trackingResponse] = await Promise.all([
       fetch(`/api/shipments/${id}`, { headers: getAuthHeaders() }),
-      fetch(`/api/shipments/${id}/events`, { headers: getAuthHeaders() })
+      fetch(`/api/shipments/${id}/events`, { headers: getAuthHeaders() }),
+      fetch(`/api/shipments/${id}/tracking`, { headers: getAuthHeaders() })
     ]);
     const shipment = await shipmentResponse.json();
     const events = await eventsResponse.json();
+    const tracking = trackingResponse.ok ? await trackingResponse.json() : { updates: [] };
     if (!shipmentResponse.ok || !eventsResponse.ok) throw new Error('Shipment details unavailable. Sign in and try again.');
+    detailsShipmentId = shipment.id;
 
+    const driver = [shipment.driverName, shipment.driverPhone].filter(Boolean).join(', ');
     const values = {
       customer: shipment.customer,
       reference: shipment.reference,
       route: `${shipment.origin} → ${shipment.destination}`,
       dates: `${shipment.pickup} / ${shipment.delivery}`,
       freight: `${shipment.weight || '-'} / ${shipment.equipment || '-'}`,
-      carrier: shipment.carrierName ? `${shipment.carrierName} / $${Number(shipment.rate || 0).toFixed(2)}` : 'Unassigned',
+      carrier: shipment.carrierName ? `${shipment.carrierName} / ${formatMoney(shipment.rate)}` : 'Unassigned',
+      price: shipment.customerRate !== null && shipment.customerRate !== undefined
+        ? `${formatMoney(shipment.customerRate)}${shipment.margin !== null && shipment.margin !== undefined ? ` / margin ${formatMoney(shipment.margin)}` : ''}`
+        : '',
+      driver: [driver, shipment.truckPlate].filter(Boolean).join(' / '),
+      carrierPhone: shipment.carrierPhone,
+      location: shipment.lastLocation
+        ? `${shipment.lastLocation}${shipment.eta ? ` · ETA ${formatEta(shipment.eta)}` : ''} (${formatTimestamp(shipment.lastTrackedAt)})`
+        : (TRACKABLE_STATUSES.includes(shipment.status) ? 'No location update yet' : ''),
       status: shipment.status,
       tracking: shipment.trackingNumber
     };
+
+    const trackingForm = document.getElementById('trackingForm');
+    const canTrack = hasPermission('shipments:track') && TRACKABLE_STATUSES.includes(shipment.status);
+    trackingForm?.classList.toggle('hidden', !canTrack);
+    const trackingMessage = document.getElementById('trackingFormMessage');
+    if (trackingMessage) trackingMessage.textContent = '';
+    const trackingList = document.getElementById('trackingList');
+    if (trackingList) {
+      const items = (tracking.updates || []).map((entry) => {
+        const item = createTextElement('div', 'detail-timeline-item');
+        const content = document.createElement('div');
+        content.append(
+          createTextElement('strong', '', entry.location),
+          entry.eta ? createTextElement('p', '', `ETA ${formatEta(entry.eta)}`) : '',
+          entry.note ? createTextElement('p', '', entry.note) : '',
+          createTextElement('time', '', `${formatTimestamp(entry.createdAt)}${entry.actorName ? ` · ${entry.actorName}` : ''}`)
+        );
+        item.append(createTextElement('span', 'timeline-marker'), content);
+        return item;
+      });
+      if (!items.length) {
+        items.push(createTextElement('p', 'muted', TRACKABLE_STATUSES.includes(shipment.status)
+          ? 'No location updates yet. Call the driver and log where the truck is.'
+          : 'Location updates start once a truck is booked (Dispatched).'));
+      }
+      trackingList.replaceChildren(...items);
+    }
     Object.entries(values).forEach(([key, value]) => {
       const field = modal.querySelector(`[data-detail="${key}"]`);
       if (field) field.textContent = value || '-';
@@ -890,7 +1107,7 @@ async function openShipmentDetails(shipmentId) {
         content.append(
           createTextElement('strong', '', entry.status),
           createTextElement('p', '', entry.note || ''),
-          createTextElement('time', '', entry.createdAt)
+          createTextElement('time', '', formatTimestamp(entry.createdAt))
         );
         item.append(createTextElement('span', 'timeline-marker'), content);
         return item;

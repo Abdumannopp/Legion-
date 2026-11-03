@@ -84,6 +84,12 @@ npm run prod
 
 Verify `http://localhost:3000/api/health` returns `{"status":"ok"}`. Delete only the disposable test DB when the process is stopped.
 
+## Region and team settings
+
+- `WEIGHT_UNIT` (`kg` or `lb`) and `CURRENCY` (ISO code such as `USD`, `EUR`, `UZS`, `KZT`) set how loads and prices are shown. For large-number currencies raise `MAX_RATE` (for `UZS`, e.g. `10000000000`).
+- Sign-up is **closed** in production. The first administrator signs in with the `INITIAL_ADMIN_*` account and adds the team from **Dashboard → Operations Console → Team Access → Add user**, where roles can also be changed and accounts disabled (takes effect immediately).
+- To let people sign up themselves, set `REGISTRATION_INVITE_CODE` (they need the code and become operators) or, for demos only, `ALLOW_OPEN_REGISTRATION=true`.
+
 ## Before real traffic
 
 - Change the example admin email and all generated placeholder values.

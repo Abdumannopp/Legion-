@@ -14,11 +14,14 @@ A production-style logistics dashboard and backend built with Express and SQLite
 
 ## Shipment operations flow
 
-1. Create a shipment from the dashboard using the New Shipment form.
+This is one truck (FTL) load from order to delivery:
+
+1. Create a shipment with the New Shipment form (weight in the configured unit, optional customer price).
 2. Move the shipment from New to Sourcing, then optionally to Pending Approval.
-3. Select an available carrier and enter the agreed rate to dispatch the load.
-4. Update the load through In Transit to Delivered, or log an Exception.
-5. Use History on a shipment to review its recorded activity.
+3. Dispatch: pick an available carrier, enter the carrier rate, the customer price (margin is shown live), truck plate and driver.
+4. While the truck is on the road, log location updates ("where is the truck now?", ETA, note) from the load's details. Trucks with no update for 12 hours appear in notifications.
+5. Move the load through In Transit to Delivered, or log an Exception. A dispatched load can still be cancelled before pickup.
+6. Use History on a shipment to review its recorded activity.
 
 Allowed progression is enforced by the API. Carriers assigned to dispatched loads are marked Busy and released when the shipment is Delivered or Cancelled.
 
@@ -28,9 +31,13 @@ Allowed progression is enforced by the API. Carriers assigned to dispatched load
 - `PATCH /api/admin/shipments/:id/status` advances an allowed lifecycle state.
 - `POST /api/admin/shipments/:id/dispatch` assigns an available carrier and rate.
 - `GET /api/shipments/:id/events` returns shipment activity history.
+- `GET /api/shipments/:id/tracking` lists location updates; `POST` adds one (`location`, optional `eta` as `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM`, optional `note`) while the load is Dispatched, In Transit or Exception.
+- Dispatch also accepts optional `customerRate`, `driverName`, `driverPhone`, `truckPlate`; shipments return `customerRate`, `margin`, driver/truck fields, `lastLocation` and `eta`.
+- `GET /api/config` (public) returns `weightUnit`, `currency`, `equipment` and the sign-up mode.
+- `POST /api/admin/users` (admin) adds a team member; `PATCH /api/admin/users/:id` changes `role` and/or `active`. Changes sign the user out immediately.
 
 - `GET /api/carriers` lists carriers with load statistics (loads, active, delivered, exceptions, booked revenue, current load).
-- `POST /api/carriers` adds a carrier (`name`, `mode`: Truckload, LTL, Expedited, Reefer, Flatbed, Intermodal).
+- `POST /api/carriers` adds a carrier (`name`, `mode`: Truckload, LTL, Expedited, Reefer, Flatbed, Intermodal; optional `phone`, `contactName`).
 - `PATCH /api/carriers/:id/status` sets a carrier `Available` or `Inactive` (refused while the carrier has an active load).
 - `GET /api/analytics?days=7|30|90` returns KPIs, daily volume, status pipeline, equipment mix, top lanes, top customers and carrier performance.
 
@@ -49,11 +56,11 @@ All operations endpoints require a valid JWT; admin shipment controls require an
 
 ## Role permissions
 
-- `admin`: full access to dashboard, analytics, users, shipments, status changes, dispatch, and carriers.
-- `operations`: dashboard/analytics access, team and shipment reads, shipment creation, status changes, carrier dispatch, and carrier reads and management.
-- `operator`: shipment/dashboard reads, shipment creation, and carrier reads. Analytics, team access, dispatch, and status changes are denied by the API.
+- `admin`: full access, including adding users, changing roles and disabling accounts.
+- `operations`: dashboard/analytics access, team and shipment reads, shipment creation, status changes, carrier dispatch, location updates, and carrier reads and management.
+- `operator` (dispatcher): shipment/dashboard reads, shipment creation, location updates and carrier reads. Analytics, team access, dispatch, and status changes are denied by the API.
 
-Permissions are returned at login and enforced server-side; hiding a UI panel is not the security boundary.
+Permissions are enforced server-side, and the role is read from the database on every request, so an admin's change applies immediately; hiding a UI panel is not the security boundary.
 
 ## Quick start
 
@@ -99,18 +106,22 @@ Render, Railway, and VPS deployment files and setup steps are in [DEPLOYMENT.md]
 - Add HTTPS and proper hosting configuration for production use.
 - For cloud deployments, keep secrets in environment variables, not in code.
 
-## Registration
+## Registration and team
 
-Open registration creates `operator` accounts. Set `REGISTRATION_INVITE_CODE` to require an invite code.
+In production sign-up is closed: the administrator adds people under Team Access → Add user. Set `REGISTRATION_INVITE_CODE` to let people sign up with a code, or `ALLOW_OPEN_REGISTRATION=true` for demos. Self-registered accounts are `operator`. In development (`npm run dev`) sign-up stays open.
+
+## Region settings
+
+`WEIGHT_UNIT` (`kg` default, or `lb`), `CURRENCY` (ISO code, default `USD`) and `MAX_RATE` (largest allowed price) configure one deployment for its market. Equipment types include Tent / Curtainsider, common outside North America.
 
 ## Security & production notes
 
 - **XSS**: the frontend builds DOM with `textContent`/`createElement` only (no `innerHTML`, `eval`, inline scripts or inline handlers); a test scans the sources for these sinks. CSP is `script-src 'self'`.
-- **Auth**: JWT lives only in an HttpOnly, SameSite=Lax cookie (`Secure` in production); sessions are revocable server-side; login is rate-limited per account and per IP; production never seeds demo users.
+- **Auth**: JWT lives only in an HttpOnly, SameSite=Lax cookie (`Secure` in production); sessions are revocable server-side and are revoked when an admin changes or disables the account; login is rate-limited per IP, per account per IP, and per account across all IPs; one bcrypt cost for all hashes (no timing difference between accounts); production never seeds demo users and development listens on 127.0.0.1 only.
 - **Dispatch**: assignment and status changes run in a single SQLite transaction, so two operators cannot book the same carrier or load.
 - **Validation**: strict IDs, ISO dates, positive bounded numbers, 50 kb JSON limit; malformed input returns 400, never a 500.
 - **Errors**: a global handler returns generic messages; details are logged server-side only.
 - **Database**: foreign keys enforced, indexes on hot queries, `npm run db:check` runs `PRAGMA integrity_check` and `foreign_key_check`.
 - **Production start**: `NODE_ENV=production`, `JWT_SECRET` and (first start only) `INITIAL_ADMIN_NAME/EMAIL/PASSWORD` (12+ chars) are required; the server refuses to start without them.
-- **Tests**: `npm test` (27 tests: auth, rate limits, transactions, validation, security headers, carriers, analytics, XSS).
+- **Tests**: `npm test` (43 tests: auth, rate limits, transactions, validation, security headers, carriers, analytics, XSS, truck workflow, team management, production mode).
 - **Dependencies**: `npm audit` reports 0 vulnerabilities at the time of release.

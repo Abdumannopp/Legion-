@@ -7,7 +7,8 @@
    openShipmentDetails).
    ========================================================= */
 (function () {
-  const EQUIPMENT = ['Dry Van', 'Reefer', 'Flatbed', 'LTL', 'Expedited'];
+  const equipmentList = () => window.VeyraConfig?.equipment || ['Dry Van', 'Tent / Curtainsider', 'Reefer', 'Flatbed', 'LTL', 'Expedited'];
+  const weightUnit = () => window.VeyraConfig?.weightUnit || 'kg';
   const MAX_WEIGHT = 1000000;
   const FIELDS = [
     { key: 'origin', label: 'Origin', icon: 'pin', type: 'text' },
@@ -43,7 +44,7 @@
   }
 
   function display(key, value) {
-    if (key === 'weight') return `${Number(value).toLocaleString('en-US')} lb`;
+    if (key === 'weight') return `${Number(value).toLocaleString('en-US')} ${weightUnit()}`;
     if (key === 'pickup' || key === 'delivery') {
       const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value));
       return match ? new Date(Date.UTC(+match[1], +match[2] - 1, +match[3])).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : String(value);
@@ -63,7 +64,7 @@
       if (state.editing) {
         if (field.type === 'select') {
           valueNode = document.createElement('select');
-          EQUIPMENT.forEach((item) => valueNode.append(new Option(item, item)));
+          equipmentList().forEach((item) => valueNode.append(new Option(item, item)));
         } else {
           valueNode = document.createElement('input');
           valueNode.type = field.type;
@@ -88,7 +89,7 @@
     const d = state.draft;
     const prompt = document.getElementById('assistantPrompt');
     if (prompt) {
-      prompt.textContent = `Create a shipment for ${Number(d.weight).toLocaleString('en-US')} lb ${String(d.equipment).toLowerCase()} from ${cityOf(d.origin)} to ${cityOf(d.destination)}, pickup ${display('pickup', d.pickup)}.`;
+      prompt.textContent = `Create a shipment for ${Number(d.weight).toLocaleString('en-US')} ${weightUnit()} ${String(d.equipment).toLowerCase()} from ${cityOf(d.origin)} to ${cityOf(d.destination)}, pickup ${display('pickup', d.pickup)}.`;
     }
   }
 
@@ -162,8 +163,8 @@
     }
     if (!next.origin || !next.destination) return { error: 'Origin and destination are required.' };
     const weight = Number(next.weight);
-    if (!/^\d+$/.test(String(next.weight)) || weight < 1 || weight > MAX_WEIGHT) return { error: `Weight must be a whole number between 1 and ${MAX_WEIGHT.toLocaleString('en-US')} lb.` };
-    if (!EQUIPMENT.includes(next.equipment)) return { error: 'Choose a valid equipment type.' };
+    if (!/^\d+$/.test(String(next.weight)) || weight < 1 || weight > MAX_WEIGHT) return { error: `Weight must be a whole number between 1 and ${MAX_WEIGHT.toLocaleString('en-US')} ${weightUnit()}.` };
+    if (!equipmentList().includes(next.equipment)) return { error: 'Choose a valid equipment type.' };
     const valid = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
     if (!valid(next.pickup) || !valid(next.delivery)) return { error: 'Enter valid pickup and delivery dates.' };
     if (next.delivery < next.pickup) return { error: 'Delivery must be on or after pickup.' };
@@ -209,7 +210,7 @@
         draft.origin = data.route.origin || draft.origin;
         draft.destination = data.route.destination || draft.destination;
         draft.weight = parseWeight(data.route.weight) || draft.weight;
-        if (EQUIPMENT.includes(data.route.equipment)) draft.equipment = data.route.equipment;
+        if (equipmentList().includes(data.route.equipment)) draft.equipment = data.route.equipment;
       }
       state.draft = draft;
     }

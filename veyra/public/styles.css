@@ -1131,3 +1131,69 @@ td:first-child { color: #fff; font-weight: 500; }
 @media (max-width: 640px) {
   .notif-panel { right: -12px; width: calc(100vw - 88px); max-width: 360px; }
 }
+
+/* ===== Truck workflow: location updates, margin, team management ===== */
+.add-carrier-fields { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto; }
+.cell-sub.location-line { color: #7dd3fc; }
+.cell-sub.warn-line { color: var(--amber); }
+.dispatch-margin { margin: 12px 0 0; }
+.dispatch-margin.negative { color: var(--red); font-weight: 600; }
+
+.tracking-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px;
+  margin-bottom: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.tracking-form label, .add-user-form label { display: grid; gap: 6px; font-size: 13px; color: var(--text-2); font-weight: 500; }
+.tracking-form input, .add-user-form input, .add-user-form select {
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line-2);
+  background: #070e1d;
+  color: var(--text);
+  outline: none;
+  color-scheme: dark;
+}
+.tracking-form input:focus, .add-user-form input:focus, .add-user-form select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(37, 99, 255, .25); }
+.tracking-form-footer, .add-user-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.tracking-form-footer .shipment-form-message, .add-user-footer .shipment-form-message { margin: 0; }
+.tracking-list { margin-bottom: 18px; }
+
+.team-head-actions { display: inline-flex; align-items: center; gap: 10px; }
+.add-user-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.add-user-footer { grid-column: 1 / -1; }
+.user-controls { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.user-role.inactive { background: rgba(248, 113, 113, .16); color: #fca5a5; }
+.admin-row.is-inactive .user-meta { opacity: .6; }
+
+@media (max-width: 1080px) {
+  .add-carrier-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 860px) {
+  .add-carrier-fields { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .tracking-form, .add-user-form { grid-template-columns: 1fr; }
+  .shipment-detail-grid { grid-template-columns: 1fr; }
+}
+/* Team rows: the admin box is narrow, so controls wrap under the name instead of being cut off. */
+.admin-row { flex-wrap: wrap; }
+.admin-row .user-meta { flex: 1 1 160px; }
+.admin-row .user-controls { margin-left: auto; }
+.team-head-actions { flex-wrap: wrap; justify-content: flex-end; }
+.mini-metric strong { overflow-wrap: anywhere; }

@@ -19,7 +19,10 @@
     Exception: '#f87171',
     Cancelled: '#64748b'
   };
-  const EQUIPMENT = ['Dry Van', 'Reefer', 'Flatbed', 'LTL', 'Expedited'];
+  const equipmentList = () => window.VeyraConfig?.equipment || ['Dry Van', 'Tent / Curtainsider', 'Reefer', 'Flatbed', 'LTL', 'Expedited'];
+  const TRACKABLE = ['Dispatched', 'In Transit', 'Exception'];
+  // A booked truck nobody has checked on for this long gets a "call the driver" reminder.
+  const STALE_TRACKING_HOURS = 12;
   const CARRIER_MODES = ['Truckload', 'LTL', 'Expedited', 'Reefer', 'Flatbed', 'Intermodal'];
 
   const state = {
@@ -71,9 +74,7 @@
     return permissions.includes('*') || permissions.includes(permission);
   };
   const slug = (value) => String(value || '').toLowerCase().replace(/\s+/g, '-');
-  const money = (value, digits = 0) => (value === null || value === undefined || Number.isNaN(Number(value))
-    ? '—'
-    : Number(value).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: digits, minimumFractionDigits: digits }));
+  const money = (value, digits = 0) => formatMoney(value, digits);
   const pct = (value) => (value === null || value === undefined ? '—' : `${Math.round(Number(value) * 100)}%`);
   const prettyDate = (value) => {
     const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''));
@@ -221,7 +222,7 @@
     const equipmentSelect = el('select', {
       'aria-label': 'Equipment',
       onchange: (event) => { s.equipment = event.target.value; updateShipmentList(); }
-    }, [el('option', { value: '', text: 'All equipment' }), ...EQUIPMENT.map((item) => el('option', { value: item, text: item }))]);
+    }, [el('option', { value: '', text: 'All equipment' }), ...equipmentList().map((item) => el('option', { value: item, text: item }))]);
     equipmentSelect.value = s.equipment;
     const sortSelect = el('select', {
       'aria-label': 'Sort',
@@ -263,7 +264,8 @@
       if (s.status !== 'all' && shipment.status !== s.status) return false;
       if (s.equipment && shipment.equipment !== s.equipment) return false;
       if (!q) return true;
-      return [shipment.id, shipment.reference, shipment.customer, shipment.origin, shipment.destination, shipment.carrierName, shipment.trackingNumber, shipment.status]
+      return [shipment.id, shipment.reference, shipment.customer, shipment.origin, shipment.destination, shipment.carrierName, shipment.trackingNumber, shipment.status,
+        shipment.driverName, shipment.truckPlate, shipment.lastLocation]
         .some((value) => String(value || '').toLowerCase().includes(q));
     });
     const sorters = {
@@ -331,7 +333,18 @@
           el('td', {}, [el('span', { text: prettyDate(shipment.pickup) }), el('small', { class: 'cell-sub', text: `→ ${prettyDate(shipment.delivery)}` })]),
           el('td', {}, [el('span', { text: shipment.weight || '—' }), el('small', { class: 'cell-sub', text: shipment.equipment || '' })]),
           el('td', {}, shipment.carrierName
-            ? [el('span', { text: shipment.carrierName }), el('small', { class: 'cell-sub', text: money(shipment.rate, 2) })]
+            ? [
+              el('span', { text: shipment.carrierName }),
+              el('small', { class: 'cell-sub', text: [money(shipment.rate, 2), shipment.truckPlate].filter(Boolean).join(' · ') }),
+              TRACKABLE.includes(shipment.status)
+                ? el('small', {
+                  class: `cell-sub${shipment.lastLocation ? ' location-line' : ' warn-line'}`,
+                  text: shipment.lastLocation
+                    ? `Now: ${shipment.lastLocation}${shipment.eta ? ` · ETA ${formatEta(shipment.eta)}` : ''}`
+                    : 'No location yet'
+                })
+                : null
+            ]
             : [el('span', { class: 'muted', text: 'Unassigned' })]),
           el('td', {}, statusTag(shipment.status)),
           el('td', {}, actions)
@@ -369,6 +382,9 @@
     dispatchTarget = shipment;
     form.reset();
     message.textContent = '';
+    // Pre-fill the customer price if it was agreed at order intake.
+    if (shipment.customerRate !== null && shipment.customerRate !== undefined) form.elements.customerRate.value = String(shipment.customerRate);
+    updateDispatchMargin();
     document.getElementById('dispatchModalTitle').textContent = `Dispatch ${shipment.id}`;
     document.getElementById('dispatchModalSubtitle').textContent = `${shipment.customer} · ${shipment.origin} → ${shipment.destination} · ${shipment.equipment || ''}`;
     select.replaceChildren(el('option', { value: '', text: 'Loading carriers…' }));
@@ -387,6 +403,23 @@
     }
   }
 
+  // Live "you earn X on this load" line while the dispatcher types prices.
+  function updateDispatchMargin() {
+    const form = document.getElementById('dispatchForm');
+    const line = document.getElementById('dispatchMargin');
+    if (!form || !line) return;
+    const rate = Number(form.elements.rate.value);
+    const price = Number(form.elements.customerRate.value);
+    line.classList.remove('negative');
+    if (!form.elements.rate.value || !form.elements.customerRate.value || !rate || !price) {
+      line.textContent = 'Enter both prices to see your margin.';
+      return;
+    }
+    const margin = price - rate;
+    line.textContent = `Margin: ${money(margin, 2)} (${Math.round((margin / price) * 100)}%)`;
+    line.classList.toggle('negative', margin < 0);
+  }
+
   function bindDispatchModal() {
     const modal = document.getElementById('dispatchModal');
     const form = document.getElementById('dispatchForm');
@@ -394,23 +427,37 @@
     document.getElementById('closeDispatch')?.addEventListener('click', close);
     modal?.addEventListener('click', (event) => { if (event.target === modal) close(); });
     document.addEventListener('keydown', (event) => { if (event.key === 'Escape') close(); });
+    form?.addEventListener('input', updateDispatchMargin);
     form?.addEventListener('submit', async (event) => {
       event.preventDefault();
       if (!dispatchTarget) return;
       const carrierId = Number(form.elements.carrierId.value);
       const rate = Number(form.elements.rate.value);
+      const customerRate = form.elements.customerRate.value ? Number(form.elements.customerRate.value) : undefined;
       const message = document.getElementById('dispatchFormMessage');
       if (!carrierId || !Number.isFinite(rate) || rate <= 0) {
         message.textContent = 'Choose a carrier and enter a positive rate.';
         return;
       }
+      if (customerRate !== undefined && customerRate < rate
+        && !window.confirm('The customer price is lower than the carrier rate, so this load loses money. Book it anyway?')) {
+        return;
+      }
       const submit = form.querySelector('button[type="submit"]');
       submit.disabled = true;
       message.textContent = 'Dispatching…';
+      const optional = (name) => form.elements[name].value.trim() || undefined;
       try {
         await api(`/api/admin/shipments/${encodeURIComponent(dispatchTarget.id)}/dispatch`, {
           method: 'POST',
-          body: JSON.stringify({ carrierId, rate })
+          body: JSON.stringify({
+            carrierId,
+            rate,
+            customerRate,
+            driverName: optional('driverName'),
+            driverPhone: optional('driverPhone'),
+            truckPlate: optional('truckPlate')
+          })
         });
         close();
         toast(`${dispatchTarget.id} dispatched.`);
@@ -440,8 +487,11 @@
         state.shipments.loaded = true;
       }
       const rows = state.view === 'shipments' ? filteredShipments() : state.shipments.list;
-      const header = ['ID', 'Reference', 'Customer', 'Origin', 'Destination', 'Pickup', 'Delivery', 'Weight', 'Equipment', 'Carrier', 'Rate', 'Status', 'Tracking'];
-      const lines = [header, ...rows.map((s) => [s.id, s.reference, s.customer, s.origin, s.destination, s.pickup, s.delivery, s.weight, s.equipment, s.carrierName, s.rate, s.status, s.trackingNumber])]
+      const currency = window.VeyraConfig?.currency || 'USD';
+      const header = ['ID', 'Reference', 'Customer', 'Origin', 'Destination', 'Pickup', 'Delivery', 'Weight', 'Equipment', 'Carrier', `Carrier rate (${currency})`,
+        `Customer price (${currency})`, `Margin (${currency})`, 'Truck plate', 'Driver', 'Driver phone', 'Last location', 'ETA', 'Status', 'Tracking'];
+      const lines = [header, ...rows.map((s) => [s.id, s.reference, s.customer, s.origin, s.destination, s.pickup, s.delivery, s.weight, s.equipment, s.carrierName, s.rate,
+        s.customerRate, s.margin, s.truckPlate, s.driverName, s.driverPhone, s.lastLocation, s.eta, s.status, s.trackingNumber])]
         .map((row) => row.map(csvCell).join(','));
       const blob = new Blob([`﻿${lines.join('\r\n')}`], { type: 'text/csv;charset=utf-8' });
       const link = el('a', { href: URL.createObjectURL(blob), download: `veyra-shipments-${new Date().toISOString().slice(0, 10)}.csv` });
@@ -489,6 +539,8 @@
 
     const nameInput = el('input', { name: 'name', required: true, maxlength: '120', placeholder: 'Carrier company name' });
     const modeSelect = el('select', { name: 'mode', required: true }, [el('option', { value: '', text: 'Choose mode' }), ...CARRIER_MODES.map((mode) => el('option', { text: mode }))]);
+    const phoneInput = el('input', { name: 'phone', type: 'tel', maxlength: '40', placeholder: 'Dispatch phone' });
+    const contactInput = el('input', { name: 'contactName', maxlength: '120', placeholder: 'Contact person' });
     const formMessage = el('p', { class: 'shipment-form-message', role: 'status' });
     const form = el('form', {
       class: `card add-carrier${c.formOpen ? '' : ' hidden'}`,
@@ -501,7 +553,12 @@
         try {
           const result = await api('/api/carriers', {
             method: 'POST',
-            body: JSON.stringify({ name: nameInput.value.trim(), mode: modeSelect.value })
+            body: JSON.stringify({
+              name: nameInput.value.trim(),
+              mode: modeSelect.value,
+              phone: phoneInput.value.trim() || undefined,
+              contactName: contactInput.value.trim() || undefined
+            })
           });
           c.formOpen = false;
           toast(`${result.carrier.name} added to your network.`);
@@ -516,6 +573,8 @@
       el('div', { class: 'add-carrier-fields' }, [
         el('label', {}, ['Name', nameInput]),
         el('label', {}, ['Mode', modeSelect]),
+        el('label', {}, ['Phone', phoneInput]),
+        el('label', {}, ['Contact', contactInput]),
         el('button', { class: 'btn btn-primary small', type: 'submit' }, 'Add carrier')
       ]),
       formMessage
@@ -552,7 +611,10 @@
       return el('article', { class: `card carrier-card ${slug(carrier.status)}` }, [
         el('header', {}, [
           el('span', { class: 'carrier-avatar', text: initials }),
-          el('div', { class: 'carrier-title' }, [el('strong', { text: carrier.name }), el('small', { text: carrier.mode })]),
+          el('div', { class: 'carrier-title' }, [
+            el('strong', { text: carrier.name }),
+            el('small', { text: [carrier.mode, carrier.contactName, carrier.phone].filter(Boolean).join(' · ') })
+          ]),
           el('span', { class: `carrier-status ${slug(carrier.status)}`, text: carrier.status })
         ]),
         el('div', { class: 'carrier-metrics' }, [
@@ -630,8 +692,10 @@
       kpiCard('Pending Approval', stats.pendingApproval ?? 0, 'Waiting for a decision', 'doc', 'amber'),
       kpiCard('Delivery Rate', pct(stats.deliveryRate), 'Delivered of closed loads', 'check-circle', 'green'),
       kpiCard('Exceptions', stats.exceptions ?? 0, `${pct(stats.exceptionRate)} of all loads`, 'alert', 'red'),
-      kpiCard('Booked Revenue', money(stats.bookedRevenue), `${stats.pricedLoads ?? 0} priced loads`, 'chart', 'sky'),
-      kpiCard('Average Rate', money(stats.averageRate), `${stats.availableCarriers ?? 0} of ${stats.totalCarriers ?? 0} carriers available`, 'bolt', 'blue')
+      kpiCard('Carrier Cost Booked', money(stats.bookedRevenue), `${stats.pricedLoads ?? 0} loads · avg ${money(stats.averageRate)}`, 'chart', 'sky'),
+      kpiCard('Gross Margin', money(stats.grossMargin), stats.marginLoads
+        ? `${pct(stats.marginRate)} on ${stats.marginLoads} loads with a customer price`
+        : 'Add customer prices to see margin', 'bolt', 'blue')
     ]);
 
     // Volume bar chart
@@ -747,7 +811,11 @@
       const fresh = count('New');
       const sourcing = count('Sourcing');
       const available = carriers ? carriers.filter((carrier) => carrier.status === 'Available').length : null;
+      const staleBefore = Date.now() - STALE_TRACKING_HOURS * 60 * 60 * 1000;
+      const needsCheckCall = shipments.filter((shipment) => ['Dispatched', 'In Transit'].includes(shipment.status)
+        && (!shipment.lastTrackedAt || new Date(`${String(shipment.lastTrackedAt).replace(' ', 'T')}Z`).getTime() < staleBefore)).length;
       if (exceptions) items.push({ tone: 'danger', title: `${plural(exceptions, 'shipment is', 'shipments are')} in Exception`, hint: 'Review and resolve', href: '#/shipments?status=Exception' });
+      if (needsCheckCall) items.push({ tone: 'warn', title: `${plural(needsCheckCall, 'truck has', 'trucks have')} no location update in ${STALE_TRACKING_HOURS}h`, hint: 'Call the driver and log the location', href: '#/shipments?status=In%20Transit' });
       if (pending) items.push({ tone: 'warn', title: `${plural(pending, 'shipment is', 'shipments are')} waiting for approval`, hint: 'Open the approvals queue', href: '#/shipments?status=Pending%20Approval' });
       if (available === 0 && (sourcing || pending)) items.push({ tone: 'danger', title: 'No carriers are available', hint: 'Reactivate or add a carrier', href: '#/carriers' });
       else if (sourcing) items.push({ tone: 'info', title: `${plural(sourcing, 'load needs', 'loads need')} a carrier`, hint: 'In Sourcing', href: '#/shipments?status=Sourcing' });

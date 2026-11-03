@@ -4,15 +4,25 @@ const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
 const REGISTRATION_INVITE_CODE = process.env.REGISTRATION_INVITE_CODE || '';
-const DUMMY_HASH = '$2b$10$w4Kn/xbbbqc1P3LEUhFhjuvby9b95CZTCEfa.chsvQmNnSH/.a40G';
-const MAX_LEN = { carrierName: 120, name: 120, email: 254, customer: 120, reference: 80, origin: 160, destination: 160, trackingNumber: 80, note: 500 };
-const MAX_PASSWORD_LENGTH = 72;
+const MAX_LEN = {
+  carrierName: 120, name: 120, email: 254, customer: 120, reference: 80, origin: 160, destination: 160, trackingNumber: 80, note: 500,
+  phone: 40, contactName: 120, driverName: 120, driverPhone: 40, truckPlate: 20, location: 160
+};
+// bcrypt only uses the first 72 bytes of a password; longer input would be silently cut.
+const MAX_PASSWORD_BYTES = 72;
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const {
+  BCRYPT_COST,
+  ALLOWED_ROLES,
+  TRACKABLE_STATUSES,
   initialize,
   findUserByEmail,
+  findUserById,
+  updateUser,
+  addTrackingUpdate,
+  listTrackingUpdates,
   createAuthSession,
   isAuthSessionActive,
   revokeAuthSession,
@@ -44,17 +54,33 @@ function readPositiveInteger(value, fallback) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+// Same hash cost as real accounts, so a login for an unknown email takes as long as a real one.
+const DUMMY_HASH = bcrypt.hashSync(crypto.randomBytes(16).toString('hex'), BCRYPT_COST);
+
 const ROLE_PERMISSIONS = {
   admin: ['*'],
-  operations: ['analytics:read', 'dashboard:read', 'carriers:read', 'carriers:write', 'shipments:read', 'shipments:create', 'shipments:status', 'shipments:dispatch', 'users:read'],
-  operator: ['dashboard:read', 'carriers:read', 'shipments:read', 'shipments:create']
+  operations: ['analytics:read', 'dashboard:read', 'carriers:read', 'carriers:write', 'shipments:read', 'shipments:create', 'shipments:status', 'shipments:dispatch', 'shipments:track', 'users:read'],
+  // Dispatchers log where the truck is ("check calls"), but cannot book or change status.
+  operator: ['dashboard:read', 'carriers:read', 'shipments:read', 'shipments:create', 'shipments:track']
 };
 
 const app = express();
 // Production is the default; development must be requested explicitly (NODE_ENV=development).
 const isProduction = process.env.NODE_ENV !== 'development';
 const PORT = process.env.PORT || 3000;
+// Development mode has demo accounts with published passwords, so by default it only listens on this machine.
+const HOST = process.env.HOST || (isProduction ? '0.0.0.0' : '127.0.0.1');
 const JWT_SECRET = process.env.JWT_SECRET || (isProduction ? null : 'veyra-dev-secret');
+
+// Region settings: one product, configured per deployment (kg or lb, local currency).
+const WEIGHT_UNIT = ['kg', 'lb'].includes(String(process.env.WEIGHT_UNIT).toLowerCase()) ? String(process.env.WEIGHT_UNIT).toLowerCase() : 'kg';
+const CURRENCY = /^[A-Z]{3}$/.test(String(process.env.CURRENCY || '')) ? process.env.CURRENCY : 'USD';
+const EQUIPMENT = ['Dry Van', 'Tent / Curtainsider', 'Reefer', 'Flatbed', 'LTL', 'Expedited'];
+// Open self-sign-up is a demo convenience. In production nobody can create an account
+// unless an invite code is configured or open registration is switched on explicitly.
+const REGISTRATION_MODE = REGISTRATION_INVITE_CODE
+  ? 'invite'
+  : (!isProduction || process.env.ALLOW_OPEN_REGISTRATION === 'true' ? 'open' : 'closed');
 const SESSION_COOKIE = 'veyraSession';
 const SESSION_DURATION_SECONDS = 8 * 60 * 60;
 const AUTH_RATE_LIMIT_CONFIG = {
@@ -71,6 +97,8 @@ const AUTH_RATE_LIMIT_CONFIG = {
     windowMs: readPositiveInteger(process.env.LOGIN_RATE_LIMIT_WINDOW_MS, 15 * 60 * 1000),
     max: readPositiveInteger(process.env.LOGIN_RATE_LIMIT_MAX, 8),
     ipMax: readPositiveInteger(process.env.LOGIN_RATE_LIMIT_IP_MAX, 30),
+    // Failures for one account from ALL addresses together; stops password guessing spread over many IPs.
+    accountMax: readPositiveInteger(process.env.LOGIN_RATE_LIMIT_ACCOUNT_MAX, 30),
     message: 'Too many login attempts. Please try again in 15 minutes.',
     logThreshold: readPositiveInteger(process.env.LOGIN_FAILURE_LOG_THRESHOLD, 4)
   }
@@ -142,8 +170,48 @@ function parsePositiveNumber(value, max) {
   return Number.isFinite(number) && number > 0 && number <= max ? number : null;
 }
 
-const MAX_WEIGHT_LB = 1000000;
-const MAX_RATE_USD = 10000000;
+const MAX_WEIGHT = 1000000;
+// Sanity bound for money fields. Raise MAX_RATE for currencies with large numbers (e.g. UZS).
+const MAX_RATE = readPositiveInteger(process.env.MAX_RATE, 10000000);
+
+function parseMoney(value) {
+  const amount = parsePositiveNumber(value, MAX_RATE);
+  return amount === null ? null : Math.round(amount * 100) / 100;
+}
+
+// Optional free-text field: undefined/null/'' mean "not given". Returns { value } or { error }.
+function readOptionalText(body, field, maxLength) {
+  const value = body?.[field];
+  if (value === undefined || value === null || value === '') return { value: null };
+  if (typeof value !== 'string' || value.trim().length > maxLength) return { error: `${field} must be text of at most ${maxLength} characters.` };
+  return { value: value.trim() || null };
+}
+
+function readOptionalPhone(body, field) {
+  const result = readOptionalText(body, field, MAX_LEN[field] || 40);
+  if (result.error || !result.value) return result;
+  return /^[+\d][\d\s()-]{4,}$/.test(result.value) ? result : { error: `${field} must be a phone number (digits, spaces, + ( ) -).` };
+}
+
+// ETA: a date (YYYY-MM-DD) or a date and time (YYYY-MM-DDTHH:MM), as entered by the dispatcher.
+function parseEta(value) {
+  if (value === undefined || value === null || value === '') return { value: null };
+  if (typeof value !== 'string') return { error: 'ETA must be a date (YYYY-MM-DD) or date and time (YYYY-MM-DDTHH:MM).' };
+  const match = /^(\d{4}-\d{2}-\d{2})(?:T([01]\d|2[0-3]):([0-5]\d))?$/.exec(value.trim());
+  if (!match || !parseIsoDate(match[1])) return { error: 'ETA must be a date (YYYY-MM-DD) or date and time (YYYY-MM-DDTHH:MM).' };
+  return { value: value.trim() };
+}
+
+function passwordTooLong(password) {
+  return Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_BYTES;
+}
+
+function validateNewPassword(password) {
+  if (typeof password !== 'string' || password.length < 8 || passwordTooLong(password) || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
+    return `Password must be at least 8 characters (at most ${MAX_PASSWORD_BYTES} bytes) and include a letter and a number.`;
+  }
+  return null;
+}
 
 function parseIsoDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
@@ -152,6 +220,7 @@ function parseIsoDate(value) {
 }
 
 function serializeShipment(shipment) {
+  const hasMargin = shipment.rate !== null && shipment.rate !== undefined && shipment.customer_rate !== null && shipment.customer_rate !== undefined;
   return {
     id: `SHP-${shipment.id}`,
     customer: shipment.customer,
@@ -164,9 +233,18 @@ function serializeShipment(shipment) {
     carrier: shipment.carrier_id,
     carrierId: shipment.carrier_id,
     rate: shipment.rate,
+    customerRate: shipment.customer_rate ?? null,
+    margin: hasMargin ? Math.round((shipment.customer_rate - shipment.rate) * 100) / 100 : null,
     weight: shipment.weight,
     equipment: shipment.equipment,
     carrierName: shipment.carrierName,
+    carrierPhone: shipment.carrierPhone || null,
+    driverName: shipment.driver_name || null,
+    driverPhone: shipment.driver_phone || null,
+    truckPlate: shipment.truck_plate || null,
+    lastLocation: shipment.last_location || null,
+    eta: shipment.eta || null,
+    lastTrackedAt: shipment.last_tracked_at || null,
     trackingNumber: shipment.tracking_number
   };
 }
@@ -232,7 +310,11 @@ async function trackFailedLoginAttempt(req, email) {
   const normalizedEmail = (email || '').trim().toLowerCase();
   const accountId = rateLimitKey(normalizedEmail || 'unknown').slice(0, 12);
   const ipAttempts = await recordRateLimitAttempts(
-    [rateLimitKey(`login-ip:${ip}`), rateLimitKey(`login-account:${ip}:${normalizedEmail || 'unknown'}`)],
+    [
+      rateLimitKey(`login-ip:${ip}`),
+      rateLimitKey(`login-account:${ip}:${normalizedEmail || 'unknown'}`),
+      rateLimitKey(`login-account-any:${normalizedEmail || 'unknown'}`)
+    ],
     AUTH_RATE_LIMIT_CONFIG.login.windowMs
   );
 
@@ -245,6 +327,7 @@ async function clearFailedLoginAttempt(req, email) {
   const ip = getClientIp(req);
   const normalizedEmail = (email || '').trim().toLowerCase();
   await clearRateLimitAttempts(rateLimitKey(`login-account:${ip}:${normalizedEmail || 'unknown'}`));
+  await clearRateLimitAttempts(rateLimitKey(`login-account-any:${normalizedEmail || 'unknown'}`));
 }
 
 const normalApiLimiter = createRateLimiter({
@@ -258,15 +341,17 @@ const loginLimiter = async (req, res, next) => {
   const ip = getClientIp(req);
   const email = getNormalizedEmail(req);
   try {
-    const [ipStatus, accountStatus] = await Promise.all([
-      getRateLimitStatus(rateLimitKey(`login-ip:${ip}`), AUTH_RATE_LIMIT_CONFIG.login.windowMs, AUTH_RATE_LIMIT_CONFIG.login.ipMax),
-      getRateLimitStatus(rateLimitKey(`login-account:${ip}:${email || 'unknown'}`), AUTH_RATE_LIMIT_CONFIG.login.windowMs, AUTH_RATE_LIMIT_CONFIG.login.max)
+    const { windowMs, ipMax, max, accountMax } = AUTH_RATE_LIMIT_CONFIG.login;
+    const [ipStatus, accountStatus, anyIpStatus] = await Promise.all([
+      getRateLimitStatus(rateLimitKey(`login-ip:${ip}`), windowMs, ipMax),
+      getRateLimitStatus(rateLimitKey(`login-account:${ip}:${email || 'unknown'}`), windowMs, max),
+      getRateLimitStatus(rateLimitKey(`login-account-any:${email || 'unknown'}`), windowMs, accountMax)
     ]);
 
-    if (ipStatus.limited || accountStatus.limited) {
+    if (ipStatus.limited || accountStatus.limited || anyIpStatus.limited) {
       const emailId = rateLimitKey(email || 'unknown').slice(0, 12);
       console.warn(`[AUTH SECURITY] login rate limit exceeded for account=${emailId} from ${ip}`);
-      const retryAfterMs = Math.max(ipStatus.retryAfterMs, accountStatus.retryAfterMs);
+      const retryAfterMs = Math.max(ipStatus.retryAfterMs, accountStatus.retryAfterMs, anyIpStatus.retryAfterMs);
       res.setHeader('Retry-After', String(Math.max(1, Math.ceil(retryAfterMs / 1000))));
       return res.status(429).json({ success: false, message: AUTH_RATE_LIMIT_CONFIG.login.message });
     }
@@ -331,7 +416,7 @@ function readSessionCookie(req) {
 
 async function issueSessionCookie(user, res) {
   const session = makeToken(user);
-  await createAuthSession(session.jti, session.expiresAt);
+  await createAuthSession(session.jti, session.expiresAt, user.id);
   res.cookie(SESSION_COOKIE, session.token, SESSION_COOKIE_OPTIONS);
 }
 
@@ -352,7 +437,13 @@ async function authMiddleware(req, res, next) {
         message: 'Session expired or revoked.'
       });
     }
-    req.user = payload;
+    // Role and access come from the database on every request, not from the token,
+    // so an admin's change (new role, account disabled) applies immediately.
+    const user = await findUserById(payload.id);
+    if (!user || user.disabledAt) {
+      return res.status(401).json({ success: false, message: 'Session expired or revoked.' });
+    }
+    req.user = { id: user.id, email: user.email, name: user.name, role: user.role, jti: payload.jti };
     return next();
   } catch (error) {
     return res.status(401).json({
@@ -407,22 +498,44 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Public settings the UI needs before sign-in (units, currency, whether sign-up is possible).
+app.get('/api/config', (req, res) => {
+  res.json({
+    weightUnit: WEIGHT_UNIT,
+    currency: CURRENCY,
+    equipment: EQUIPMENT,
+    registration: REGISTRATION_MODE,
+    maxRate: MAX_RATE
+  });
+});
+
+function validateNameAndEmail(name, email) {
+  if (typeof name !== 'string' || typeof email !== 'string' || !name.trim() || !email.trim()) {
+    return 'Name and email are required.';
+  }
+  if (name.length > MAX_LEN.name || email.length > MAX_LEN.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+    return 'Name or email is invalid.';
+  }
+  return null;
+}
+
 app.post('/api/register', registerLimiter, async (req, res) => {
   try {
     const { name, email, password, inviteCode } = req.body || {};
 
+    if (REGISTRATION_MODE === 'closed') {
+      return res.status(403).json({ success: false, message: 'Sign-up is closed. Ask your administrator to create an account for you.' });
+    }
     if (typeof name !== 'string' || typeof email !== 'string' || typeof password !== 'string' || !name.trim() || !email.trim() || !password) {
       return res.status(400).json({
         success: false,
         message: 'Name, email and password are required.'
       });
     }
-    if (name.length > MAX_LEN.name || email.length > MAX_LEN.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      return res.status(400).json({ success: false, message: 'Name or email is invalid.' });
-    }
-    if (password.length < 8 || password.length > MAX_PASSWORD_LENGTH || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
-      return res.status(400).json({ success: false, message: `Password must be 8-${MAX_PASSWORD_LENGTH} characters and include a letter and a number.` });
-    }
+    const identityError = validateNameAndEmail(name, email);
+    if (identityError) return res.status(400).json({ success: false, message: identityError });
+    const passwordError = validateNewPassword(password);
+    if (passwordError) return res.status(400).json({ success: false, message: passwordError });
     if (REGISTRATION_INVITE_CODE) {
       const provided = Buffer.from(String(inviteCode || ''));
       const expected = Buffer.from(REGISTRATION_INVITE_CODE);
@@ -432,7 +545,7 @@ app.post('/api/register', registerLimiter, async (req, res) => {
     }
 
     const normalizedEmail = email.trim().toLowerCase();
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword = await bcrypt.hash(password, BCRYPT_COST);
     const existingUser = await findUserByEmail(normalizedEmail);
     if (existingUser) {
       // Generic message: do not reveal whether the email is registered.
@@ -475,13 +588,14 @@ app.post('/api/login', loginLimiter, async (req, res) => {
   try {
     const { email, password } = req.body || {};
     if (typeof email !== 'string' || typeof password !== 'string' || !email.trim() || !password
-      || email.length > MAX_LEN.email || password.length > MAX_PASSWORD_LENGTH) {
+      || email.length > MAX_LEN.email || passwordTooLong(password)) {
       return res.status(400).json({ success: false, message: 'Email and password are required.' });
     }
     const normalizedEmail = email.trim().toLowerCase();
 
     const user = await findUserByEmail(normalizedEmail);
-    if (!user) {
+    // A disabled account is treated exactly like an unknown one (same message, same timing).
+    if (!user || user.disabled_at) {
       // Equalise timing with the real-user path so response time does not reveal valid emails.
       await bcrypt.compare(String(password || ''), DUMMY_HASH);
       await trackFailedLoginAttempt(req, normalizedEmail);
@@ -603,8 +717,12 @@ app.post('/api/carriers', authMiddleware, requirePermission('carriers:write'), a
   if (typeof name !== 'string' || !name.trim() || name.trim().length > MAX_LEN.carrierName || !CARRIER_MODES.includes(mode)) {
     return res.status(400).json({ success: false, message: `Carrier name (max ${MAX_LEN.carrierName} characters) and a valid mode are required.` });
   }
+  const phone = readOptionalPhone(req.body, 'phone');
+  const contactName = readOptionalText(req.body, 'contactName', MAX_LEN.contactName);
+  const invalid = phone.error || contactName.error;
+  if (invalid) return res.status(400).json({ success: false, message: invalid });
   try {
-    const carrier = await createCarrier({ name: name.trim(), mode });
+    const carrier = await createCarrier({ name: name.trim(), mode, phone: phone.value, contactName: contactName.value });
     return res.status(201).json({ success: true, carrier });
   } catch (error) {
     if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
@@ -657,16 +775,58 @@ app.get('/api/admin/users', authMiddleware, requirePermission('users:read'), asy
   }
 });
 
+// Admin adds a team member with a starting password (sign-up is closed in production).
+app.post('/api/admin/users', authMiddleware, requirePermission('users:write'), async (req, res) => {
+  const { name, email, password, role } = req.body || {};
+  const identityError = validateNameAndEmail(name, email);
+  if (identityError) return res.status(400).json({ success: false, message: identityError });
+  if (!ALLOWED_ROLES.includes(role)) {
+    return res.status(400).json({ success: false, message: `Role must be one of: ${ALLOWED_ROLES.join(', ')}.` });
+  }
+  const passwordError = validateNewPassword(password);
+  if (passwordError) return res.status(400).json({ success: false, message: passwordError });
+  try {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (await findUserByEmail(normalizedEmail)) {
+      return res.status(409).json({ success: false, message: 'A user with this email already exists.' });
+    }
+    const user = await createUser({ name: name.trim(), email: normalizedEmail, password: await bcrypt.hash(password, BCRYPT_COST), role });
+    return res.status(201).json({ success: true, user: { id: user.id, name: user.name, email: user.email, role: user.role, active: true } });
+  } catch (error) {
+    if (String(error.code) === 'SQLITE_CONSTRAINT') {
+      return res.status(409).json({ success: false, message: 'A user with this email already exists.' });
+    }
+    console.error('[create user] failed:', error.message);
+    return res.status(500).json({ success: false, message: 'User could not be created.' });
+  }
+});
+
+// Change role and/or enable/disable an account. Takes effect at once (sessions are revoked).
+app.patch('/api/admin/users/:id', authMiddleware, requirePermission('users:write'), async (req, res) => {
+  const userId = Number(req.params.id);
+  const { role, active } = req.body || {};
+  if (!Number.isInteger(userId) || userId <= 0
+    || (role === undefined && active === undefined)
+    || (role !== undefined && !ALLOWED_ROLES.includes(role))
+    || (active !== undefined && typeof active !== 'boolean')) {
+    return res.status(400).json({ success: false, message: `Send a role (${ALLOWED_ROLES.join(', ')}) and/or active (true or false).` });
+  }
+  try {
+    const user = await updateUser(userId, { role, active }, req.user.id);
+    return res.json({ success: true, user });
+  } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
+    console.error('[update user] failed:', error.message);
+    return res.status(500).json({ success: false, message: 'User could not be updated.' });
+  }
+});
+
 app.get('/api/admin/shipments', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
   try {
     const shipments = await listShipments(readPaging(req));
     res.json({
       success: true,
-      shipments: shipments.map((shipment) => ({
-        ...serializeShipment(shipment),
-        weight: shipment.weight || '10,000 lb',
-        equipment: shipment.equipment || 'Dry Van'
-      }))
+      shipments: shipments.map(serializeShipment)
     });
   } catch (error) {
     console.error('[admin shipments] failed:', error.message);
@@ -708,12 +868,27 @@ app.post('/api/admin/shipments/:id/dispatch', authMiddleware, requirePermission(
   try {
     const shipmentId = parseShipmentId(req.params.id);
     const carrierId = typeof req.body?.carrierId === 'number' ? req.body.carrierId : NaN;
-    const rate = parsePositiveNumber(req.body?.rate, MAX_RATE_USD);
+    const rate = parseMoney(req.body?.rate);
     if (!Number.isInteger(shipmentId) || shipmentId <= 0 || !Number.isInteger(carrierId) || carrierId <= 0 || rate === null) {
-      return res.status(400).json({ success: false, message: `A valid carrier and a rate between 0.01 and ${MAX_RATE_USD.toLocaleString('en-US')} are required.` });
+      return res.status(400).json({ success: false, message: `A valid carrier and a rate between 0.01 and ${MAX_RATE.toLocaleString('en-US')} are required.` });
     }
+    const hasCustomerRate = req.body?.customerRate !== undefined && req.body?.customerRate !== null && req.body?.customerRate !== '';
+    const customerRate = hasCustomerRate ? parseMoney(req.body.customerRate) : null;
+    if (hasCustomerRate && customerRate === null) {
+      return res.status(400).json({ success: false, message: `Customer price must be between 0.01 and ${MAX_RATE.toLocaleString('en-US')}.` });
+    }
+    const driverName = readOptionalText(req.body, 'driverName', MAX_LEN.driverName);
+    const driverPhone = readOptionalPhone(req.body, 'driverPhone');
+    const truckPlate = readOptionalText(req.body, 'truckPlate', MAX_LEN.truckPlate);
+    const invalid = driverName.error || driverPhone.error || truckPlate.error;
+    if (invalid) return res.status(400).json({ success: false, message: invalid });
 
-    const shipment = await dispatchShipment(shipmentId, carrierId, rate, req.user.id);
+    const shipment = await dispatchShipment(shipmentId, carrierId, rate, req.user.id, {
+      customerRate,
+      driverName: driverName.value,
+      driverPhone: driverPhone.value,
+      truckPlate: truckPlate.value
+    });
     return res.json({ success: true, shipment: { ...shipment, id: `SHP-${shipment.id}` } });
   } catch (error) {
     if (error.statusCode) {
@@ -736,13 +911,50 @@ app.get('/api/shipments/:id/events', authMiddleware, requirePermission('shipment
   }
 });
 
+// Where is the truck? Location updates ("check calls") for a booked load, newest first.
+app.get('/api/shipments/:id/tracking', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
+  try {
+    if (!(await getShipment(shipmentId))) return res.status(404).json({ success: false, message: 'Shipment not found.' });
+    return res.json({ success: true, updates: await listTrackingUpdates(shipmentId) });
+  } catch (error) {
+    console.error('[tracking list] failed:', error.message);
+    return res.status(500).json({ success: false, message: 'Tracking history unavailable.' });
+  }
+});
+
+app.post('/api/shipments/:id/tracking', authMiddleware, requirePermission('shipments:track'), async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  const location = req.body?.location;
+  if (!shipmentId || typeof location !== 'string' || !location.trim() || location.trim().length > MAX_LEN.location) {
+    return res.status(400).json({ success: false, message: `A current location (at most ${MAX_LEN.location} characters) is required.` });
+  }
+  const eta = parseEta(req.body?.eta);
+  const note = readOptionalText(req.body, 'note', MAX_LEN.note);
+  const invalid = eta.error || note.error;
+  if (invalid) return res.status(400).json({ success: false, message: invalid });
+  try {
+    const update = await addTrackingUpdate(shipmentId, { location: location.trim(), eta: eta.value, note: note.value }, req.user.id);
+    return res.status(201).json({ success: true, update });
+  } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
+    console.error('[tracking add] failed:', error.message);
+    return res.status(500).json({ success: false, message: 'Location update failed.' });
+  }
+});
+
 app.post('/api/shipments', authMiddleware, requirePermission('shipments:create'), async (req, res) => {
   try {
     const { customer, reference, origin, destination, pickup, delivery, weight, equipment, trackingNumber } = req.body || {};
-    const validEquipment = ['Dry Van', 'Reefer', 'Flatbed', 'LTL', 'Expedited'];
     const pickupDate = parseIsoDate(pickup);
     const deliveryDate = parseIsoDate(delivery);
-    const weightValue = parsePositiveNumber(weight, MAX_WEIGHT_LB);
+    const weightValue = parsePositiveNumber(weight, MAX_WEIGHT);
+    const hasCustomerRate = req.body?.customerRate !== undefined && req.body?.customerRate !== null && req.body?.customerRate !== '';
+    const customerRate = hasCustomerRate ? parseMoney(req.body.customerRate) : null;
+    if (hasCustomerRate && customerRate === null) {
+      return res.status(400).json({ success: false, message: `Customer price must be between 0.01 and ${MAX_RATE.toLocaleString('en-US')}.` });
+    }
 
     const textFields = { customer, origin, destination };
     for (const [field, value] of Object.entries(textFields)) {
@@ -756,8 +968,8 @@ app.post('/api/shipments', authMiddleware, requirePermission('shipments:create')
         return res.status(400).json({ success: false, message: `${field} must be text of at most ${MAX_LEN[field]} characters.` });
       }
     }
-    if (!customer?.trim() || !origin?.trim() || !destination?.trim() || weightValue === null || !validEquipment.includes(equipment)) {
-      return res.status(400).json({ success: false, message: `Customer, route, a weight up to ${MAX_WEIGHT_LB.toLocaleString('en-US')} lb, and valid equipment are required.` });
+    if (!customer?.trim() || !origin?.trim() || !destination?.trim() || weightValue === null || !EQUIPMENT.includes(equipment)) {
+      return res.status(400).json({ success: false, message: `Customer, route, a weight up to ${MAX_WEIGHT.toLocaleString('en-US')} ${WEIGHT_UNIT}, and valid equipment are required.` });
     }
     if (!pickupDate || !deliveryDate) {
       return res.status(400).json({ success: false, message: 'Pickup and delivery must be valid dates (YYYY-MM-DD).' });
@@ -773,10 +985,11 @@ app.post('/api/shipments', authMiddleware, requirePermission('shipments:create')
       pickup,
       delivery,
       status: 'New',
-      weight: `${weightValue} lb`,
+      weight: `${weightValue} ${WEIGHT_UNIT}`,
       equipment,
       reference: reference?.trim(),
       trackingNumber: trackingNumber?.trim(),
+      customerRate,
       actorId: req.user.id
     });
 
@@ -820,8 +1033,11 @@ app.use((error, req, res, next) => {
 function startServer() {
   return initialize()
     .then(() => new Promise((resolve) => {
-      const server = app.listen(PORT, () => {
-        console.log(`VEYRA API running at http://localhost:${PORT}`);
+      const server = app.listen(PORT, HOST, () => {
+        console.log(`VEYRA API running at http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT} (${isProduction ? 'production' : 'development'}, ${WEIGHT_UNIT}, ${CURRENCY}, sign-up: ${REGISTRATION_MODE})`);
+        if (!isProduction) {
+          console.warn('[VEYRA] Development mode: demo accounts with public passwords exist. Never expose this server to the internet.');
+        }
         resolve(server);
       });
     }))

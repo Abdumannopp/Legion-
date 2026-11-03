@@ -406,11 +406,22 @@
 
             <div class="admin-grid">
               <div class="admin-box">
-                <div class="mini-head"><span><strong>Team Access</strong></span><span class="muted" id="userCountLabel">0 users</span></div>
+                <div class="mini-head"><span><strong>Team Access</strong></span><span class="team-head-actions"><span class="muted" id="userCountLabel">0 users</span><button class="btn btn-ghost small hidden" type="button" id="addUserToggle" aria-expanded="false" aria-controls="addUserForm">Add user</button></span></div>
+                <form class="add-user-form hidden" id="addUserForm">
+                  <label>Full name<input name="name" required maxlength="120" autocomplete="off" /></label>
+                  <label>Email<input name="email" type="email" required maxlength="254" autocomplete="off" /></label>
+                  <label>Role<select name="role" required><option value="operator">Operator (dispatcher)</option><option value="operations">Operations manager</option><option value="admin">Administrator</option></select></label>
+                  <label>Starting password<input name="password" type="password" required minlength="8" autocomplete="new-password" placeholder="8+ chars, letter and number" /></label>
+                  <div class="add-user-footer">
+                    <p class="shipment-form-message" id="addUserMessage" role="status"></p>
+                    <button class="btn btn-primary small" type="submit">Create account</button>
+                  </div>
+                </form>
                 <div class="admin-toolbar">
                   <button class="filter-button active" data-filter="all" type="button">All</button>
                   <button class="filter-button" data-filter="admin" type="button">Admins</button>
                   <button class="filter-button" data-filter="operations" type="button">Ops</button>
+                  <button class="filter-button" data-filter="operator" type="button">Operators</button>
                 </div>
                 <div id="userList" class="admin-list"></div>
               </div>
@@ -567,9 +578,26 @@
           <div><dt>Pickup / Delivery</dt><dd data-detail="dates">-</dd></div>
           <div><dt>Weight / Equipment</dt><dd data-detail="freight">-</dd></div>
           <div><dt>Carrier / Rate</dt><dd data-detail="carrier">-</dd></div>
+          <div><dt>Customer price / Margin</dt><dd data-detail="price">-</dd></div>
+          <div><dt>Driver / Truck</dt><dd data-detail="driver">-</dd></div>
+          <div><dt>Carrier phone</dt><dd data-detail="carrierPhone">-</dd></div>
           <div><dt>Status</dt><dd data-detail="status">-</dd></div>
           <div><dt>Tracking number</dt><dd data-detail="tracking">-</dd></div>
+          <div class="span-2"><dt>Last location / ETA</dt><dd data-detail="location">-</dd></div>
         </dl>
+
+        <div class="detail-timeline-head"><strong>Location updates</strong><span>Newest first</span></div>
+        <form class="tracking-form hidden" id="trackingForm">
+          <label>Where is the truck now?<input name="location" required maxlength="160" placeholder="City, border crossing or road" /></label>
+          <label>ETA (optional)<input name="eta" type="datetime-local" /></label>
+          <label class="span-2">Note (optional)<input name="note" maxlength="500" placeholder="e.g. Waiting at customs, driver resting" /></label>
+          <div class="tracking-form-footer span-2">
+            <p class="shipment-form-message" id="trackingFormMessage" role="status"></p>
+            <button class="btn btn-primary small" type="submit">Save location</button>
+          </div>
+        </form>
+        <div class="detail-timeline tracking-list" id="trackingList"></div>
+
         <div class="detail-timeline-head"><strong>Activity</strong><span>Newest first</span></div>
         <div class="detail-timeline" id="shipmentDetailTimeline"></div>
       </section>
@@ -590,8 +618,9 @@
           <label>Destination<input name="destination" required maxlength="160" placeholder="City, state" /></label>
           <label>Pickup date<input name="pickup" type="date" required /></label>
           <label>Delivery date<input name="delivery" type="date" required /></label>
-          <label>Weight (lb)<input name="weight" type="number" min="1" step="1" required placeholder="10000" /></label>
-          <label>Equipment<select name="equipment" required><option value="">Choose equipment</option><option>Dry Van</option><option>Reefer</option><option>Flatbed</option><option>LTL</option><option>Expedited</option></select></label>
+          <label><span>Weight (<span data-weight-unit>kg</span>)</span><input name="weight" type="number" min="1" step="1" required placeholder="20000" /></label>
+          <label>Equipment<select name="equipment" required data-equipment-select><option value="">Choose equipment</option><option>Dry Van</option><option>Tent / Curtainsider</option><option>Reefer</option><option>Flatbed</option><option>LTL</option><option>Expedited</option></select></label>
+          <label><span>Customer price (<span data-currency>USD</span>)</span><input name="customerRate" type="number" min="0.01" step="0.01" placeholder="Optional — what the customer pays" /></label>
         </div>
         <div class="shipment-form-footer">
           <span>New loads enter the workflow at <strong>New</strong>.</span>
@@ -624,9 +653,13 @@
             <label for="authPassword">Password</label>
             <input id="authPassword" type="password" placeholder="••••••••" required />
           </div>
+          <div class="auth-field name-field" id="authInviteField">
+            <label for="authInviteCode">Invite code</label>
+            <input id="authInviteCode" type="text" autocomplete="off" placeholder="From your administrator" />
+          </div>
           <button type="submit" class="btn btn-primary full">Sign in</button>
         </form>
-        <div class="auth-toggle">
+        <div class="auth-toggle" id="authToggle">
           <span id="authToggleLabel">Need an account?</span>
           <button type="button" id="authSwitch">Create one</button>
         </div>
@@ -643,8 +676,13 @@
         </div>
         <div class="shipment-form-grid">
           <label>Carrier<select name="carrierId" id="dispatchCarrier" required></select></label>
-          <label>Agreed rate (USD)<input name="rate" type="number" min="1" step="0.01" required placeholder="1250" /></label>
+          <label><span>Carrier rate (<span data-currency>USD</span>)</span><input name="rate" type="number" min="0.01" step="0.01" required placeholder="What you pay the carrier" /></label>
+          <label><span>Customer price (<span data-currency>USD</span>)</span><input name="customerRate" type="number" min="0.01" step="0.01" placeholder="What the customer pays (optional)" /></label>
+          <label>Truck plate<input name="truckPlate" maxlength="20" placeholder="Optional" /></label>
+          <label>Driver name<input name="driverName" maxlength="120" placeholder="Optional" /></label>
+          <label>Driver phone<input name="driverPhone" type="tel" maxlength="40" placeholder="Optional" /></label>
         </div>
+        <p class="dispatch-margin muted" id="dispatchMargin" aria-live="polite"></p>
         <div class="shipment-form-footer">
           <span>The carrier is marked <strong>Busy</strong> until the load is delivered or cancelled.</span>
           <button class="btn btn-primary" type="submit">Dispatch</button>

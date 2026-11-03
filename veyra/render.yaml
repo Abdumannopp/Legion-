@@ -24,3 +24,9 @@ services:
         value: admin@your-domain.com
       - key: INITIAL_ADMIN_PASSWORD
         generateValue: true
+      - key: WEIGHT_UNIT
+        value: kg
+      - key: CURRENCY
+        value: USD
+      - key: MAX_RATE
+        value: "10000000"
