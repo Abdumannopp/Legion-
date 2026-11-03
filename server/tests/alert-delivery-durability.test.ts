@@ -461,7 +461,9 @@ describe("worker restart", () => {
 
 describe("concurrent workers", () => {
   it("four workers over 25 alerts: every job delivered exactly once, all marked sent", async () => {
-    for (let i = 0; i < 25; i++) await post(wazuh(`wz-c-${i}`)).expect(202);
+    // Ordinary events: 25 "brute force" alerts from one address would (rightly) be
+    // recognised as an attack and add a 26th, correlation alert to deliver.
+    for (let i = 0; i < 25; i++) await post(wazuh(`wz-c-${i}`, { rule: { description: `Disk usage high (wz-c-${i})`, level: 13 }, data: {} })).expect(202);
     const smtp = recordingSmtp();
     const redis = recordingRedis();
     const slowSend: Sender = async (m) => { await new Promise((r) => setTimeout(r, 5)); return smtp.send(m); };
