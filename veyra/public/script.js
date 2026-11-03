@@ -40,6 +40,8 @@ function applyConfig() {
   });
   // Closed sign-up: hide "Create one"; accounts come from an administrator.
   document.getElementById('authToggle')?.classList.toggle('hidden', config.registration === 'closed');
+  const messageForm = document.getElementById('messageForm');
+  if (messageForm && config.messaging?.language) messageForm.elements.language.value = config.messaging.language;
 }
 
 function formatMoney(value, digits = 2) {
@@ -144,7 +146,7 @@ function applyUserChrome(user) {
   set('sidebarAvatar', initials);
   set('topAvatar', initials);
   set('sidebarUserName', user?.name || 'Guest');
-  set('sidebarUserRole', user ? roleLabels[user.role] || user.role : 'Sign in to continue');
+  set('sidebarUserRole', user ? [roleLabels[user.role] || user.role, user.tenantName].filter(Boolean).join(' · ') : 'Sign in to continue');
   document.querySelectorAll('.prompt-meta').forEach((el) => { el.textContent = user ? initials : 'AC'; });
   document.getElementById('signedOutNote')?.classList.toggle('hidden', Boolean(user));
   if (!user) document.getElementById('navApprovalsBadge')?.classList.add('hidden');
@@ -350,10 +352,12 @@ function bindShipmentActions() {
       if (values[name] !== undefined && values[name] !== null && form.elements[name]) form.elements[name].value = String(values[name]);
     });
     if (message) message.textContent = '';
+    resetFlowIntake(form);
     modal.classList.remove('hidden');
-    form.elements.customer.focus();
+    (window.VeyraConfig.ai?.enabled ? document.getElementById('aiOrderText') : form.elements.customer)?.focus();
   };
   window.openShipmentModal = openModal;
+  bindFlowIntake(form);
 
   const closeModal = () => {
     if (modal) modal.classList.add('hidden');
@@ -406,6 +410,66 @@ function bindShipmentActions() {
       if (message) message.textContent = error.message;
     }
     if (submitButton) submitButton.disabled = false;
+  });
+}
+
+/* ---------- FLOW: order message -> form fields (a person reviews and presses Create) ---------- */
+const FLOW_FIELDS = ['customer', 'customerPhone', 'reference', 'origin', 'destination', 'pickup', 'delivery', 'weight', 'equipment', 'customerRate'];
+const FLOW_LABELS = { customer: 'customer', origin: 'origin', destination: 'destination', pickup: 'pickup date', delivery: 'delivery date', weight: 'weight', equipment: 'equipment' };
+
+function resetFlowIntake(form) {
+  document.getElementById('aiIntake')?.classList.toggle('hidden', !window.VeyraConfig.ai?.enabled);
+  const text = document.getElementById('aiOrderText');
+  if (text) text.value = '';
+  const status = document.getElementById('aiIntakeMessage');
+  if (status) status.textContent = '';
+  document.getElementById('aiFindings')?.replaceChildren();
+  form?.querySelectorAll('.needs-input').forEach((node) => node.classList.remove('needs-input'));
+}
+
+function bindFlowIntake(form) {
+  const button = document.getElementById('aiIntakeButton');
+  const text = document.getElementById('aiOrderText');
+  const status = document.getElementById('aiIntakeMessage');
+  const findings = document.getElementById('aiFindings');
+  if (!button || !text || !form) return;
+  button.addEventListener('click', async () => {
+    if (!text.value.trim()) {
+      status.textContent = 'Paste the customer\'s message first.';
+      return;
+    }
+    button.disabled = true;
+    status.textContent = 'FLOW is reading the message…';
+    findings.replaceChildren();
+    form.querySelectorAll('.needs-input').forEach((node) => node.classList.remove('needs-input'));
+    try {
+      const response = await fetch('/api/agents/flow/parse', { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ text: text.value }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'FLOW could not read the message');
+      FLOW_FIELDS.forEach((name) => {
+        const value = result.draft[name];
+        if (value !== null && value !== undefined && form.elements[name]) form.elements[name].value = String(value);
+      });
+      result.missing.forEach((name) => {
+        const field = form.elements[name];
+        if (!field) return;
+        // Clear the default dates: a date the customer never gave must not slip through.
+        if (name === 'pickup' || name === 'delivery') field.value = '';
+        field.classList.add('needs-input');
+      });
+      const items = [
+        ...result.missing.map((name) => createTextElement('li', 'missing', `Missing: ${FLOW_LABELS[name] || name}. Ask the customer or fill it in.`)),
+        ...result.notes.map((note) => createTextElement('li', 'note', note)),
+        ...result.questions.map((question) => createTextElement('li', 'question', `Ask the customer: ${question}`))
+      ];
+      findings.replaceChildren(...items);
+      status.textContent = result.missing.length
+        ? `Filled what was in the message. ${result.missing.length} field(s) still needed — marked in yellow.`
+        : 'All fields filled. Check them, then press Create load.';
+    } catch (error) {
+      status.textContent = error.message;
+    }
+    button.disabled = false;
   });
 }
 
@@ -532,6 +596,9 @@ async function loadAdminConsole() {
         userList.replaceChildren(...userRows);
       }
       document.getElementById('addUserToggle')?.classList.toggle('hidden', !hasPermission('users:write'));
+      loadIntegrationsPanel();
+      document.getElementById('companiesBox')?.classList.toggle('hidden', !storedUser?.isPlatformAdmin);
+      if (storedUser?.isPlatformAdmin) loadCompaniesPanel();
       if (userCountLabel) userCountLabel.textContent = `${usersData.users.length} users`;
     }
 
@@ -777,7 +844,137 @@ async function updateTeamMember(user, change, control) {
   await loadAdminConsole();
 }
 
+/* ---------- Integrations panel ---------- */
+function integrationRow(name, on, detail, extra) {
+  const row = createTextElement('div', 'admin-row integration-row');
+  const meta = createTextElement('div', 'user-meta');
+  const text = document.createElement('div');
+  text.append(createTextElement('strong', '', name), createTextElement('small', '', detail));
+  meta.append(text);
+  const controls = createTextElement('div', 'user-controls');
+  controls.append(createTextElement('span', `user-role ${on ? 'operations' : 'inactive'}`, on ? 'On' : 'Off'));
+  if (extra) controls.append(extra);
+  row.append(meta, controls);
+  return row;
+}
+
+async function loadIntegrationsPanel() {
+  const list = document.getElementById('integrationList');
+  if (!list) return;
+  try {
+    const response = await fetch('/api/integrations/status', { headers: getAuthHeaders() });
+    const status = await response.json();
+    if (!response.ok) throw new Error(status.message || 'Unavailable');
+    let gpsButton = null;
+    if (hasPermission('settings:write')) {
+      gpsButton = createTextElement('button', 'btn btn-ghost small', status.gps.configured ? 'New GPS token' : 'Create GPS token');
+      gpsButton.type = 'button';
+      gpsButton.addEventListener('click', createGpsToken);
+    }
+    list.replaceChildren(
+      integrationRow('AI agents (FLOW)', status.ai.enabled,
+        status.ai.enabled ? `OpenRouter · model: ${status.ai.model || 'account default'}` : 'Add OPENROUTER_API_KEY to the server settings to read orders with AI.'),
+      integrationRow('SCOUT carrier ranking', true, 'Built in, no key needed.'),
+      integrationRow('SMS / WhatsApp (RELAY)', status.messaging.channels.length > 0,
+        status.messaging.channels.length ? `Twilio · ${status.messaging.channels.join(' + ').toUpperCase()}` : 'Drafts work; to send automatically add Twilio settings.'),
+      integrationRow('GPS tracking', status.gps.configured,
+        status.gps.configured ? `Connected · positions every ${status.gps.minIntervalMinutes} min are saved` : 'Create a token and give it to your GPS provider.', gpsButton)
+    );
+  } catch (error) {
+    list.replaceChildren(createTextElement('p', 'muted', `Integrations unavailable: ${error.message}`));
+  }
+}
+
+async function createGpsToken() {
+  const result = document.getElementById('gpsTokenResult');
+  if (!window.confirm('Create a new GPS token? Any previous token stops working.')) return;
+  try {
+    const response = await fetch('/api/integrations/gps/token', { method: 'POST', headers: getAuthHeaders() });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'Token could not be created');
+    const url = `${window.location.origin}${data.webhookPath}`;
+    const copyButton = createTextElement('button', 'btn btn-ghost small', 'Copy token');
+    copyButton.type = 'button';
+    copyButton.addEventListener('click', () => navigator.clipboard?.writeText(data.token).then(() => notify('Token copied.', 'ok')).catch(() => {}));
+    result.replaceChildren(
+      createTextElement('strong', '', 'Give these to your GPS provider. The token is shown only once.'),
+      createTextElement('small', '', `Address (POST): ${url}`),
+      createTextElement('code', '', data.token),
+      createTextElement('small', '', 'Send as header "Authorization: Bearer <token>" (or ?token=<token>). Body: {"positions":[{"truckPlate":"01A123BC","lat":41.3,"lng":69.2,"speed":70}]}'),
+      copyButton
+    );
+    result.classList.remove('hidden');
+    loadIntegrationsPanel();
+  } catch (error) {
+    notify(error.message, 'error');
+  }
+}
+
+/* ---------- Companies panel (platform owner only) ---------- */
+async function loadCompaniesPanel() {
+  const list = document.getElementById('companyList');
+  if (!list) return;
+  try {
+    const response = await fetch('/api/platform/tenants', { headers: getAuthHeaders() });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'Unavailable');
+    list.replaceChildren(...data.tenants.map((tenant) => {
+      const row = createTextElement('div', 'admin-row');
+      const meta = createTextElement('div', 'user-meta');
+      meta.append(createTextElement('span', 'user-avatar', tenant.name.charAt(0).toUpperCase()));
+      const text = document.createElement('div');
+      text.append(createTextElement('strong', '', tenant.name), createTextElement('small', '', `${tenant.users} users · ${tenant.shipments} loads`));
+      meta.append(text);
+      row.append(meta);
+      return row;
+    }));
+  } catch (error) {
+    list.replaceChildren(createTextElement('p', 'muted', error.message));
+  }
+}
+
+function bindCompanyManagement() {
+  const toggle = document.getElementById('addCompanyToggle');
+  const form = document.getElementById('addCompanyForm');
+  const message = document.getElementById('addCompanyMessage');
+  if (!toggle || !form) return;
+  toggle.addEventListener('click', () => {
+    const open = form.classList.toggle('hidden') === false;
+    toggle.setAttribute('aria-expanded', String(open));
+    if (open) form.elements.companyName.focus();
+  });
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const submit = form.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    message.textContent = '';
+    try {
+      const response = await fetch('/api/platform/tenants', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          companyName: form.elements.companyName.value.trim(),
+          adminName: form.elements.adminName.value.trim(),
+          adminEmail: form.elements.adminEmail.value.trim(),
+          adminPassword: form.elements.adminPassword.value
+        })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Could not create the company');
+      form.reset();
+      form.classList.add('hidden');
+      toggle.setAttribute('aria-expanded', 'false');
+      notify(`${result.tenant.name} created. ${result.admin.email} can sign in and add their team.`, 'ok');
+      loadCompaniesPanel();
+    } catch (error) {
+      message.textContent = error.message;
+    }
+    submit.disabled = false;
+  });
+}
+
 function bindTeamManagement() {
+  bindCompanyManagement();
   const toggle = document.getElementById('addUserToggle');
   const form = document.getElementById('addUserForm');
   const message = document.getElementById('addUserMessage');
@@ -982,6 +1179,123 @@ function updateDashboard(data) {
 
 let detailsShipmentId = null;
 
+/* ---------- RELAY: drafted messages to driver / carrier / customer ---------- */
+const MESSAGE_PURPOSES = {
+  driver: [['location_request', 'Ask for location'], ['pickup_details', 'Pickup details']],
+  carrier: [['booking_confirmation', 'Booking confirmation']],
+  customer: [['status_update', 'Status update'], ['booking_confirmation', 'Truck booked'], ['delivered', 'Delivered']]
+};
+let messageTargetPhone = null;
+
+function fillPurposeOptions(form) {
+  const options = MESSAGE_PURPOSES[form.elements.recipient.value] || [];
+  form.elements.purpose.replaceChildren(...options.map(([value, label]) => {
+    const option = createTextElement('option', '', label);
+    option.value = value;
+    return option;
+  }));
+}
+
+async function loadMessageDraft() {
+  const form = document.getElementById('messageForm');
+  const status = document.getElementById('messageFormMessage');
+  if (!form || !detailsShipmentId) return;
+  status.textContent = 'Preparing the text…';
+  try {
+    const response = await fetch(`/api/shipments/${encodeURIComponent(detailsShipmentId)}/messages/draft`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ recipient: form.elements.recipient.value, purpose: form.elements.purpose.value, language: form.elements.language.value })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || 'Draft failed');
+    form.elements.body.value = result.draft.body;
+    messageTargetPhone = result.draft.to;
+    updateMessageSendState();
+  } catch (error) {
+    status.textContent = error.message;
+  }
+}
+
+function updateMessageSendState() {
+  const form = document.getElementById('messageForm');
+  const status = document.getElementById('messageFormMessage');
+  const send = document.getElementById('messageSend');
+  if (!form || !status || !send) return;
+  const channels = window.VeyraConfig.messaging?.channels || [];
+  const channelOn = channels.includes(form.elements.channel.value);
+  send.disabled = !messageTargetPhone || !channelOn;
+  if (!messageTargetPhone) status.textContent = `No ${form.elements.recipient.value} phone number on this load. Add it, or copy the text.`;
+  else if (!channelOn) status.textContent = `To: ${messageTargetPhone}. Automatic sending is off — copy the text and send it from your phone.`;
+  else status.textContent = `To: ${messageTargetPhone}`;
+}
+
+function bindMessageForm() {
+  const form = document.getElementById('messageForm');
+  if (!form) return;
+  fillPurposeOptions(form);
+  form.elements.recipient.addEventListener('change', () => { fillPurposeOptions(form); loadMessageDraft(); });
+  form.elements.purpose.addEventListener('change', loadMessageDraft);
+  form.elements.language.addEventListener('change', loadMessageDraft);
+  form.elements.channel.addEventListener('change', updateMessageSendState);
+  document.getElementById('messageCopy')?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(form.elements.body.value);
+      notify('Text copied. Paste it into WhatsApp or SMS on your phone.', 'ok');
+    } catch (_) {
+      form.elements.body.select();
+      notify('Select the text and copy it (Ctrl+C).', 'info');
+    }
+  });
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const status = document.getElementById('messageFormMessage');
+    const send = document.getElementById('messageSend');
+    send.disabled = true;
+    status.textContent = 'Sending…';
+    try {
+      const response = await fetch(`/api/shipments/${encodeURIComponent(detailsShipmentId)}/messages`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ recipient: form.elements.recipient.value, channel: form.elements.channel.value, body: form.elements.body.value })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Message not sent');
+      notify(`Message sent to ${result.message.to}.`, 'ok');
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+    await renderMessageList(detailsShipmentId);
+    updateMessageSendState();
+  });
+}
+
+async function renderMessageList(shipmentId) {
+  const list = document.getElementById('messageList');
+  if (!list) return;
+  try {
+    const response = await fetch(`/api/shipments/${encodeURIComponent(shipmentId)}/messages`, { headers: getAuthHeaders() });
+    const result = response.ok ? await response.json() : { messages: [] };
+    const items = (result.messages || []).map((entry) => {
+      const item = createTextElement('div', `detail-timeline-item message-${entry.status}`);
+      const content = document.createElement('div');
+      const channel = entry.channel === 'whatsapp' ? 'WhatsApp' : 'SMS';
+      content.append(
+        createTextElement('strong', '', `${channel} to ${entry.recipientType} · ${entry.status === 'sent' ? 'sent' : 'not delivered'}`),
+        createTextElement('p', '', entry.body),
+        entry.error ? createTextElement('p', 'warn-line', entry.error) : '',
+        createTextElement('time', '', `${formatTimestamp(entry.createdAt)} · ${entry.toPhone}${entry.sentBy ? ` · ${entry.sentBy}` : ''}`)
+      );
+      item.append(createTextElement('span', 'timeline-marker'), content);
+      return item;
+    });
+    if (!items.length) items.push(createTextElement('p', 'muted', 'No messages sent from VEYRA for this load yet.'));
+    list.replaceChildren(...items);
+  } catch (_) {
+    list.replaceChildren(createTextElement('p', 'muted', 'Messages unavailable.'));
+  }
+}
+
 function bindShipmentDetails() {
   const modal = document.getElementById('shipmentDetailsModal');
   const closeButton = document.getElementById('closeShipmentDetails');
@@ -995,6 +1309,7 @@ function bindShipmentDetails() {
     if (event.key === 'Escape' && modal) modal.classList.add('hidden');
   });
 
+  bindMessageForm();
   const trackingForm = document.getElementById('trackingForm');
   const trackingMessage = document.getElementById('trackingFormMessage');
   trackingForm?.addEventListener('submit', async (event) => {
@@ -1077,11 +1392,19 @@ async function openShipmentDetails(shipmentId) {
       const items = (tracking.updates || []).map((entry) => {
         const item = createTextElement('div', 'detail-timeline-item');
         const content = document.createElement('div');
+        const mapLink = entry.lat !== null && entry.lat !== undefined && entry.lng !== null && entry.lng !== undefined
+          ? Object.assign(createTextElement('a', 'map-link', 'Open map'), {
+            href: `https://www.openstreetmap.org/?mlat=${Number(entry.lat)}&mlon=${Number(entry.lng)}#map=11/${Number(entry.lat)}/${Number(entry.lng)}`,
+            target: '_blank',
+            rel: 'noopener noreferrer'
+          })
+          : '';
         content.append(
           createTextElement('strong', '', entry.location),
           entry.eta ? createTextElement('p', '', `ETA ${formatEta(entry.eta)}`) : '',
           entry.note ? createTextElement('p', '', entry.note) : '',
-          createTextElement('time', '', `${formatTimestamp(entry.createdAt)}${entry.actorName ? ` · ${entry.actorName}` : ''}`)
+          createTextElement('time', '', `${formatTimestamp(entry.createdAt)}${entry.source === 'gps' ? ' · GPS' : (entry.actorName ? ` · ${entry.actorName}` : '')}`),
+          mapLink
         );
         item.append(createTextElement('span', 'timeline-marker'), content);
         return item;
@@ -1115,6 +1438,20 @@ async function openShipmentDetails(shipmentId) {
       if (!eventItems.length) eventItems.push(createTextElement('p', '', 'No activity recorded.'));
       timeline.replaceChildren(...eventItems);
     }
+
+    const messageForm = document.getElementById('messageForm');
+    const canMessage = hasPermission('shipments:message');
+    messageForm?.classList.toggle('hidden', !canMessage);
+    const channels = window.VeyraConfig.messaging?.channels || [];
+    const messagingStatus = document.getElementById('messagingStatus');
+    if (messagingStatus) messagingStatus.textContent = channels.length ? `Sending by ${channels.join(' / ').toUpperCase()}` : 'Sending off · copy and send from your phone';
+    if (canMessage) {
+      messageForm.elements.recipient.value = TRACKABLE_STATUSES.includes(shipment.status) ? 'driver' : 'customer';
+      fillPurposeOptions(messageForm);
+      if (channels.length && !channels.includes(messageForm.elements.channel.value)) messageForm.elements.channel.value = channels[0];
+      loadMessageDraft();
+    }
+    renderMessageList(shipment.id);
     modal.classList.remove('hidden');
   } catch (error) {
     notify(error.message, 'error');

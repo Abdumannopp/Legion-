@@ -35,6 +35,22 @@ Allowed progression is enforced by the API. Carriers assigned to dispatched load
 - Dispatch also accepts optional `customerRate`, `driverName`, `driverPhone`, `truckPlate`; shipments return `customerRate`, `margin`, driver/truck fields, `lastLocation` and `eta`.
 - `GET /api/config` (public) returns `weightUnit`, `currency`, `equipment` and the sign-up mode.
 - `POST /api/admin/users` (admin) adds a team member; `PATCH /api/admin/users/:id` changes `role` and/or `active`. Changes sign the user out immediately.
+- `GET /api/shipments/search?page=&limit=&status=&q=&equipment=&sort=` returns one page (`items`, `total`, `pages`, `statusCounts`); `GET /api/alerts` returns the notification counts. Both are computed in SQL, so they stay correct at any volume.
+
+### AI agents and integrations
+
+| Agent | What it does | Needs |
+|---|---|---|
+| **FLOW** | `POST /api/agents/flow/parse` `{text}` turns a customer's email / WhatsApp message into a shipment draft (weight converted to the configured unit, missing fields listed, questions to ask). Nothing is saved: a person reviews the form and presses Create. | `OPENROUTER_API_KEY` |
+| **SCOUT** | `GET /api/agents/scout/:id` ranks available carriers by trailer fit, deliveries on the same lane and past problems, and suggests a rate from lane history. Rules, not a language model: free, instant, explainable. | nothing |
+| **RELAY** | `POST /api/shipments/:id/messages/draft` drafts a message to the driver, carrier or customer (uz / ru / en templates from the load's real data); `POST /api/shipments/:id/messages` sends it by SMS or WhatsApp. The number always comes from the load record. | Twilio settings to send; drafts and "Copy text" work without |
+| **TRACE (GPS)** | `POST /api/integrations/gps` receives positions from a GPS provider (`Authorization: Bearer <company GPS token>`, body `{"positions":[{"truckPlate","lat","lng","speed","address"}]}`), matches them to the active load by truck plate and stores at most one point per `GPS_MIN_INTERVAL_MINUTES`. Admins create the token under Integrations. | a GPS provider that can POST JSON |
+
+The AI gateway (`ai/gateway.js`) is the only code that talks to a model: OpenRouter, no hard-coded model (`OPENROUTER_MODEL` empty = account default), no `HTTP-Referer` header, 20 s timeout, one retry, per-person hourly limit, and every call logged in `agent_tasks` (agent, model, tokens, time, result) — visible under Analytics → AI agents. Customer text is passed as untrusted data and the model's JSON is validated with the same rules as typed input. No new dependencies (built-in `fetch`).
+
+### Multiple companies (multi-tenant)
+
+Every user, shipment and carrier belongs to one company (`tenant_id`); every query is scoped to the signed-in user's company and a missing company fails closed. Records of another company behave as if they do not exist (404). The platform owner (the first production admin) adds customer companies with their first administrator under **Companies** (`GET/POST /api/platform/tenants`); each company admin then adds their own team. Data from before this change belongs to company 1.
 
 - `GET /api/carriers` lists carriers with load statistics (loads, active, delivered, exceptions, booked revenue, current load).
 - `POST /api/carriers` adds a carrier (`name`, `mode`: Truckload, LTL, Expedited, Reefer, Flatbed, Intermodal; optional `phone`, `contactName`).
@@ -123,5 +139,5 @@ In production sign-up is closed: the administrator adds people under Team Access
 - **Errors**: a global handler returns generic messages; details are logged server-side only.
 - **Database**: foreign keys enforced, indexes on hot queries, `npm run db:check` runs `PRAGMA integrity_check` and `foreign_key_check`.
 - **Production start**: `NODE_ENV=production`, `JWT_SECRET` and (first start only) `INITIAL_ADMIN_NAME/EMAIL/PASSWORD` (12+ chars) are required; the server refuses to start without them.
-- **Tests**: `npm test` (43 tests: auth, rate limits, transactions, validation, security headers, carriers, analytics, XSS, truck workflow, team management, production mode).
+- **Tests**: `npm test` (57 tests: auth, rate limits, transactions, validation, security headers, carriers, analytics, XSS, truck workflow, team management, production mode, company isolation, FLOW / SCOUT / RELAY with fake providers, GPS, paging).
 - **Dependencies**: `npm audit` reports 0 vulnerabilities at the time of release.

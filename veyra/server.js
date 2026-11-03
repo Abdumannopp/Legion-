@@ -3,26 +3,37 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
-const REGISTRATION_INVITE_CODE = process.env.REGISTRATION_INVITE_CODE || '';
-const MAX_LEN = {
-  carrierName: 120, name: 120, email: 254, customer: 120, reference: 80, origin: 160, destination: 160, trackingNumber: 80, note: 500,
-  phone: 40, contactName: 120, driverName: 120, driverPhone: 40, truckPlate: 20, location: 160
-};
-// bcrypt only uses the first 72 bytes of a password; longer input would be silently cut.
-const MAX_PASSWORD_BYTES = 72;
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const {
+  readPositiveInteger,
+  parsePositiveNumber,
+  parseMoney: parseMoneyUpTo,
+  parseIsoDate,
+  parseShipmentId,
+  normalizePlate,
+  readOptionalText,
+  readOptionalPhone,
+  parseEta
+} = require('./lib/validation');
+const {
   BCRYPT_COST,
+  DEFAULT_TENANT_ID,
   ALLOWED_ROLES,
-  TRACKABLE_STATUSES,
+  CARRIER_MODES,
+  CARRIER_MANUAL_STATUSES,
   initialize,
+  getTenant,
+  listTenants,
+  createTenantWithAdmin,
+  setTenantGpsTokenHash,
+  findTenantByGpsTokenHash,
   findUserByEmail,
   findUserById,
   updateUser,
-  addTrackingUpdate,
-  listTrackingUpdates,
+  createUser,
+  listUsers,
   createAuthSession,
   isAuthSessionActive,
   revokeAuthSession,
@@ -30,38 +41,50 @@ const {
   consumeRateLimit,
   recordRateLimitAttempts,
   clearRateLimitAttempts,
-  createUser,
-  listUsers,
   listShipments,
+  searchShipments,
   getShipment,
   updateShipmentStatus,
   createShipment,
   dispatchShipment,
+  addTrackingUpdate,
+  recordGpsPositions,
+  listTrackingUpdates,
   listShipmentEvents,
-  listCarriers,
-  getAnalyticsPayload,
-  getDashboardPayload,
+  createMessage,
+  listMessages,
+  recordAgentTask,
+  getAgentUsage,
   listCarriersWithStats,
+  getScoutData,
   createCarrier,
   updateCarrierStatus,
-  CARRIER_MODES,
-  CARRIER_MANUAL_STATUSES,
   getAnalyticsReport,
+  getDashboardPayload,
+  getAlerts
 } = require('./database');
+const aiGateway = require('./ai/gateway');
+const flowAgent = require('./agents/flow');
+const scoutAgent = require('./agents/scout');
+const relayAgent = require('./agents/relay');
+const messaging = require('./integrations/messaging');
 
-function readPositiveInteger(value, fallback) {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
-}
+const REGISTRATION_INVITE_CODE = process.env.REGISTRATION_INVITE_CODE || '';
+const MAX_LEN = {
+  carrierName: 120, name: 120, email: 254, customer: 120, reference: 80, origin: 160, destination: 160, trackingNumber: 80, note: 500,
+  phone: 40, contactName: 120, driverName: 120, driverPhone: 40, truckPlate: 20, location: 160, companyName: 120, message: 1000
+};
+// bcrypt only uses the first 72 bytes of a password; longer input would be silently cut.
+const MAX_PASSWORD_BYTES = 72;
 
 // Same hash cost as real accounts, so a login for an unknown email takes as long as a real one.
 const DUMMY_HASH = bcrypt.hashSync(crypto.randomBytes(16).toString('hex'), BCRYPT_COST);
 
 const ROLE_PERMISSIONS = {
   admin: ['*'],
-  operations: ['analytics:read', 'dashboard:read', 'carriers:read', 'carriers:write', 'shipments:read', 'shipments:create', 'shipments:status', 'shipments:dispatch', 'shipments:track', 'users:read'],
-  // Dispatchers log where the truck is ("check calls"), but cannot book or change status.
-  operator: ['dashboard:read', 'carriers:read', 'shipments:read', 'shipments:create', 'shipments:track']
+  operations: ['analytics:read', 'dashboard:read', 'carriers:read', 'carriers:write', 'shipments:read', 'shipments:create', 'shipments:status', 'shipments:dispatch', 'shipments:track', 'shipments:message', 'users:read'],
+  // Dispatchers log where the truck is ("check calls") and message drivers, but cannot book or change status.
+  operator: ['dashboard:read', 'carriers:read', 'shipments:read', 'shipments:create', 'shipments:track', 'shipments:message']
 };
 
 const app = express();
@@ -72,10 +95,18 @@ const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || (isProduction ? '0.0.0.0' : '127.0.0.1');
 const JWT_SECRET = process.env.JWT_SECRET || (isProduction ? null : 'veyra-dev-secret');
 
-// Region settings: one product, configured per deployment (kg or lb, local currency).
+// Region settings: one product, configured per deployment (kg or lb, local currency, message language).
 const WEIGHT_UNIT = ['kg', 'lb'].includes(String(process.env.WEIGHT_UNIT).toLowerCase()) ? String(process.env.WEIGHT_UNIT).toLowerCase() : 'kg';
 const CURRENCY = /^[A-Z]{3}$/.test(String(process.env.CURRENCY || '')) ? process.env.CURRENCY : 'USD';
+const MESSAGE_LANGUAGE = relayAgent.LANGUAGES.includes(String(process.env.MESSAGE_LANGUAGE || '').toLowerCase()) ? String(process.env.MESSAGE_LANGUAGE).toLowerCase() : 'en';
 const EQUIPMENT = ['Dry Van', 'Tent / Curtainsider', 'Reefer', 'Flatbed', 'LTL', 'Expedited'];
+const MAX_WEIGHT = 1000000;
+// Sanity bound for money fields. Raise MAX_RATE for currencies with large numbers (e.g. UZS).
+const MAX_RATE = readPositiveInteger(process.env.MAX_RATE, 10000000);
+// A booked truck nobody has checked on for this long is flagged.
+const STALE_TRACKING_HOURS = readPositiveInteger(process.env.STALE_TRACKING_HOURS, 12);
+const GPS_MIN_INTERVAL_MINUTES = readPositiveInteger(process.env.GPS_MIN_INTERVAL_MINUTES, 15);
+const GPS_WEBHOOK_PATH = '/api/integrations/gps';
 // Open self-sign-up is a demo convenience. In production nobody can create an account
 // unless an invite code is configured or open registration is switched on explicitly.
 const REGISTRATION_MODE = REGISTRATION_INVITE_CODE
@@ -116,6 +147,8 @@ if (isProduction && !process.env.JWT_SECRET) {
   process.exit(1);
 }
 
+const parseMoney = (value) => parseMoneyUpTo(value, MAX_RATE);
+
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
 app.use((req, res, next) => {
@@ -147,60 +180,20 @@ app.use(cors({
   origin: isProduction ? process.env.ALLOWED_ORIGIN || false : true,
   credentials: true
 }));
-app.use(express.json({ limit: '50kb' }));
+// GPS providers send batches of positions, so their endpoint accepts larger bodies.
+const smallJson = express.json({ limit: '50kb' });
+const gpsJson = express.json({ limit: '1mb' });
+app.use((req, res, next) => (req.path === GPS_WEBHOOK_PATH ? gpsJson : smallJson)(req, res, next));
 const PUBLIC_DIR = path.join(__dirname, 'public');
 app.use(express.static(PUBLIC_DIR));
 
 function readPaging(req) {
   const limit = Math.min(readPositiveInteger(req.query.limit, 100), 200);
   const page = readPositiveInteger(req.query.page, 1);
-  return { limit, offset: (page - 1) * limit };
+  return { limit, offset: (page - 1) * limit, page };
 }
 
 const SHIPMENT_STATUSES = ['New', 'Sourcing', 'Pending Approval', 'Dispatched', 'In Transit', 'Exception', 'Delivered', 'Cancelled'];
-
-function parseShipmentId(raw) {
-  const match = /^(?:SHP-)?([1-9]\d{0,9})$/.exec(String(raw));
-  return match ? Number(match[1]) : null;
-}
-
-function parsePositiveNumber(value, max) {
-  const isNumeric = typeof value === 'number' || (typeof value === 'string' && /^\d+(\.\d{1,2})?$/.test(value.trim()));
-  const number = isNumeric ? Number(value) : NaN;
-  return Number.isFinite(number) && number > 0 && number <= max ? number : null;
-}
-
-const MAX_WEIGHT = 1000000;
-// Sanity bound for money fields. Raise MAX_RATE for currencies with large numbers (e.g. UZS).
-const MAX_RATE = readPositiveInteger(process.env.MAX_RATE, 10000000);
-
-function parseMoney(value) {
-  const amount = parsePositiveNumber(value, MAX_RATE);
-  return amount === null ? null : Math.round(amount * 100) / 100;
-}
-
-// Optional free-text field: undefined/null/'' mean "not given". Returns { value } or { error }.
-function readOptionalText(body, field, maxLength) {
-  const value = body?.[field];
-  if (value === undefined || value === null || value === '') return { value: null };
-  if (typeof value !== 'string' || value.trim().length > maxLength) return { error: `${field} must be text of at most ${maxLength} characters.` };
-  return { value: value.trim() || null };
-}
-
-function readOptionalPhone(body, field) {
-  const result = readOptionalText(body, field, MAX_LEN[field] || 40);
-  if (result.error || !result.value) return result;
-  return /^[+\d][\d\s()-]{4,}$/.test(result.value) ? result : { error: `${field} must be a phone number (digits, spaces, + ( ) -).` };
-}
-
-// ETA: a date (YYYY-MM-DD) or a date and time (YYYY-MM-DDTHH:MM), as entered by the dispatcher.
-function parseEta(value) {
-  if (value === undefined || value === null || value === '') return { value: null };
-  if (typeof value !== 'string') return { error: 'ETA must be a date (YYYY-MM-DD) or date and time (YYYY-MM-DDTHH:MM).' };
-  const match = /^(\d{4}-\d{2}-\d{2})(?:T([01]\d|2[0-3]):([0-5]\d))?$/.exec(value.trim());
-  if (!match || !parseIsoDate(match[1])) return { error: 'ETA must be a date (YYYY-MM-DD) or date and time (YYYY-MM-DDTHH:MM).' };
-  return { value: value.trim() };
-}
 
 function passwordTooLong(password) {
   return Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_BYTES;
@@ -213,10 +206,22 @@ function validateNewPassword(password) {
   return null;
 }
 
-function parseIsoDate(value) {
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
-  const date = new Date(`${value}T00:00:00Z`);
-  return Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value ? null : date;
+function validateNameAndEmail(name, email) {
+  if (typeof name !== 'string' || typeof email !== 'string' || !name.trim() || !email.trim()) {
+    return 'Name and email are required.';
+  }
+  if (name.length > MAX_LEN.name || email.length > MAX_LEN.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+    return 'Name or email is invalid.';
+  }
+  return null;
+}
+
+function formatMoney(value) {
+  try {
+    return Number(value).toLocaleString('en-US', { style: 'currency', currency: CURRENCY, maximumFractionDigits: 2 });
+  } catch (_) {
+    return `${Number(value).toFixed(2)} ${CURRENCY}`;
+  }
 }
 
 function serializeShipment(shipment) {
@@ -224,6 +229,7 @@ function serializeShipment(shipment) {
   return {
     id: `SHP-${shipment.id}`,
     customer: shipment.customer,
+    customerPhone: shipment.customer_phone || null,
     origin: shipment.origin,
     destination: shipment.destination,
     pickup: shipment.pickup || 'Today',
@@ -337,6 +343,29 @@ const normalApiLimiter = createRateLimiter({
   message: 'Too many API requests. Please try again later.'
 });
 
+// AI calls cost money: each person gets a fair hourly budget.
+const aiLimiter = createRateLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: readPositiveInteger(process.env.AI_RATE_LIMIT_PER_HOUR, 60),
+  keyGenerator: (req) => `ai:${req.user?.id}`,
+  message: 'AI hourly limit reached. Please fill the form by hand or try again later.'
+});
+
+// Text messages cost money and can annoy drivers: an hourly cap per person.
+const messageLimiter = createRateLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: readPositiveInteger(process.env.MESSAGE_RATE_LIMIT_PER_HOUR, 60),
+  keyGenerator: (req) => `msg:${req.user?.id}`,
+  message: 'Message limit reached for this hour.'
+});
+
+const gpsLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: readPositiveInteger(process.env.GPS_RATE_LIMIT_PER_MINUTE, 600),
+  keyGenerator: (req) => `gps:${req.gpsTokenHash || getClientIp(req)}`,
+  message: 'Too many GPS requests.'
+});
+
 const loginLimiter = async (req, res, next) => {
   const ip = getClientIp(req);
   const email = getNormalizedEmail(req);
@@ -382,7 +411,8 @@ const registerLimiter = async (req, res, next) => {
   }
 };
 
-app.use('/api', normalApiLimiter);
+// The GPS webhook has its own token and limiter (providers send many requests from one address).
+app.use('/api', (req, res, next) => (req.path === '/integrations/gps' ? next() : normalApiLimiter(req, res, next)));
 
 const authRateLimiters = { login: loginLimiter, register: registerLimiter };
 
@@ -437,13 +467,22 @@ async function authMiddleware(req, res, next) {
         message: 'Session expired or revoked.'
       });
     }
-    // Role and access come from the database on every request, not from the token,
+    // Role, company and access come from the database on every request, not from the token,
     // so an admin's change (new role, account disabled) applies immediately.
     const user = await findUserById(payload.id);
     if (!user || user.disabledAt) {
       return res.status(401).json({ success: false, message: 'Session expired or revoked.' });
     }
-    req.user = { id: user.id, email: user.email, name: user.name, role: user.role, jti: payload.jti };
+    req.user = {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      jti: payload.jti,
+      tenantId: user.tenantId,
+      tenantName: user.tenantName,
+      isPlatformAdmin: Boolean(user.isPlatformAdmin)
+    };
     return next();
   } catch (error) {
     return res.status(401).json({
@@ -451,19 +490,6 @@ async function authMiddleware(req, res, next) {
       message: 'Invalid or expired token.'
     });
   }
-}
-
-function requireRole(...roles) {
-  return (req, res, next) => {
-    if (!req.user || !roles.includes(req.user.role)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Forbidden: insufficient role permissions.'
-      });
-    }
-
-    return next();
-  };
 }
 
 function requirePermission(permission) {
@@ -479,6 +505,19 @@ function requirePermission(permission) {
   };
 }
 
+// The platform owner adds customer companies; a company's own admin cannot.
+function requirePlatformAdmin(req, res, next) {
+  if (!req.user?.isPlatformAdmin) {
+    return res.status(403).json({ success: false, message: 'Forbidden: platform administrators only.' });
+  }
+  return next();
+}
+
+function hasPermission(user, permission) {
+  const permissions = ROLE_PERMISSIONS[user?.role] || [];
+  return permissions.includes('*') || permissions.includes(permission);
+}
+
 function sanitizeUser(user) {
   if (!user) return null;
   return {
@@ -486,10 +525,26 @@ function sanitizeUser(user) {
     name: user.name,
     email: user.email,
     role: user.role,
-    permissions: ROLE_PERMISSIONS[user.role] || []
+    permissions: ROLE_PERMISSIONS[user.role] || [],
+    isPlatformAdmin: Boolean(user.is_platform_admin ?? user.isPlatformAdmin)
   };
 }
 
+// Writes an agent_tasks row for every AI call (success or failure).
+function agentLogger(req, shipmentId = null) {
+  return (task) => recordAgentTask(req.user.tenantId, { ...task, shipmentId, actorId: req.user.id })
+    .catch((error) => console.error('[agent log] failed:', error.message));
+}
+
+function sendError(res, error, fallbackMessage, logLabel) {
+  if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
+  console.error(`[${logLabel}] failed:`, error.message);
+  return res.status(500).json({ success: false, message: fallbackMessage });
+}
+
+/* =========================================================
+   PUBLIC
+   ========================================================= */
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -498,26 +553,19 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Public settings the UI needs before sign-in (units, currency, whether sign-up is possible).
+// Public settings the UI needs before sign-in (units, currency, whether sign-up is possible, features on).
 app.get('/api/config', (req, res) => {
   res.json({
     weightUnit: WEIGHT_UNIT,
     currency: CURRENCY,
     equipment: EQUIPMENT,
     registration: REGISTRATION_MODE,
-    maxRate: MAX_RATE
+    maxRate: MAX_RATE,
+    staleTrackingHours: STALE_TRACKING_HOURS,
+    ai: { enabled: aiGateway.isEnabled() },
+    messaging: { ...messaging.status(), language: MESSAGE_LANGUAGE, languages: relayAgent.LANGUAGES }
   });
 });
-
-function validateNameAndEmail(name, email) {
-  if (typeof name !== 'string' || typeof email !== 'string' || !name.trim() || !email.trim()) {
-    return 'Name and email are required.';
-  }
-  if (name.length > MAX_LEN.name || email.length > MAX_LEN.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-    return 'Name or email is invalid.';
-  }
-  return null;
-}
 
 app.post('/api/register', registerLimiter, async (req, res) => {
   try {
@@ -557,11 +605,13 @@ app.post('/api/register', registerLimiter, async (req, res) => {
 
     let user;
     try {
+      // Self-registered people join the default company as operators.
       user = await createUser({
         name: name.trim(),
         email: normalizedEmail,
         password: hashedPassword,
-        role: 'operator'
+        role: 'operator',
+        tenantId: DEFAULT_TENANT_ID
       });
     } catch (error) {
       if (String(error.code) === 'SQLITE_CONSTRAINT') {
@@ -649,17 +699,20 @@ app.post('/api/logout', async (req, res) => {
   return res.json({ success: true });
 });
 
+/* =========================================================
+   DASHBOARD, ANALYTICS, ALERTS
+   ========================================================= */
 app.get('/api/dashboard', authMiddleware, requirePermission('dashboard:read'), async (req, res) => {
   try {
-    const payload = await getDashboardPayload({ days: req.query.days });
-    const permissions = ROLE_PERMISSIONS[req.user.role] || [];
-    if (!permissions.includes('*') && !permissions.includes('analytics:read')) {
+    const payload = await getDashboardPayload(req.user.tenantId, { days: req.query.days });
+    if (!hasPermission(req.user, 'analytics:read')) {
       delete payload.stats;
       delete payload.statuses;
       delete payload.weeklyVolume;
     }
     res.json(payload);
   } catch (error) {
+    console.error('[dashboard] failed:', error.message);
     res.status(500).json({
       success: false,
       message: 'Dashboard unavailable'
@@ -669,18 +722,59 @@ app.get('/api/dashboard', authMiddleware, requirePermission('dashboard:read'), a
 
 app.get('/api/analytics', authMiddleware, requirePermission('analytics:read'), async (req, res) => {
   try {
-    res.json(await getAnalyticsReport({ days: req.query.days }));
+    const report = await getAnalyticsReport(req.user.tenantId, { days: req.query.days });
+    report.agents = await getAgentUsage(req.user.tenantId, report.rangeDays);
+    res.json(report);
   } catch (error) {
+    console.error('[analytics] failed:', error.message);
     res.status(500).json({ success: false, message: 'Analytics unavailable.' });
   }
 });
 
+// What needs attention right now (notification bell).
+app.get('/api/alerts', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  try {
+    res.json({ success: true, alerts: await getAlerts(req.user.tenantId, { staleHours: STALE_TRACKING_HOURS }) });
+  } catch (error) {
+    console.error('[alerts] failed:', error.message);
+    res.status(500).json({ success: false, message: 'Alerts unavailable.' });
+  }
+});
+
+/* =========================================================
+   SHIPMENTS
+   ========================================================= */
 app.get('/api/shipments', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
   try {
-    const shipments = await listShipments(readPaging(req));
+    const shipments = await listShipments(req.user.tenantId, readPaging(req));
     res.json(shipments.map(serializeShipment));
   } catch (error) {
     console.error('[shipments] failed:', error.message);
+    res.status(500).json({ success: false, message: 'Shipments unavailable' });
+  }
+});
+
+// Paged, filtered list for the Shipments page and CSV export. Registered before /:id.
+app.get('/api/shipments/search', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  const { limit, offset, page } = readPaging(req);
+  const status = SHIPMENT_STATUSES.includes(req.query.status) ? req.query.status : null;
+  const equipment = EQUIPMENT.includes(req.query.equipment) ? req.query.equipment : null;
+  const q = typeof req.query.q === 'string' ? req.query.q.slice(0, 120) : '';
+  const sort = typeof req.query.sort === 'string' ? req.query.sort : 'newest';
+  try {
+    const result = await searchShipments(req.user.tenantId, { status, equipment, q, sort, limit, offset });
+    res.json({
+      success: true,
+      items: result.items.map(serializeShipment),
+      total: result.total,
+      allCount: result.allCount,
+      statusCounts: result.statusCounts,
+      page,
+      pageSize: limit,
+      pages: Math.max(1, Math.ceil(result.total / limit))
+    });
+  } catch (error) {
+    console.error('[shipment search] failed:', error.message);
     res.status(500).json({ success: false, message: 'Shipments unavailable' });
   }
 });
@@ -691,256 +785,12 @@ app.get('/api/shipments/:id', authMiddleware, requirePermission('shipments:read'
     return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
   }
   try {
-    const shipment = await getShipment(shipmentId);
+    const shipment = await getShipment(req.user.tenantId, shipmentId);
     if (!shipment) return res.status(404).json({ success: false, message: 'Shipment not found.' });
     return res.json(serializeShipment(shipment));
   } catch (error) {
     console.error('[shipment] failed:', error.message);
     return res.status(500).json({ success: false, message: 'Shipment unavailable' });
-  }
-});
-
-app.get('/api/carriers', authMiddleware, requirePermission('carriers:read'), async (req, res) => {
-  try {
-    const carriers = await listCarriersWithStats();
-    res.json(carriers);
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Carriers unavailable'
-    });
-  }
-});
-
-app.post('/api/carriers', authMiddleware, requirePermission('carriers:write'), async (req, res) => {
-  const { name, mode } = req.body || {};
-  if (typeof name !== 'string' || !name.trim() || name.trim().length > MAX_LEN.carrierName || !CARRIER_MODES.includes(mode)) {
-    return res.status(400).json({ success: false, message: `Carrier name (max ${MAX_LEN.carrierName} characters) and a valid mode are required.` });
-  }
-  const phone = readOptionalPhone(req.body, 'phone');
-  const contactName = readOptionalText(req.body, 'contactName', MAX_LEN.contactName);
-  const invalid = phone.error || contactName.error;
-  if (invalid) return res.status(400).json({ success: false, message: invalid });
-  try {
-    const carrier = await createCarrier({ name: name.trim(), mode, phone: phone.value, contactName: contactName.value });
-    return res.status(201).json({ success: true, carrier });
-  } catch (error) {
-    if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
-    console.error('[create carrier] failed:', error.message);
-    return res.status(500).json({ success: false, message: 'Carrier creation failed' });
-  }
-});
-
-app.patch('/api/carriers/:id/status', authMiddleware, requirePermission('carriers:write'), async (req, res) => {
-  const carrierId = Number(req.params.id);
-  const status = req.body?.status;
-  if (!Number.isInteger(carrierId) || carrierId <= 0 || !CARRIER_MANUAL_STATUSES.includes(status)) {
-    return res.status(400).json({ success: false, message: `A valid carrier ID and status (${CARRIER_MANUAL_STATUSES.join(' or ')}) are required.` });
-  }
-  try {
-    const carrier = await updateCarrierStatus(carrierId, status);
-    return res.json({ success: true, carrier });
-  } catch (error) {
-    if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
-    console.error('[carrier status] failed:', error.message);
-    return res.status(500).json({ success: false, message: 'Carrier update failed' });
-  }
-});
-
-app.get('/api/me', authMiddleware, (req, res) => {
-  res.json({
-    success: true,
-    user: {
-      id: req.user.id,
-      email: req.user.email,
-      name: req.user.name,
-      role: req.user.role,
-      permissions: ROLE_PERMISSIONS[req.user.role] || []
-    }
-  });
-});
-
-app.get('/api/admin/users', authMiddleware, requirePermission('users:read'), async (req, res) => {
-  try {
-    const users = await listUsers();
-    res.json({
-      success: true,
-      users
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'User list unavailable'
-    });
-  }
-});
-
-// Admin adds a team member with a starting password (sign-up is closed in production).
-app.post('/api/admin/users', authMiddleware, requirePermission('users:write'), async (req, res) => {
-  const { name, email, password, role } = req.body || {};
-  const identityError = validateNameAndEmail(name, email);
-  if (identityError) return res.status(400).json({ success: false, message: identityError });
-  if (!ALLOWED_ROLES.includes(role)) {
-    return res.status(400).json({ success: false, message: `Role must be one of: ${ALLOWED_ROLES.join(', ')}.` });
-  }
-  const passwordError = validateNewPassword(password);
-  if (passwordError) return res.status(400).json({ success: false, message: passwordError });
-  try {
-    const normalizedEmail = email.trim().toLowerCase();
-    if (await findUserByEmail(normalizedEmail)) {
-      return res.status(409).json({ success: false, message: 'A user with this email already exists.' });
-    }
-    const user = await createUser({ name: name.trim(), email: normalizedEmail, password: await bcrypt.hash(password, BCRYPT_COST), role });
-    return res.status(201).json({ success: true, user: { id: user.id, name: user.name, email: user.email, role: user.role, active: true } });
-  } catch (error) {
-    if (String(error.code) === 'SQLITE_CONSTRAINT') {
-      return res.status(409).json({ success: false, message: 'A user with this email already exists.' });
-    }
-    console.error('[create user] failed:', error.message);
-    return res.status(500).json({ success: false, message: 'User could not be created.' });
-  }
-});
-
-// Change role and/or enable/disable an account. Takes effect at once (sessions are revoked).
-app.patch('/api/admin/users/:id', authMiddleware, requirePermission('users:write'), async (req, res) => {
-  const userId = Number(req.params.id);
-  const { role, active } = req.body || {};
-  if (!Number.isInteger(userId) || userId <= 0
-    || (role === undefined && active === undefined)
-    || (role !== undefined && !ALLOWED_ROLES.includes(role))
-    || (active !== undefined && typeof active !== 'boolean')) {
-    return res.status(400).json({ success: false, message: `Send a role (${ALLOWED_ROLES.join(', ')}) and/or active (true or false).` });
-  }
-  try {
-    const user = await updateUser(userId, { role, active }, req.user.id);
-    return res.json({ success: true, user });
-  } catch (error) {
-    if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
-    console.error('[update user] failed:', error.message);
-    return res.status(500).json({ success: false, message: 'User could not be updated.' });
-  }
-});
-
-app.get('/api/admin/shipments', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
-  try {
-    const shipments = await listShipments(readPaging(req));
-    res.json({
-      success: true,
-      shipments: shipments.map(serializeShipment)
-    });
-  } catch (error) {
-    console.error('[admin shipments] failed:', error.message);
-    res.status(500).json({ success: false, message: 'Admin shipment list unavailable' });
-  }
-});
-
-app.patch('/api/admin/shipments/:id/status', authMiddleware, requirePermission('shipments:status'), async (req, res) => {
-  try {
-    const shipmentId = parseShipmentId(req.params.id);
-    const { status, note } = req.body || {};
-
-    if (!shipmentId || !SHIPMENT_STATUSES.includes(status) || (note !== undefined && note !== null && (typeof note !== 'string' || note.length > MAX_LEN.note))) {
-      return res.status(400).json({
-        success: false,
-        message: `A valid shipment ID and a status (${SHIPMENT_STATUSES.join(', ')}) are required.`
-      });
-    }
-
-    const result = await updateShipmentStatus(shipmentId, status, req.user.id, note);
-    return res.json({
-      success: true,
-      shipment: {
-        id: `SHP-${result.id}`,
-        status: result.status,
-        updated: result.changes > 0
-      }
-    });
-  } catch (error) {
-    if (error.statusCode) {
-      return res.status(error.statusCode).json({ success: false, message: error.message });
-    }
-    console.error('[status] failed:', error.message);
-    return res.status(500).json({ success: false, message: 'Shipment status update failed' });
-  }
-});
-
-app.post('/api/admin/shipments/:id/dispatch', authMiddleware, requirePermission('shipments:dispatch'), async (req, res) => {
-  try {
-    const shipmentId = parseShipmentId(req.params.id);
-    const carrierId = typeof req.body?.carrierId === 'number' ? req.body.carrierId : NaN;
-    const rate = parseMoney(req.body?.rate);
-    if (!Number.isInteger(shipmentId) || shipmentId <= 0 || !Number.isInteger(carrierId) || carrierId <= 0 || rate === null) {
-      return res.status(400).json({ success: false, message: `A valid carrier and a rate between 0.01 and ${MAX_RATE.toLocaleString('en-US')} are required.` });
-    }
-    const hasCustomerRate = req.body?.customerRate !== undefined && req.body?.customerRate !== null && req.body?.customerRate !== '';
-    const customerRate = hasCustomerRate ? parseMoney(req.body.customerRate) : null;
-    if (hasCustomerRate && customerRate === null) {
-      return res.status(400).json({ success: false, message: `Customer price must be between 0.01 and ${MAX_RATE.toLocaleString('en-US')}.` });
-    }
-    const driverName = readOptionalText(req.body, 'driverName', MAX_LEN.driverName);
-    const driverPhone = readOptionalPhone(req.body, 'driverPhone');
-    const truckPlate = readOptionalText(req.body, 'truckPlate', MAX_LEN.truckPlate);
-    const invalid = driverName.error || driverPhone.error || truckPlate.error;
-    if (invalid) return res.status(400).json({ success: false, message: invalid });
-
-    const shipment = await dispatchShipment(shipmentId, carrierId, rate, req.user.id, {
-      customerRate,
-      driverName: driverName.value,
-      driverPhone: driverPhone.value,
-      truckPlate: truckPlate.value
-    });
-    return res.json({ success: true, shipment: { ...shipment, id: `SHP-${shipment.id}` } });
-  } catch (error) {
-    if (error.statusCode) {
-      return res.status(error.statusCode).json({ success: false, message: error.message });
-    }
-    console.error('[dispatch] failed:', error.message);
-    return res.status(500).json({ success: false, message: 'Dispatch failed' });
-  }
-});
-
-app.get('/api/shipments/:id/events', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
-  try {
-    const shipmentId = parseShipmentId(req.params.id);
-    if (!shipmentId) {
-      return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
-    }
-    return res.json({ success: true, events: await listShipmentEvents(shipmentId) });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: 'Shipment history unavailable.' });
-  }
-});
-
-// Where is the truck? Location updates ("check calls") for a booked load, newest first.
-app.get('/api/shipments/:id/tracking', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
-  const shipmentId = parseShipmentId(req.params.id);
-  if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
-  try {
-    if (!(await getShipment(shipmentId))) return res.status(404).json({ success: false, message: 'Shipment not found.' });
-    return res.json({ success: true, updates: await listTrackingUpdates(shipmentId) });
-  } catch (error) {
-    console.error('[tracking list] failed:', error.message);
-    return res.status(500).json({ success: false, message: 'Tracking history unavailable.' });
-  }
-});
-
-app.post('/api/shipments/:id/tracking', authMiddleware, requirePermission('shipments:track'), async (req, res) => {
-  const shipmentId = parseShipmentId(req.params.id);
-  const location = req.body?.location;
-  if (!shipmentId || typeof location !== 'string' || !location.trim() || location.trim().length > MAX_LEN.location) {
-    return res.status(400).json({ success: false, message: `A current location (at most ${MAX_LEN.location} characters) is required.` });
-  }
-  const eta = parseEta(req.body?.eta);
-  const note = readOptionalText(req.body, 'note', MAX_LEN.note);
-  const invalid = eta.error || note.error;
-  if (invalid) return res.status(400).json({ success: false, message: invalid });
-  try {
-    const update = await addTrackingUpdate(shipmentId, { location: location.trim(), eta: eta.value, note: note.value }, req.user.id);
-    return res.status(201).json({ success: true, update });
-  } catch (error) {
-    if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
-    console.error('[tracking add] failed:', error.message);
-    return res.status(500).json({ success: false, message: 'Location update failed.' });
   }
 });
 
@@ -955,6 +805,8 @@ app.post('/api/shipments', authMiddleware, requirePermission('shipments:create')
     if (hasCustomerRate && customerRate === null) {
       return res.status(400).json({ success: false, message: `Customer price must be between 0.01 and ${MAX_RATE.toLocaleString('en-US')}.` });
     }
+    const customerPhone = readOptionalPhone(req.body, 'customerPhone');
+    if (customerPhone.error) return res.status(400).json({ success: false, message: customerPhone.error });
 
     const textFields = { customer, origin, destination };
     for (const [field, value] of Object.entries(textFields)) {
@@ -990,7 +842,9 @@ app.post('/api/shipments', authMiddleware, requirePermission('shipments:create')
       reference: reference?.trim(),
       trackingNumber: trackingNumber?.trim(),
       customerRate,
-      actorId: req.user.id
+      customerPhone: customerPhone.value,
+      actorId: req.user.id,
+      tenantId: req.user.tenantId
     });
 
     return res.status(201).json({
@@ -1003,6 +857,482 @@ app.post('/api/shipments', authMiddleware, requirePermission('shipments:create')
       success: false,
       message: 'Shipment creation failed'
     });
+  }
+});
+
+app.get('/api/shipments/:id/events', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  try {
+    const shipmentId = parseShipmentId(req.params.id);
+    if (!shipmentId) {
+      return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
+    }
+    return res.json({ success: true, events: await listShipmentEvents(req.user.tenantId, shipmentId) });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Shipment history unavailable.' });
+  }
+});
+
+// Where is the truck? Location updates (typed check calls and GPS), newest first.
+app.get('/api/shipments/:id/tracking', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
+  try {
+    if (!(await getShipment(req.user.tenantId, shipmentId))) return res.status(404).json({ success: false, message: 'Shipment not found.' });
+    return res.json({ success: true, updates: await listTrackingUpdates(req.user.tenantId, shipmentId) });
+  } catch (error) {
+    console.error('[tracking list] failed:', error.message);
+    return res.status(500).json({ success: false, message: 'Tracking history unavailable.' });
+  }
+});
+
+app.post('/api/shipments/:id/tracking', authMiddleware, requirePermission('shipments:track'), async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  const location = req.body?.location;
+  if (!shipmentId || typeof location !== 'string' || !location.trim() || location.trim().length > MAX_LEN.location) {
+    return res.status(400).json({ success: false, message: `A current location (at most ${MAX_LEN.location} characters) is required.` });
+  }
+  const eta = parseEta(req.body?.eta);
+  const note = readOptionalText(req.body, 'note', MAX_LEN.note);
+  const invalid = eta.error || note.error;
+  if (invalid) return res.status(400).json({ success: false, message: invalid });
+  try {
+    const update = await addTrackingUpdate(req.user.tenantId, shipmentId, { location: location.trim(), eta: eta.value, note: note.value }, req.user.id);
+    return res.status(201).json({ success: true, update });
+  } catch (error) {
+    return sendError(res, error, 'Location update failed.', 'tracking add');
+  }
+});
+
+/* ---------- RELAY: messages to driver / carrier / customer ---------- */
+const MESSAGE_RECIPIENTS = Object.keys(relayAgent.PURPOSES);
+const MESSAGE_CHANNELS = ['sms', 'whatsapp'];
+
+app.get('/api/shipments/:id/messages', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
+  try {
+    if (!(await getShipment(req.user.tenantId, shipmentId))) return res.status(404).json({ success: false, message: 'Shipment not found.' });
+    return res.json({ success: true, messages: await listMessages(req.user.tenantId, shipmentId) });
+  } catch (error) {
+    return sendError(res, error, 'Messages unavailable.', 'messages list');
+  }
+});
+
+app.post('/api/shipments/:id/messages/draft', authMiddleware, requirePermission('shipments:message'), async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  const { recipient, purpose, language } = req.body || {};
+  if (!shipmentId || !MESSAGE_RECIPIENTS.includes(recipient)) {
+    return res.status(400).json({ success: false, message: `Choose who the message is for: ${MESSAGE_RECIPIENTS.join(', ')}.` });
+  }
+  try {
+    const shipment = await getShipment(req.user.tenantId, shipmentId);
+    if (!shipment) return res.status(404).json({ success: false, message: 'Shipment not found.' });
+    const draft = relayAgent.draftMessage({
+      shipment,
+      recipient,
+      purpose,
+      language: typeof language === 'string' ? language : MESSAGE_LANGUAGE,
+      company: req.user.tenantName,
+      formatMoney
+    });
+    return res.json({ success: true, draft: { ...draft, recipient, channels: messaging.availableChannels() } });
+  } catch (error) {
+    return sendError(res, error, 'Draft failed.', 'message draft');
+  }
+});
+
+app.post('/api/shipments/:id/messages', authMiddleware, requirePermission('shipments:message'), messageLimiter, async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  const { recipient, channel, body } = req.body || {};
+  if (!shipmentId || !MESSAGE_RECIPIENTS.includes(recipient) || !MESSAGE_CHANNELS.includes(channel)
+    || typeof body !== 'string' || !body.trim() || body.length > MAX_LEN.message) {
+    return res.status(400).json({ success: false, message: `A recipient, a channel (sms or whatsapp) and a message of at most ${MAX_LEN.message} characters are required.` });
+  }
+  try {
+    const shipment = await getShipment(req.user.tenantId, shipmentId);
+    if (!shipment) return res.status(404).json({ success: false, message: 'Shipment not found.' });
+    // The number always comes from the load record, never from the browser.
+    const to = relayAgent.recipientPhone(shipment, recipient);
+    if (!to) return res.status(400).json({ success: false, message: `There is no ${recipient} phone number on this load.` });
+    const result = await messaging.send({ channel, to, body: body.trim() });
+    const saved = await createMessage(req.user.tenantId, {
+      shipmentId,
+      channel,
+      recipientType: recipient,
+      toPhone: to,
+      body: body.trim(),
+      status: result.status,
+      provider: result.provider,
+      providerMessageId: result.providerMessageId,
+      error: result.error,
+      createdBy: req.user.id
+    });
+    if (result.status !== 'sent') {
+      return res.status(502).json({ success: false, message: `The message was not delivered: ${result.error}`, messageId: saved.id });
+    }
+    return res.status(201).json({ success: true, message: { id: saved.id, status: result.status, to } });
+  } catch (error) {
+    return sendError(res, error, 'Message could not be sent.', 'message send');
+  }
+});
+
+/* =========================================================
+   AI AGENTS
+   ========================================================= */
+// FLOW: order text -> shipment draft for a person to review. Nothing is saved here.
+app.post('/api/agents/flow/parse', authMiddleware, requirePermission('shipments:create'), aiLimiter, async (req, res) => {
+  const text = req.body?.text;
+  if (typeof text !== 'string' || !text.trim() || text.length > flowAgent.MAX_INPUT_CHARS) {
+    return res.status(400).json({ success: false, message: `Paste the order text (at most ${flowAgent.MAX_INPUT_CHARS} characters).` });
+  }
+  try {
+    const result = await flowAgent.parseOrder(text, {
+      weightUnit: WEIGHT_UNIT,
+      currency: CURRENCY,
+      equipment: EQUIPMENT,
+      maxRate: MAX_RATE,
+      maxWeight: MAX_WEIGHT
+    }, agentLogger(req));
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    return sendError(res, error, 'The AI assistant is unavailable.', 'flow');
+  }
+});
+
+// SCOUT: ranked carrier suggestions for one load (rules, no language model).
+app.get('/api/agents/scout/:id', authMiddleware, requirePermission('shipments:dispatch'), async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
+  try {
+    const data = await getScoutData(req.user.tenantId, shipmentId);
+    return res.json({
+      success: true,
+      recommendations: scoutAgent.rankCarriers(data),
+      laneAverageRate: data.laneAverageRate,
+      laneLoads: data.laneLoads
+    });
+  } catch (error) {
+    return sendError(res, error, 'Carrier suggestions unavailable.', 'scout');
+  }
+});
+
+/* =========================================================
+   CARRIERS
+   ========================================================= */
+app.get('/api/carriers', authMiddleware, requirePermission('carriers:read'), async (req, res) => {
+  try {
+    const carriers = await listCarriersWithStats(req.user.tenantId);
+    res.json(carriers);
+  } catch (error) {
+    console.error('[carriers] failed:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Carriers unavailable'
+    });
+  }
+});
+
+app.post('/api/carriers', authMiddleware, requirePermission('carriers:write'), async (req, res) => {
+  const { name, mode } = req.body || {};
+  if (typeof name !== 'string' || !name.trim() || name.trim().length > MAX_LEN.carrierName || !CARRIER_MODES.includes(mode)) {
+    return res.status(400).json({ success: false, message: `Carrier name (max ${MAX_LEN.carrierName} characters) and a valid mode are required.` });
+  }
+  const phone = readOptionalPhone(req.body, 'phone');
+  const contactName = readOptionalText(req.body, 'contactName', MAX_LEN.contactName);
+  const invalid = phone.error || contactName.error;
+  if (invalid) return res.status(400).json({ success: false, message: invalid });
+  try {
+    const carrier = await createCarrier({ name: name.trim(), mode, phone: phone.value, contactName: contactName.value, tenantId: req.user.tenantId });
+    return res.status(201).json({ success: true, carrier });
+  } catch (error) {
+    return sendError(res, error, 'Carrier creation failed', 'create carrier');
+  }
+});
+
+app.patch('/api/carriers/:id/status', authMiddleware, requirePermission('carriers:write'), async (req, res) => {
+  const carrierId = Number(req.params.id);
+  const status = req.body?.status;
+  if (!Number.isInteger(carrierId) || carrierId <= 0 || !CARRIER_MANUAL_STATUSES.includes(status)) {
+    return res.status(400).json({ success: false, message: `A valid carrier ID and status (${CARRIER_MANUAL_STATUSES.join(' or ')}) are required.` });
+  }
+  try {
+    const carrier = await updateCarrierStatus(req.user.tenantId, carrierId, status);
+    return res.json({ success: true, carrier });
+  } catch (error) {
+    return sendError(res, error, 'Carrier update failed', 'carrier status');
+  }
+});
+
+/* =========================================================
+   ACCOUNT AND TEAM
+   ========================================================= */
+app.get('/api/me', authMiddleware, (req, res) => {
+  res.json({
+    success: true,
+    user: {
+      id: req.user.id,
+      email: req.user.email,
+      name: req.user.name,
+      role: req.user.role,
+      permissions: ROLE_PERMISSIONS[req.user.role] || [],
+      tenantId: req.user.tenantId,
+      tenantName: req.user.tenantName,
+      isPlatformAdmin: req.user.isPlatformAdmin
+    }
+  });
+});
+
+app.get('/api/admin/users', authMiddleware, requirePermission('users:read'), async (req, res) => {
+  try {
+    const users = await listUsers(req.user.tenantId);
+    res.json({
+      success: true,
+      users
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'User list unavailable'
+    });
+  }
+});
+
+// Admin adds a team member to their own company with a starting password.
+app.post('/api/admin/users', authMiddleware, requirePermission('users:write'), async (req, res) => {
+  const { name, email, password, role } = req.body || {};
+  const identityError = validateNameAndEmail(name, email);
+  if (identityError) return res.status(400).json({ success: false, message: identityError });
+  if (!ALLOWED_ROLES.includes(role)) {
+    return res.status(400).json({ success: false, message: `Role must be one of: ${ALLOWED_ROLES.join(', ')}.` });
+  }
+  const passwordError = validateNewPassword(password);
+  if (passwordError) return res.status(400).json({ success: false, message: passwordError });
+  try {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (await findUserByEmail(normalizedEmail)) {
+      return res.status(409).json({ success: false, message: 'A user with this email already exists.' });
+    }
+    const user = await createUser({
+      name: name.trim(),
+      email: normalizedEmail,
+      password: await bcrypt.hash(password, BCRYPT_COST),
+      role,
+      tenantId: req.user.tenantId
+    });
+    return res.status(201).json({ success: true, user: { id: user.id, name: user.name, email: user.email, role: user.role, active: true } });
+  } catch (error) {
+    if (String(error.code) === 'SQLITE_CONSTRAINT') {
+      return res.status(409).json({ success: false, message: 'A user with this email already exists.' });
+    }
+    console.error('[create user] failed:', error.message);
+    return res.status(500).json({ success: false, message: 'User could not be created.' });
+  }
+});
+
+// Change role and/or enable/disable an account in the same company. Takes effect at once.
+app.patch('/api/admin/users/:id', authMiddleware, requirePermission('users:write'), async (req, res) => {
+  const userId = Number(req.params.id);
+  const { role, active } = req.body || {};
+  if (!Number.isInteger(userId) || userId <= 0
+    || (role === undefined && active === undefined)
+    || (role !== undefined && !ALLOWED_ROLES.includes(role))
+    || (active !== undefined && typeof active !== 'boolean')) {
+    return res.status(400).json({ success: false, message: `Send a role (${ALLOWED_ROLES.join(', ')}) and/or active (true or false).` });
+  }
+  try {
+    const user = await updateUser(req.user.tenantId, userId, { role, active }, req.user.id);
+    return res.json({ success: true, user });
+  } catch (error) {
+    return sendError(res, error, 'User could not be updated.', 'update user');
+  }
+});
+
+app.get('/api/admin/shipments', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  try {
+    const shipments = await listShipments(req.user.tenantId, readPaging(req));
+    res.json({
+      success: true,
+      shipments: shipments.map(serializeShipment)
+    });
+  } catch (error) {
+    console.error('[admin shipments] failed:', error.message);
+    res.status(500).json({ success: false, message: 'Admin shipment list unavailable' });
+  }
+});
+
+app.patch('/api/admin/shipments/:id/status', authMiddleware, requirePermission('shipments:status'), async (req, res) => {
+  try {
+    const shipmentId = parseShipmentId(req.params.id);
+    const { status, note } = req.body || {};
+
+    if (!shipmentId || !SHIPMENT_STATUSES.includes(status) || (note !== undefined && note !== null && (typeof note !== 'string' || note.length > MAX_LEN.note))) {
+      return res.status(400).json({
+        success: false,
+        message: `A valid shipment ID and a status (${SHIPMENT_STATUSES.join(', ')}) are required.`
+      });
+    }
+
+    const result = await updateShipmentStatus(req.user.tenantId, shipmentId, status, req.user.id, note);
+    return res.json({
+      success: true,
+      shipment: {
+        id: `SHP-${result.id}`,
+        status: result.status,
+        updated: result.changes > 0
+      }
+    });
+  } catch (error) {
+    return sendError(res, error, 'Shipment status update failed', 'status');
+  }
+});
+
+app.post('/api/admin/shipments/:id/dispatch', authMiddleware, requirePermission('shipments:dispatch'), async (req, res) => {
+  try {
+    const shipmentId = parseShipmentId(req.params.id);
+    const carrierId = typeof req.body?.carrierId === 'number' ? req.body.carrierId : NaN;
+    const rate = parseMoney(req.body?.rate);
+    if (!Number.isInteger(shipmentId) || shipmentId <= 0 || !Number.isInteger(carrierId) || carrierId <= 0 || rate === null) {
+      return res.status(400).json({ success: false, message: `A valid carrier and a rate between 0.01 and ${MAX_RATE.toLocaleString('en-US')} are required.` });
+    }
+    const hasCustomerRate = req.body?.customerRate !== undefined && req.body?.customerRate !== null && req.body?.customerRate !== '';
+    const customerRate = hasCustomerRate ? parseMoney(req.body.customerRate) : null;
+    if (hasCustomerRate && customerRate === null) {
+      return res.status(400).json({ success: false, message: `Customer price must be between 0.01 and ${MAX_RATE.toLocaleString('en-US')}.` });
+    }
+    const driverName = readOptionalText(req.body, 'driverName', MAX_LEN.driverName);
+    const driverPhone = readOptionalPhone(req.body, 'driverPhone');
+    const truckPlate = readOptionalText(req.body, 'truckPlate', MAX_LEN.truckPlate);
+    const invalid = driverName.error || driverPhone.error || truckPlate.error;
+    if (invalid) return res.status(400).json({ success: false, message: invalid });
+
+    const shipment = await dispatchShipment(req.user.tenantId, shipmentId, carrierId, rate, req.user.id, {
+      customerRate,
+      driverName: driverName.value,
+      driverPhone: driverPhone.value,
+      truckPlate: truckPlate.value
+    });
+    return res.json({ success: true, shipment: { ...shipment, id: `SHP-${shipment.id}` } });
+  } catch (error) {
+    return sendError(res, error, 'Dispatch failed', 'dispatch');
+  }
+});
+
+/* =========================================================
+   INTEGRATIONS (GPS, messaging, AI status)
+   ========================================================= */
+app.get('/api/integrations/status', authMiddleware, requirePermission('users:read'), async (req, res) => {
+  try {
+    const tenant = await getTenant(req.user.tenantId);
+    res.json({
+      success: true,
+      ai: { enabled: aiGateway.isEnabled(), model: process.env.OPENROUTER_MODEL || null },
+      messaging: messaging.status(),
+      gps: { configured: Boolean(tenant?.gpsTokenHash), webhookPath: GPS_WEBHOOK_PATH, minIntervalMinutes: GPS_MIN_INTERVAL_MINUTES }
+    });
+  } catch (error) {
+    return sendError(res, error, 'Integration status unavailable.', 'integrations');
+  }
+});
+
+// Creates (or replaces) this company's GPS token. Shown once; only its hash is stored.
+app.post('/api/integrations/gps/token', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    const token = `gps_${crypto.randomBytes(24).toString('hex')}`;
+    await setTenantGpsTokenHash(req.user.tenantId, rateLimitKey(token));
+    res.status(201).json({ success: true, token, webhookPath: GPS_WEBHOOK_PATH });
+  } catch (error) {
+    return sendError(res, error, 'Token could not be created.', 'gps token');
+  }
+});
+
+function readGpsToken(req) {
+  const header = String(req.headers.authorization || '');
+  if (header.toLowerCase().startsWith('bearer ')) return header.slice(7).trim();
+  if (req.headers['x-veyra-token']) return String(req.headers['x-veyra-token']).trim();
+  // Some trackers can only call a plain URL, so ?token= is accepted too.
+  return typeof req.query.token === 'string' ? req.query.token.trim() : '';
+}
+
+function parseGpsPosition(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const lat = Number(raw.lat ?? raw.latitude);
+  const lng = Number(raw.lng ?? raw.lon ?? raw.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+  const shipmentId = raw.shipmentId !== undefined ? parseShipmentId(raw.shipmentId) : null;
+  const plate = typeof raw.truckPlate === 'string' && raw.truckPlate.length <= MAX_LEN.truckPlate ? normalizePlate(raw.truckPlate) : '';
+  if (!shipmentId && !plate) return null;
+  const speedNumber = raw.speed === undefined || raw.speed === null ? null : Number(raw.speed);
+  const address = typeof raw.address === 'string' && raw.address.trim() && raw.address.trim().length <= MAX_LEN.location ? raw.address.trim() : null;
+  return {
+    lat,
+    lng,
+    shipmentId,
+    truckPlate: plate,
+    speed: Number.isFinite(speedNumber) && speedNumber >= 0 && speedNumber <= 300 ? speedNumber : null,
+    address
+  };
+}
+
+// GPS provider webhook: positions for trucks on active loads. Authenticated by the company's GPS token.
+app.post(GPS_WEBHOOK_PATH, async (req, res, next) => {
+  const token = readGpsToken(req);
+  if (!token) return res.status(401).json({ success: false, message: 'GPS token required.' });
+  req.gpsTokenHash = rateLimitKey(token);
+  return gpsLimiter(req, res, next);
+}, async (req, res) => {
+  try {
+    const tenant = await findTenantByGpsTokenHash(req.gpsTokenHash);
+    if (!tenant) return res.status(401).json({ success: false, message: 'Invalid GPS token.' });
+    const body = req.body;
+    const list = Array.isArray(body) ? body : (Array.isArray(body?.positions) ? body.positions : [body]);
+    if (!list.length || list.length > 500) {
+      return res.status(400).json({ success: false, message: 'Send between 1 and 500 positions.' });
+    }
+    const positions = list.map(parseGpsPosition);
+    const valid = positions.filter(Boolean);
+    const summary = valid.length
+      ? await recordGpsPositions(tenant.id, valid, { minIntervalMinutes: GPS_MIN_INTERVAL_MINUTES })
+      : { accepted: 0, skipped: 0, unmatched: 0 };
+    return res.json({ success: true, ...summary, invalid: positions.length - valid.length });
+  } catch (error) {
+    return sendError(res, error, 'GPS positions could not be saved.', 'gps webhook');
+  }
+});
+
+/* =========================================================
+   PLATFORM: customer companies (multi-tenant)
+   ========================================================= */
+app.get('/api/platform/tenants', authMiddleware, requirePlatformAdmin, async (req, res) => {
+  try {
+    res.json({ success: true, tenants: await listTenants() });
+  } catch (error) {
+    return sendError(res, error, 'Companies unavailable.', 'tenants');
+  }
+});
+
+// A new customer company with its first administrator. Each company sees only its own data.
+app.post('/api/platform/tenants', authMiddleware, requirePlatformAdmin, async (req, res) => {
+  const { companyName, adminName, adminEmail, adminPassword } = req.body || {};
+  if (typeof companyName !== 'string' || !companyName.trim() || companyName.trim().length > MAX_LEN.companyName) {
+    return res.status(400).json({ success: false, message: `Company name is required (at most ${MAX_LEN.companyName} characters).` });
+  }
+  const identityError = validateNameAndEmail(adminName, adminEmail);
+  if (identityError) return res.status(400).json({ success: false, message: identityError });
+  const passwordError = validateNewPassword(adminPassword);
+  if (passwordError) return res.status(400).json({ success: false, message: passwordError });
+  try {
+    const result = await createTenantWithAdmin({
+      name: companyName.trim(),
+      adminName: adminName.trim(),
+      adminEmail: adminEmail.trim().toLowerCase(),
+      passwordHash: await bcrypt.hash(adminPassword, BCRYPT_COST)
+    });
+    return res.status(201).json({ success: true, ...result });
+  } catch (error) {
+    if (String(error.code) === 'SQLITE_CONSTRAINT') {
+      return res.status(409).json({ success: false, message: 'A user with this email already exists.' });
+    }
+    return sendError(res, error, 'Company could not be created.', 'create tenant');
   }
 });
 
@@ -1034,7 +1364,7 @@ function startServer() {
   return initialize()
     .then(() => new Promise((resolve) => {
       const server = app.listen(PORT, HOST, () => {
-        console.log(`VEYRA API running at http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT} (${isProduction ? 'production' : 'development'}, ${WEIGHT_UNIT}, ${CURRENCY}, sign-up: ${REGISTRATION_MODE})`);
+        console.log(`VEYRA API running at http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT} (${isProduction ? 'production' : 'development'}, ${WEIGHT_UNIT}, ${CURRENCY}, sign-up: ${REGISTRATION_MODE}, AI: ${aiGateway.isEnabled() ? 'on' : 'off'}, messaging: ${messaging.availableChannels().join('+') || 'off'})`);
         if (!isProduction) {
           console.warn('[VEYRA] Development mode: demo accounts with public passwords exist. Never expose this server to the internet.');
         }

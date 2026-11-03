@@ -90,6 +90,14 @@ Verify `http://localhost:3000/api/health` returns `{"status":"ok"}`. Delete only
 - Sign-up is **closed** in production. The first administrator signs in with the `INITIAL_ADMIN_*` account and adds the team from **Dashboard → Operations Console → Team Access → Add user**, where roles can also be changed and accounts disabled (takes effect immediately).
 - To let people sign up themselves, set `REGISTRATION_INVITE_CODE` (they need the code and become operators) or, for demos only, `ALLOW_OPEN_REGISTRATION=true`.
 
+## AI, SMS / WhatsApp and GPS (optional)
+
+All three are off until configured, and the app works without them.
+
+- **AI (FLOW)**: create a key at openrouter.ai, set `OPENROUTER_API_KEY`. Optionally pick a model in `OPENROUTER_MODEL`; empty uses your OpenRouter account default. Use is limited per person (`AI_RATE_LIMIT_PER_HOUR`) and logged under Analytics → AI agents.
+- **SMS / WhatsApp (RELAY)**: in a Twilio account get the Account SID, Auth Token and a sender number (and an approved WhatsApp sender for WhatsApp). Set `MESSAGING_PROVIDER=twilio`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_SMS_FROM` and/or `TWILIO_WHATSAPP_FROM`. Phone numbers on loads must be in international format (+998…).
+- **GPS**: an administrator opens Dashboard → Integrations → Create GPS token and gives the provider the address `https://<your-domain>/api/integrations/gps` and the token. The provider sends positions with the truck plate; plates are matched ignoring spaces and dashes.
+
 ## Before real traffic
 
 - Change the example admin email and all generated placeholder values.

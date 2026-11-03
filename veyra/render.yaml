@@ -30,3 +30,18 @@ services:
         value: USD
       - key: MAX_RATE
         value: "10000000"
+      - key: MESSAGE_LANGUAGE
+        value: uz
+      # Optional keys: Render asks for them when the Blueprint is created; leave empty to keep a feature off.
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: MESSAGING_PROVIDER
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_SMS_FROM
+        sync: false
+      - key: TWILIO_WHATSAPP_FROM
+        sync: false

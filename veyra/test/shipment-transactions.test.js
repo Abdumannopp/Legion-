@@ -18,6 +18,8 @@ const {
   listShipments
 } = require('../database');
 
+const TENANT = 1;
+
 function execute(sql, params = []) {
   return new Promise((resolve, reject) => {
     db.run(sql, params, function onRun(error) {
@@ -45,7 +47,8 @@ async function createSourcingShipment(customer) {
     delivery: '2026-10-06',
     status: 'Sourcing',
     weight: '4,000 lb',
-    equipment: 'Dry Van'
+    equipment: 'Dry Van',
+    tenantId: TENANT
   });
   return Number(shipment.id.replace('SHP-', ''));
 }
@@ -67,8 +70,8 @@ test('concurrent dispatches cannot assign one carrier to two shipments', async (
   const carrierId = 1;
 
   const attempts = await Promise.allSettled([
-    dispatchShipment(firstShipmentId, carrierId, 1200, 1),
-    dispatchShipment(secondShipmentId, carrierId, 1300, 1)
+    dispatchShipment(TENANT, firstShipmentId, carrierId, 1200, 1),
+    dispatchShipment(TENANT, secondShipmentId, carrierId, 1300, 1)
   ]);
 
   assert.equal(attempts.filter((attempt) => attempt.status === 'fulfilled').length, 1);
@@ -86,9 +89,9 @@ test('concurrent dispatches cannot assign one carrier to two shipments', async (
   assert.equal(assigned[0].carrierId, carrierId);
   assert.equal(unassigned[0].carrierId, null);
 
-  const carrier = (await listCarriers()).find((item) => item.id === carrierId);
+  const carrier = (await listCarriers(TENANT)).find((item) => item.id === carrierId);
   assert.equal(carrier.status, 'Busy');
-  const dispatchedEvents = (await listShipmentEvents(assigned[0] === first ? firstShipmentId : secondShipmentId))
+  const dispatchedEvents = (await listShipmentEvents(TENANT, assigned[0] === first ? firstShipmentId : secondShipmentId))
     .filter((event) => event.status === 'Dispatched');
   assert.equal(dispatchedEvents.length, 1);
 });
@@ -106,7 +109,7 @@ test('failed audit insert rolls back shipment and carrier updates', async () => 
   `);
 
   await assert.rejects(
-    dispatchShipment(shipmentId, carrierId, 975, 1),
+    dispatchShipment(TENANT, shipmentId, carrierId, 975, 1),
     /forced audit insert failure/
   );
 
@@ -117,7 +120,7 @@ test('failed audit insert rolls back shipment and carrier updates', async () => 
   assert.equal(shipment.status, 'Sourcing');
   assert.equal(shipment.carrierId, null);
   assert.equal(carrier.status, 'Available');
-  assert.equal((await listShipmentEvents(shipmentId)).filter((event) => event.status === 'Dispatched').length, 0);
+  assert.equal((await listShipmentEvents(TENANT, shipmentId)).filter((event) => event.status === 'Dispatched').length, 0);
 
   await execute('DROP TRIGGER fail_dispatch_audit');
 });

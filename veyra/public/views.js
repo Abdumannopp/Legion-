@@ -21,14 +21,12 @@
   };
   const equipmentList = () => window.VeyraConfig?.equipment || ['Dry Van', 'Tent / Curtainsider', 'Reefer', 'Flatbed', 'LTL', 'Expedited'];
   const TRACKABLE = ['Dispatched', 'In Transit', 'Exception'];
-  // A booked truck nobody has checked on for this long gets a "call the driver" reminder.
-  const STALE_TRACKING_HOURS = 12;
   const CARRIER_MODES = ['Truckload', 'LTL', 'Expedited', 'Reefer', 'Flatbed', 'Intermodal'];
 
   const state = {
     view: 'dashboard',
     params: new URLSearchParams(),
-    shipments: { list: [], loaded: false, status: 'all', q: '', equipment: '', sort: 'newest' },
+    shipments: { items: [], total: 0, allCount: 0, statusCounts: {}, page: 1, pages: 1, loaded: false, status: 'all', q: '', equipment: '', sort: 'newest' },
     carriers: { list: [], filter: 'all', q: '', formOpen: false },
     analytics: { days: 7, data: null }
   };
@@ -81,7 +79,6 @@
     if (!match) return value || '—';
     return new Date(Date.UTC(+match[1], +match[2] - 1, +match[3])).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
   };
-  const shipmentNumber = (id) => Number(String(id).replace(/\D/g, '')) || 0;
 
   async function api(url, options = {}) {
     const response = await fetch(url, { headers: getAuthHeaders(), ...options });
@@ -174,6 +171,7 @@
     if (view === 'shipments') {
       state.shipments.status = params.get('status') && STATUS_ORDER.includes(params.get('status')) ? params.get('status') : 'all';
       state.shipments.q = params.get('q') || '';
+      state.shipments.page = 1;
       if (search) search.value = state.shipments.q;
       renderShipments();
     } else if (view === 'carriers') {
@@ -190,6 +188,19 @@
   /* =========================================================
      SHIPMENTS
      ========================================================= */
+  const PAGE_SIZE = 50;
+  let searchTimer;
+
+  function shipmentQuery(page = state.shipments.page, pageSize = PAGE_SIZE) {
+    const s = state.shipments;
+    const params = new URLSearchParams({ page: String(page), limit: String(pageSize), sort: s.sort });
+    if (s.status !== 'all') params.set('status', s.status);
+    if (s.q.trim()) params.set('q', s.q.trim());
+    if (s.equipment) params.set('equipment', s.equipment);
+    return `/api/shipments/search?${params.toString()}`;
+  }
+
+  // The server filters, sorts and pages, so this works the same with 50 or 50,000 loads.
   async function renderShipments() {
     const container = document.getElementById('shipmentsView');
     if (!container) return;
@@ -197,36 +208,46 @@
     if (!can('shipments:read')) return gate(container, 'denied');
     if (!state.shipments.loaded) loading(container);
     try {
-      state.shipments.list = await api('/api/shipments?limit=200');
-      state.shipments.loaded = true;
+      const result = await api(shipmentQuery());
+      Object.assign(state.shipments, {
+        items: result.items, total: result.total, allCount: result.allCount, statusCounts: result.statusCounts,
+        pages: result.pages, page: result.page, loaded: true
+      });
     } catch (error) {
       return errorState(container, error.message, renderShipments);
     }
     if (state.view !== 'shipments') return;
-    buildShipmentsLayout(container);
+    if (!document.getElementById('shipmentsTableBody')) buildShipmentsLayout(container);
+    updateShipmentList();
+  }
+
+  function reloadFirstPage() {
+    state.shipments.page = 1;
+    renderShipments();
   }
 
   function buildShipmentsLayout(container) {
     const s = state.shipments;
     const tabs = el('div', { class: 'status-tabs', id: 'shipmentStatusTabs', role: 'group', 'aria-label': 'Filter by status' });
     const searchInput = el('input', {
-      type: 'search', placeholder: 'Search ID, customer, city, carrier…', value: s.q, 'aria-label': 'Search shipments',
+      type: 'search', placeholder: 'Search ID, customer, city, carrier, truck…', value: s.q, 'aria-label': 'Search shipments',
       oninput: (event) => {
         s.q = event.target.value;
         const global = document.getElementById('globalSearch');
         if (global) global.value = s.q;
-        updateShipmentList();
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(reloadFirstPage, 300);
       }
     });
     searchInput.value = s.q;
     const equipmentSelect = el('select', {
       'aria-label': 'Equipment',
-      onchange: (event) => { s.equipment = event.target.value; updateShipmentList(); }
+      onchange: (event) => { s.equipment = event.target.value; reloadFirstPage(); }
     }, [el('option', { value: '', text: 'All equipment' }), ...equipmentList().map((item) => el('option', { value: item, text: item }))]);
     equipmentSelect.value = s.equipment;
     const sortSelect = el('select', {
       'aria-label': 'Sort',
-      onchange: (event) => { s.sort = event.target.value; updateShipmentList(); }
+      onchange: (event) => { s.sort = event.target.value; reloadFirstPage(); }
     }, [
       el('option', { value: 'newest', text: 'Newest first' }),
       el('option', { value: 'oldest', text: 'Oldest first' }),
@@ -254,28 +275,6 @@
         el('div', { class: 'table-footer', id: 'shipmentsFooter' })
       ])
     );
-    updateShipmentList();
-  }
-
-  function filteredShipments() {
-    const s = state.shipments;
-    const q = s.q.trim().toLowerCase();
-    let list = s.list.filter((shipment) => {
-      if (s.status !== 'all' && shipment.status !== s.status) return false;
-      if (s.equipment && shipment.equipment !== s.equipment) return false;
-      if (!q) return true;
-      return [shipment.id, shipment.reference, shipment.customer, shipment.origin, shipment.destination, shipment.carrierName, shipment.trackingNumber, shipment.status,
-        shipment.driverName, shipment.truckPlate, shipment.lastLocation]
-        .some((value) => String(value || '').toLowerCase().includes(q));
-    });
-    const sorters = {
-      newest: (a, b) => shipmentNumber(b.id) - shipmentNumber(a.id),
-      oldest: (a, b) => shipmentNumber(a.id) - shipmentNumber(b.id),
-      customer: (a, b) => String(a.customer).localeCompare(String(b.customer)),
-      rate: (a, b) => Number(b.rate || 0) - Number(a.rate || 0)
-    };
-    list = [...list].sort(sorters[s.sort] || sorters.newest);
-    return list;
   }
 
   function updateShipmentList() {
@@ -285,8 +284,8 @@
     const footer = document.getElementById('shipmentsFooter');
     if (!tabs || !body) return;
 
-    const counts = s.list.reduce((acc, shipment) => ({ ...acc, [shipment.status]: (acc[shipment.status] || 0) + 1 }), {});
-    tabs.replaceChildren(...[['all', 'All', s.list.length], ...STATUS_ORDER.map((status) => [status, status, counts[status] || 0])]
+    const counts = s.statusCounts || {};
+    tabs.replaceChildren(...[['all', 'All', s.allCount || 0], ...STATUS_ORDER.map((status) => [status, status, counts[status] || 0])]
       .map(([value, label, count]) => el('button', {
         type: 'button',
         class: `status-tab${s.status === value ? ' active' : ''}`,
@@ -299,12 +298,13 @@
         }
       }, [value !== 'all' ? el('span', { class: 'dot', style: `--c:${STATUS_COLORS[value]}` }) : null, label, el('b', { text: count })])));
 
-    const list = filteredShipments();
+    const list = s.items || [];
     const canStatus = can('shipments:status');
     const canDispatch = can('shipments:dispatch');
+    const filtered = s.q.trim() || s.equipment || s.status !== 'all';
 
     if (!list.length) {
-      body.replaceChildren(el('tr', {}, el('td', { colspan: '8', class: 'empty-cell' }, s.list.length
+      body.replaceChildren(el('tr', {}, el('td', { colspan: '8', class: 'empty-cell' }, filtered
         ? 'No shipments match these filters.'
         : 'No shipments yet. Create your first load with “New Shipment”.')));
     } else {
@@ -351,7 +351,19 @@
         ]);
       }));
     }
-    if (footer) footer.textContent = `Showing ${list.length} of ${s.list.length} shipments`;
+    if (footer) {
+      const from = s.total ? (s.page - 1) * PAGE_SIZE + 1 : 0;
+      const to = Math.min(s.page * PAGE_SIZE, s.total);
+      const go = (page) => { s.page = page; renderShipments(); };
+      footer.replaceChildren(
+        el('span', { text: `Showing ${from}–${to} of ${s.total} shipments` }),
+        s.pages > 1 ? el('span', { class: 'pager' }, [
+          el('button', { class: 'btn btn-ghost small', type: 'button', disabled: s.page <= 1, onclick: () => go(s.page - 1) }, '← Previous'),
+          el('span', { class: 'muted', text: `Page ${s.page} of ${s.pages}` }),
+          el('button', { class: 'btn btn-ghost small', type: 'button', disabled: s.page >= s.pages, onclick: () => go(s.page + 1) }, 'Next →')
+        ]) : null
+      );
+    }
   }
 
   async function changeStatus(shipmentId, status, select) {
@@ -400,6 +412,42 @@
       select.focus();
     } catch (error) {
       message.textContent = error.message;
+    }
+    renderScout(shipment);
+  }
+
+  // SCOUT: ranked carrier suggestions with reasons and a suggested rate. A person still decides.
+  async function renderScout(shipment) {
+    const box = document.getElementById('dispatchSuggestions');
+    const form = document.getElementById('dispatchForm');
+    if (!box || !form) return;
+    box.replaceChildren(el('p', { class: 'muted', text: 'SCOUT is ranking carriers…' }));
+    try {
+      const { recommendations } = await api(`/api/agents/scout/${encodeURIComponent(shipment.id)}`);
+      if (dispatchTarget?.id !== shipment.id) return;
+      if (!recommendations.length) {
+        box.replaceChildren(el('p', { class: 'muted', text: 'SCOUT: no available carriers to suggest.' }));
+        return;
+      }
+      box.replaceChildren(
+        el('div', { class: 'scout-head' }, [el('strong', { text: 'SCOUT suggestions' }), el('small', { class: 'muted', text: 'Based on trailer fit and past loads. Click to use.' })]),
+        ...recommendations.slice(0, 3).map((item, index) => el('button', {
+          type: 'button',
+          class: `scout-item${index === 0 ? ' best' : ''}`,
+          onclick: () => {
+            form.elements.carrierId.value = String(item.carrierId);
+            if (item.suggestedRate && !form.elements.rate.value) form.elements.rate.value = String(item.suggestedRate);
+            updateDispatchMargin();
+            form.elements.rate.focus();
+          }
+        }, [
+          el('span', { class: 'scout-title' }, [el('strong', { text: item.name }), el('span', { class: 'scout-score', text: `${item.score} pts` })]),
+          el('small', { text: item.reasons.join(' · ') || item.mode }),
+          item.suggestedRate ? el('small', { class: 'scout-rate', text: `Suggested ${money(item.suggestedRate)} — ${item.rateBasis}` }) : null
+        ]))
+      );
+    } catch (error) {
+      box.replaceChildren(el('p', { class: 'muted', text: `SCOUT unavailable: ${error.message}` }));
     }
   }
 
@@ -482,11 +530,20 @@
       return;
     }
     try {
-      if (!state.shipments.loaded) {
-        state.shipments.list = await api('/api/shipments?limit=200');
-        state.shipments.loaded = true;
+      // Every page, with the filters on screen (Shipments page) or everything (elsewhere).
+      const onShipments = state.view === 'shipments';
+      const saved = { ...state.shipments };
+      if (!onShipments) Object.assign(state.shipments, { status: 'all', q: '', equipment: '', sort: 'newest' });
+      const rows = [];
+      try {
+        for (let page = 1; page <= 100; page += 1) {
+          const result = await api(shipmentQuery(page, 200));
+          rows.push(...result.items);
+          if (page >= result.pages) break;
+        }
+      } finally {
+        if (!onShipments) Object.assign(state.shipments, saved);
       }
-      const rows = state.view === 'shipments' ? filteredShipments() : state.shipments.list;
       const currency = window.VeyraConfig?.currency || 'USD';
       const header = ['ID', 'Reference', 'Customer', 'Origin', 'Destination', 'Pickup', 'Delivery', 'Weight', 'Equipment', 'Carrier', `Carrier rate (${currency})`,
         `Customer price (${currency})`, `Margin (${currency})`, 'Truck plate', 'Driver', 'Driver phone', 'Last location', 'ETA', 'Status', 'Tracking'];
@@ -764,7 +821,21 @@
       ]), 'No carriers yet.')
     ]);
 
-    container.replaceChildren(kpis, el('div', { class: 'analytics-grid' }, [volumeCard, statusCard, equipmentCard, lanesCard, customersCard, carriersCard]));
+    // Every AI call is logged; this is where its use and cost (tokens) are visible.
+    const agentRows = data.agents || [];
+    const agentsCard = el('div', { class: 'card panel-card span-2' }, [
+      el('div', { class: 'mini-head' }, el('span', {}, [el('strong', { text: 'AI agents' }), el('small', { text: `Calls in the last ${data.rangeDays} days · tokens are what the AI provider bills` })])),
+      miniTable(['Agent', 'Calls', 'Succeeded', 'Tokens in', 'Tokens out', 'Avg. time'], agentRows.map((row) => [
+        row.agent,
+        row.calls,
+        `${row.succeeded} (${row.calls ? Math.round((row.succeeded / row.calls) * 100) : 0}%)`,
+        row.inputTokens.toLocaleString('en-US'),
+        row.outputTokens.toLocaleString('en-US'),
+        row.avgLatencyMs === null ? '—' : `${(row.avgLatencyMs / 1000).toFixed(1)} s`
+      ]), window.VeyraConfig?.ai?.enabled ? 'No AI calls in this period.' : 'AI is off. Add OPENROUTER_API_KEY to turn on FLOW.')
+    ]);
+
+    container.replaceChildren(kpis, el('div', { class: 'analytics-grid' }, [volumeCard, statusCard, equipmentCard, lanesCard, customersCard, carriersCard, agentsCard]));
   }
 
   function hbars(rows) {
@@ -800,22 +871,13 @@
     }
     try {
       notifications.failed = false;
-      const [shipments, carriers] = await Promise.all([
-        api('/api/shipments?limit=200'),
-        can('carriers:read') ? api('/api/carriers') : Promise.resolve(null)
-      ]);
-      const count = (status) => shipments.filter((shipment) => shipment.status === status).length;
+      // Counts come from the server, so they are right at any number of loads.
+      const { alerts } = await api('/api/alerts');
       const items = [];
-      const exceptions = count('Exception');
-      const pending = count('Pending Approval');
-      const fresh = count('New');
-      const sourcing = count('Sourcing');
-      const available = carriers ? carriers.filter((carrier) => carrier.status === 'Available').length : null;
-      const staleBefore = Date.now() - STALE_TRACKING_HOURS * 60 * 60 * 1000;
-      const needsCheckCall = shipments.filter((shipment) => ['Dispatched', 'In Transit'].includes(shipment.status)
-        && (!shipment.lastTrackedAt || new Date(`${String(shipment.lastTrackedAt).replace(' ', 'T')}Z`).getTime() < staleBefore)).length;
+      const { exceptions, pendingApproval: pending, new: fresh, sourcing, staleTracking, staleHours } = alerts;
+      const available = can('carriers:read') ? alerts.availableCarriers : null;
       if (exceptions) items.push({ tone: 'danger', title: `${plural(exceptions, 'shipment is', 'shipments are')} in Exception`, hint: 'Review and resolve', href: '#/shipments?status=Exception' });
-      if (needsCheckCall) items.push({ tone: 'warn', title: `${plural(needsCheckCall, 'truck has', 'trucks have')} no location update in ${STALE_TRACKING_HOURS}h`, hint: 'Call the driver and log the location', href: '#/shipments?status=In%20Transit' });
+      if (staleTracking) items.push({ tone: 'warn', title: `${plural(staleTracking, 'truck has', 'trucks have')} no location update in ${staleHours}h`, hint: 'Call the driver or check GPS', href: '#/shipments?status=In%20Transit' });
       if (pending) items.push({ tone: 'warn', title: `${plural(pending, 'shipment is', 'shipments are')} waiting for approval`, hint: 'Open the approvals queue', href: '#/shipments?status=Pending%20Approval' });
       if (available === 0 && (sourcing || pending)) items.push({ tone: 'danger', title: 'No carriers are available', hint: 'Reactivate or add a carrier', href: '#/carriers' });
       else if (sourcing) items.push({ tone: 'info', title: `${plural(sourcing, 'load needs', 'loads need')} a carrier`, hint: 'In Sourcing', href: '#/shipments?status=Sourcing' });
@@ -894,7 +956,7 @@
   }
 
   function onSessionChange() {
-    state.shipments = { ...state.shipments, list: [], loaded: false };
+    state.shipments = { ...state.shipments, items: [], total: 0, allCount: 0, statusCounts: {}, page: 1, loaded: false };
     state.carriers.list = [];
     state.analytics.data = null;
     window.VeyraAssistant?.onSessionChange();
@@ -927,7 +989,8 @@
         state.shipments.q = search.value;
         const local = document.querySelector('#shipmentsView .search input');
         if (local) local.value = search.value;
-        updateShipmentList();
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(reloadFirstPage, 300);
       } else if (state.view === 'carriers') {
         state.carriers.q = search.value;
         const container = document.getElementById('carriersView');

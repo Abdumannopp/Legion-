@@ -441,6 +441,28 @@
                 <div id="shipmentAdminList" class="admin-list shipment-list"></div>
               </div>
             </div>
+
+            <div class="admin-grid admin-grid-secondary">
+              <div class="admin-box" id="integrationsBox">
+                <div class="mini-head"><span><strong>Integrations</strong><small>AI agents, SMS / WhatsApp and GPS</small></span></div>
+                <div class="integration-list" id="integrationList"></div>
+                <div class="gps-token hidden" id="gpsTokenResult" role="status"></div>
+              </div>
+              <div class="admin-box hidden" id="companiesBox">
+                <div class="mini-head"><span><strong>Companies</strong><small>Each customer company sees only its own data</small></span><button class="btn btn-ghost small" type="button" id="addCompanyToggle" aria-expanded="false" aria-controls="addCompanyForm">Add company</button></div>
+                <form class="add-user-form hidden" id="addCompanyForm">
+                  <label>Company name<input name="companyName" required maxlength="120" autocomplete="off" /></label>
+                  <label>Administrator name<input name="adminName" required maxlength="120" autocomplete="off" /></label>
+                  <label>Administrator email<input name="adminEmail" type="email" required maxlength="254" autocomplete="off" /></label>
+                  <label>Starting password<input name="adminPassword" type="password" required minlength="8" autocomplete="new-password" placeholder="8+ chars, letter and number" /></label>
+                  <div class="add-user-footer">
+                    <p class="shipment-form-message" id="addCompanyMessage" role="status"></p>
+                    <button class="btn btn-primary small" type="submit">Create company</button>
+                  </div>
+                </form>
+                <div class="admin-list" id="companyList"></div>
+              </div>
+            </div>
           </div>
           </div>
 
@@ -598,6 +620,23 @@
         </form>
         <div class="detail-timeline tracking-list" id="trackingList"></div>
 
+        <div class="detail-timeline-head"><strong>Messages</strong><span id="messagingStatus"></span></div>
+        <form class="tracking-form message-form hidden" id="messageForm">
+          <label>To<select name="recipient"><option value="driver">Driver</option><option value="carrier">Carrier</option><option value="customer">Customer</option></select></label>
+          <label>About<select name="purpose"></select></label>
+          <label>Language<select name="language"><option value="uz">O'zbekcha</option><option value="ru">Русский</option><option value="en">English</option></select></label>
+          <label>Send by<select name="channel"><option value="whatsapp">WhatsApp</option><option value="sms">SMS</option></select></label>
+          <label class="span-2">Message (you can edit it)<textarea name="body" rows="3" maxlength="1000" required></textarea></label>
+          <div class="tracking-form-footer span-2">
+            <p class="shipment-form-message" id="messageFormMessage" role="status"></p>
+            <span class="message-actions">
+              <button class="btn btn-ghost small" type="button" id="messageCopy">Copy text</button>
+              <button class="btn btn-primary small" type="submit" id="messageSend">Send</button>
+            </span>
+          </div>
+        </form>
+        <div class="detail-timeline" id="messageList"></div>
+
         <div class="detail-timeline-head"><strong>Activity</strong><span>Newest first</span></div>
         <div class="detail-timeline" id="shipmentDetailTimeline"></div>
       </section>
@@ -611,9 +650,19 @@
           <h2 id="shipmentModalTitle">Create shipment</h2>
           <p>Enter the customer, route, and freight details to open a new load.</p>
         </div>
+        <div class="ai-intake hidden" id="aiIntake">
+          <label for="aiOrderText"><strong>FLOW · paste the customer's message</strong><small>Email, WhatsApp or call notes. FLOW fills the form below; you check it and press Create.</small></label>
+          <textarea id="aiOrderText" maxlength="4000" rows="4" placeholder="e.g. Salom! 20 t mato, Toshkent → Almaty, tent kerak, 10-noyabr yuklash. Narx 15 mln so'm."></textarea>
+          <div class="ai-intake-footer">
+            <p class="shipment-form-message" id="aiIntakeMessage" role="status"></p>
+            <button class="btn btn-ghost small" type="button" id="aiIntakeButton">Read with AI</button>
+          </div>
+          <ul class="ai-findings" id="aiFindings"></ul>
+        </div>
         <div class="shipment-form-grid">
           <label>Customer<input name="customer" required maxlength="120" placeholder="Customer name" /></label>
           <label>Customer reference<input name="reference" maxlength="80" placeholder="PO or reference (optional)" /></label>
+          <label>Customer phone<input name="customerPhone" type="tel" maxlength="40" placeholder="Optional, e.g. +998 90 123 45 67" /></label>
           <label>Origin<input name="origin" required maxlength="160" placeholder="City, state" /></label>
           <label>Destination<input name="destination" required maxlength="160" placeholder="City, state" /></label>
           <label>Pickup date<input name="pickup" type="date" required /></label>
@@ -674,6 +723,7 @@
           <h2 id="dispatchModalTitle">Dispatch load</h2>
           <p id="dispatchModalSubtitle">Assign an available carrier and the agreed rate.</p>
         </div>
+        <div class="scout-box" id="dispatchSuggestions" aria-live="polite"></div>
         <div class="shipment-form-grid">
           <label>Carrier<select name="carrierId" id="dispatchCarrier" required></select></label>
           <label><span>Carrier rate (<span data-currency>USD</span>)</span><input name="rate" type="number" min="0.01" step="0.01" required placeholder="What you pay the carrier" /></label>
