@@ -1,0 +1,33 @@
+{
+  "name": "veyra-logistics-fullstack",
+  "version": "1.0.0",
+  "description": "VEYRA logistics full-stack project with backend API and dashboard UI",
+  "main": "server.js",
+  "scripts": {
+    "start": "cross-env NODE_ENV=production node server.js",
+    "dev": "cross-env NODE_ENV=development node server.js",
+    "prod": "cross-env NODE_ENV=production node server.js",
+    "test": "node --test",
+    "db:check": "node scripts/db-check.js"
+  },
+  "keywords": [
+    "logistics",
+    "dashboard",
+    "express",
+    "api"
+  ],
+  "author": "Tojiboyev Abdumannop",
+  "license": "MIT",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.5",
+    "cross-env": "^10.0.0",
+    "dotenv": "^18.0.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.3",
+    "sqlite3": "^6.0.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

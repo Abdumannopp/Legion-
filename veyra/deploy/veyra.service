@@ -1,0 +1,25 @@
+[Unit]
+Description=VEYRA Logistics application
+After=network.target
+
+[Service]
+Type=simple
+User=veyra
+Group=veyra
+WorkingDirectory=/opt/veyra
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=DATABASE_PATH=/var/lib/veyra/veyra.db
+EnvironmentFile=/etc/veyra/veyra.env
+ExecStart=/usr/bin/npm run prod
+Restart=always
+RestartSec=5
+StateDirectory=veyra
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/veyra
+
+[Install]
+WantedBy=multi-user.target

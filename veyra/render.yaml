@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: veyra-logistics
+    runtime: node
+    region: oregon
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm run prod
+    healthCheckPath: /api/health
+    disk:
+      name: veyra-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_PATH
+        value: /var/data/veyra.db
+      - key: JWT_SECRET
+        generateValue: true
+      - key: INITIAL_ADMIN_NAME
+        value: VEYRA Administrator
+      - key: INITIAL_ADMIN_EMAIL
+        value: admin@your-domain.com
+      - key: INITIAL_ADMIN_PASSWORD
+        generateValue: true

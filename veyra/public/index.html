@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="VEYRA — AI-powered logistics platform." />
+    <meta name="theme-color" content="#050b18" />
+    <title>VEYRA | The AI Workforce for Logistics</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!-- Icon sprite -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <linearGradient id="vGradA" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#1e4bff" />
+          <stop offset="1" stop-color="#0b2a9e" />
+        </linearGradient>
+        <linearGradient id="vGradB" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#5cc8ff" />
+          <stop offset="1" stop-color="#2563ff" />
+        </linearGradient>
+      </defs>
+      <symbol id="logo-v" viewBox="0 0 100 80">
+        <path d="M2 4 H30 L52 62 L40 78 Z" fill="url(#vGradA)" />
+        <path d="M40 78 L70 4 H98 L60 78 Z" fill="url(#vGradB)" />
+        <path d="M30 4 L52 62 L44 52 Z" fill="#0a1d6b" opacity=".55" />
+      </symbol>
+        <symbol id="i-box" viewBox="0 0 24 24"><path d="M21 8 12 3 3 8v8l9 5 9-5V8Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="m3 8 9 5 9-5M12 13v8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+        <symbol id="i-truck" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6h11v10H2zM13 9h4.5l3.5 3.5V16h-8"/><circle cx="6" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/></g></symbol>
+        <symbol id="i-chat" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4V5Z"/><path d="M8 9.5h8M8 12.5h5"/></g></symbol>
+        <symbol id="i-target" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3"/></g></symbol>
+        <symbol id="i-alert" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.8 21.2 12 12 21.2 2.8 12Z"/><path d="M12 8v4.5M12 15.8v.1"/></g></symbol>
+        <symbol id="i-home" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 10.5 12 4l8.5 6.5V20h-5.5v-5.5h-6V20H3.5z"/></g></symbol>
+        <symbol id="i-check-square" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="m8 12 3 3 5-6"/></g></symbol>
+        <symbol id="i-carrier" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17V9l9-5 9 5v8"/><path d="M7 17v-5h10v5M3 20h18"/></g></symbol>
+        <symbol id="i-users" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5M16 4.8a3.5 3.5 0 0 1 0 6.4M18.5 14.8c1.7.8 2.7 2.5 3 5.2"/></g></symbol>
+        <symbol id="i-plug" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M8.5 6h7M7.2 8.2l3.6 7.6M16.8 8.2l-3.6 7.6"/></g></symbol>
+        <symbol id="i-chart" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 3.5v17h17"/><path d="M8 16v-4M12 16V8M16 16v-6"/></g></symbol>
+        <symbol id="i-gear" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></g></symbol>
+        <symbol id="i-search" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></g></symbol>
+        <symbol id="i-bell" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15Z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/></g></symbol>
+        <symbol id="i-doc" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4.5 4.5V21H6Z"/><path d="M14 3v4.5h4.5M9 12h6M9 15.5h6"/></g></symbol>
+        <symbol id="i-check-circle" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="m8.2 12.2 2.6 2.6 5-5.4"/></g></symbol>
+        <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13.5 2.5 5 13.5h6l-1 8 8.5-11h-6Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+        <symbol id="i-pin" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-6.5-6-6.5-11a6.5 6.5 0 0 1 13 0c0 5-6.5 11-6.5 11Z"/><circle cx="12" cy="10" r="2.3"/></g></symbol>
+        <symbol id="i-flag" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></g></symbol>
+        <symbol id="i-weight" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 8h11L20 20H4Z"/><circle cx="12" cy="5.5" r="2.3"/></g></symbol>
+        <symbol id="i-calendar" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></g></symbol>
+        <symbol id="i-more" viewBox="0 0 24 24"><g fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></g></symbol>
+        <symbol id="i-play" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="currentColor"/><path d="m10 8.3 6 3.7-6 3.7Z" fill="#0a1426"/></symbol>
+        <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="M12 19V5m-5 5 5-5 5 5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="i-eye" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.6"/></g></symbol>
+        <symbol id="i-logout" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h3.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H15M10 16l4-4-4-4M14 12H4"/></g></symbol>
+    </svg>
+
+    <a class="skip-link" href="#mainContent">Skip to main content</a>
+    <div class="page-shell">
+      <!-- ============ HERO ============ -->
+      <header class="hero-block">
+        <div class="hero-bg" aria-hidden="true">
+          <svg class="globe" viewBox="0 0 800 800">
+            <defs>
+              <radialGradient id="globeFill" cx="40%" cy="30%" r="75%">
+                <stop offset="0" stop-color="#1d5bd8" stop-opacity=".9" />
+                <stop offset=".45" stop-color="#0c2d78" stop-opacity=".85" />
+                <stop offset="1" stop-color="#040b1f" stop-opacity="1" />
+              </radialGradient>
+              <radialGradient id="globeRim" cx="50%" cy="50%" r="50%">
+                <stop offset=".86" stop-color="#3aa0ff" stop-opacity="0" />
+                <stop offset=".98" stop-color="#5cc8ff" stop-opacity=".55" />
+                <stop offset="1" stop-color="#5cc8ff" stop-opacity="0" />
+              </radialGradient>
+              <linearGradient id="arcGrad" x1="0" x2="1">
+                <stop offset="0" stop-color="#7fd6ff" stop-opacity="0" />
+                <stop offset=".5" stop-color="#bfeaff" stop-opacity=".95" />
+                <stop offset="1" stop-color="#7fd6ff" stop-opacity="0" />
+              </linearGradient>
+            </defs>
+            <circle cx="400" cy="400" r="380" fill="url(#globeFill)" />
+            <g fill="none" stroke="#5aa8ff" stroke-opacity=".14">
+              <ellipse cx="400" cy="400" rx="380" ry="120" />
+              <ellipse cx="400" cy="400" rx="380" ry="250" />
+              <ellipse cx="400" cy="400" rx="120" ry="380" />
+              <ellipse cx="400" cy="400" rx="250" ry="380" />
+              <line x1="20" y1="400" x2="780" y2="400" />
+              <line x1="400" y1="20" x2="400" y2="780" />
+            </g>
+            <g id="globeDots" fill="#9fd8ff"></g>
+            <g fill="none" stroke="url(#arcGrad)" stroke-width="1.6">
+              <path d="M170 330 Q 330 160 520 260" />
+              <path d="M240 470 Q 420 300 640 380" />
+              <path d="M320 220 Q 470 120 610 230" />
+              <path d="M200 400 Q 300 520 470 520" />
+              <path d="M450 300 Q 560 200 700 300" />
+              <path d="M520 260 Q 600 330 640 380" />
+            </g>
+            <circle cx="400" cy="400" r="382" fill="url(#globeRim)" />
+          </svg>
+          <div class="light-streaks"></div>
+        </div>
+
+        <div class="topbar">
+          <a class="brand-wrap" href="#/dashboard" aria-label="VEYRA home">
+            <svg class="brand-mark" viewBox="0 0 100 80"><use href="#logo-v" /></svg>
+            <span class="brand-copy">
+              <span class="brand-word" aria-label="VEYRA">VEYRΛ</span>
+              <span class="brand-tag">The AI Workforce for Logistics</span>
+            </span>
+          </a>
+          <div class="top-actions">
+            <button class="login-trigger" id="loginTrigger" type="button">Login</button>
+            <button class="login-trigger ghost hidden" id="logoutTrigger" type="button">
+              <svg class="ico"><use href="#i-logout" /></svg> Logout
+            </button>
+          </div>
+        </div>
+
+        <div class="hero-inner">
+          <div class="hero-copy">
+            <h1>Smarter<br />Logistics.<br /><span class="accent">Stronger Business.</span></h1>
+            <p>
+              AI agents that handle orders, find carriers, manage communication,
+              track shipments and keep your operations moving.
+            </p>
+            <div class="cta-row">
+              <a href="#demo" class="btn btn-primary btn-lg" id="getStartedBtn">Get Started <svg class="ico"><use href="#i-arrow-right" /></svg></a>
+              <a href="#demo" class="btn btn-ghost btn-lg"><svg class="ico"><use href="#i-play" /></svg> Watch Demo</a>
+            </div>
+          </div>
+
+          <div class="hero-visual" aria-hidden="true">
+            <svg class="truck" viewBox="0 0 760 360">
+              <defs>
+                <linearGradient id="trailerSide" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#1b2a44" />
+                  <stop offset=".55" stop-color="#0d1729" />
+                  <stop offset="1" stop-color="#070d19" />
+                </linearGradient>
+                <linearGradient id="trailerTop" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0" stop-color="#2b3d5c" />
+                  <stop offset="1" stop-color="#16233a" />
+                </linearGradient>
+                <linearGradient id="cabFront" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#26354f" />
+                  <stop offset="1" stop-color="#0a111f" />
+                </linearGradient>
+                <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0" stop-color="#3a5d8f" />
+                  <stop offset="1" stop-color="#0b1426" />
+                </linearGradient>
+                <radialGradient id="headlight" cx="50%" cy="50%" r="50%">
+                  <stop offset="0" stop-color="#ffffff" />
+                  <stop offset=".35" stop-color="#cfe9ff" stop-opacity=".9" />
+                  <stop offset="1" stop-color="#5cc8ff" stop-opacity="0" />
+                </radialGradient>
+              </defs>
+              <ellipse cx="400" cy="318" rx="360" ry="22" fill="#000" opacity=".55" />
+              <!-- trailer -->
+              <polygon points="250,40 735,82 735,280 250,262" fill="url(#trailerSide)" stroke="#3b4f70" stroke-width="1.2" />
+              <polygon points="250,40 735,82 728,74 262,32" fill="url(#trailerTop)" />
+              <g stroke="#2a3a55" stroke-width="1">
+                <line x1="330" y1="47" x2="330" y2="265" /><line x1="420" y1="55" x2="420" y2="268" />
+                <line x1="510" y1="63" x2="510" y2="271" /><line x1="600" y1="70" x2="600" y2="275" />
+                <line x1="690" y1="78" x2="690" y2="278" />
+              </g>
+              <g transform="translate(400 110) skewY(5)">
+                <svg x="0" y="0" width="92" height="74" viewBox="0 0 100 80"><use href="#logo-v" /></svg>
+                <text x="104" y="62" fill="#e8f1ff" font-family="Inter, sans-serif" font-weight="800" font-size="58" letter-spacing="4">VEYRΛ</text>
+              </g>
+              <!-- cab -->
+              <polygon points="120,92 250,82 252,268 104,272 96,190" fill="url(#cabFront)" stroke="#3b4f70" stroke-width="1.2" />
+              <polygon points="40,118 120,92 96,190 30,206" fill="#101b2e" stroke="#2e4262" stroke-width="1" />
+              <polygon points="52,124 116,104 100,170 44,184" fill="url(#glass)" />
+              <polygon points="132,104 236,96 236,160 128,166" fill="url(#glass)" opacity=".9" />
+              <polygon points="30,206 104,190 104,272 34,282" fill="#0b1322" stroke="#2e4262" stroke-width="1" />
+              <g stroke="#43597d" stroke-width="2.2" opacity=".85">
+                <line x1="42" y1="226" x2="96" y2="214" /><line x1="42" y1="236" x2="96" y2="224" />
+                <line x1="42" y1="246" x2="96" y2="234" /><line x1="42" y1="256" x2="96" y2="244" />
+              </g>
+              <ellipse cx="38" cy="216" rx="34" ry="22" fill="url(#headlight)" />
+              <ellipse cx="98" cy="202" rx="26" ry="16" fill="url(#headlight)" opacity=".8" />
+              <rect x="34" y="210" width="10" height="7" rx="2" fill="#fff" />
+              <rect x="92" y="198" width="9" height="6" rx="2" fill="#fff" />
+              <!-- wheels -->
+              <g fill="#05080f" stroke="#2c3b55" stroke-width="3">
+                <ellipse cx="180" cy="282" rx="30" ry="32" /><ellipse cx="470" cy="290" rx="28" ry="30" />
+                <ellipse cx="540" cy="292" rx="28" ry="30" /><ellipse cx="650" cy="294" rx="27" ry="29" />
+              </g>
+              <g fill="#54677f"><circle cx="180" cy="282" r="8" /><circle cx="470" cy="290" r="7" /><circle cx="540" cy="292" r="7" /><circle cx="650" cy="294" r="7" /></g>
+            </svg>
+            <div class="headlight-beam"></div>
+          </div>
+        </div>
+
+        <div class="feature-strip">
+          <div class="feature">
+            <span class="feature-icon"><svg><use href="#i-box" /></svg></span>
+            <span><strong>Order Intake</strong><small>AI extracts and validates</small></span>
+          </div>
+          <div class="feature">
+            <span class="feature-icon"><svg><use href="#i-truck" /></svg></span>
+            <span><strong>Carrier Sourcing</strong><small>Finds the best options</small></span>
+          </div>
+          <div class="feature">
+            <span class="feature-icon"><svg><use href="#i-chat" /></svg></span>
+            <span><strong>Communication</strong><small>Drafts and sends messages</small></span>
+          </div>
+          <div class="feature">
+            <span class="feature-icon"><svg><use href="#i-target" /></svg></span>
+            <span><strong>Tracking</strong><small>Real-time visibility</small></span>
+          </div>
+          <div class="feature">
+            <span class="feature-icon"><svg><use href="#i-alert" /></svg></span>
+            <span><strong>Exception Management</strong><small>Detects and alerts</small></span>
+          </div>
+        </div>
+      </header>
+
+      <!-- ============ APP ============ -->
+      <section class="dashboard-panel" id="demo">
+        <aside class="side-nav">
+          <div class="nav-logo">
+            <svg class="nav-mark" viewBox="0 0 100 80"><use href="#logo-v" /></svg>
+            <span aria-label="VEYRA">VEYRΛ</span>
+          </div>
+          <nav>
+            <a class="active" href="#/dashboard" data-nav="dashboard"><svg class="ico"><use href="#i-home" /></svg>Dashboard</a>
+            <a href="#/shipments" data-nav="shipments"><svg class="ico"><use href="#i-truck" /></svg>Shipments</a>
+            <a href="#/shipments?status=Pending%20Approval" data-nav="approvals"><svg class="ico"><use href="#i-check-square" /></svg>Approvals <span class="nav-badge hidden" id="navApprovalsBadge">0</span></a>
+            <a href="#/carriers" data-nav="carriers"><svg class="ico"><use href="#i-carrier" /></svg>Carriers</a>
+            <a href="#/analytics" data-nav="analytics"><svg class="ico"><use href="#i-chart" /></svg>Analytics</a>
+          </nav>
+          <div class="side-user">
+            <span class="avatar" id="sidebarAvatar">?</span>
+            <span>
+              <strong id="sidebarUserName">Guest</strong>
+              <small id="sidebarUserRole">Sign in to continue</small>
+            </span>
+          </div>
+        </aside>
+
+        <div class="main-board" id="mainContent" tabindex="-1">
+          <div class="app-topbar">
+            <label class="search">
+              <svg class="ico"><use href="#i-search" /></svg>
+              <input type="search" id="globalSearch" placeholder="Search shipments, customers, carriers..." aria-label="Search" autocomplete="off" />
+            </label>
+            <div class="topbar-tools">
+              <div class="notif-wrap">
+                <button class="icon-btn" type="button" id="notifBtn" aria-label="Notifications" aria-haspopup="true" aria-expanded="false" aria-controls="notifPanel">
+                  <svg class="ico"><use href="#i-bell" /></svg><span class="notif-dot hidden" id="notifDot"></span>
+                </button>
+                <div class="notif-panel hidden" id="notifPanel" role="region" aria-label="Notifications">
+                  <div class="notif-head"><strong>Notifications</strong><span class="muted" id="notifCount"></span></div>
+                  <div class="notif-list" id="notifList"></div>
+                </div>
+              </div>
+              <span class="avatar mini-switch" id="topAvatar">AC</span>
+            </div>
+          </div>
+
+          <div class="view" data-view="dashboard">
+          <div class="board-head">
+            <div>
+              <h2 class="head-label">Dashboard</h2>
+              <div class="head-sub">Your AI workforce is keeping operations moving.</div>
+            </div>
+          </div>
+
+          <div class="signed-out-note" id="signedOutNote">
+            <svg class="ico"><use href="#i-eye" /></svg>
+            <span>You're viewing a preview. <button type="button" class="link-btn" id="signedOutLogin">Sign in</button> to see live metrics, analytics and shipment controls.</span>
+          </div>
+
+          <div class="stats-grid hidden">
+            <div class="stat-card">
+              <div class="stat-top"><span>Total Shipments</span><span class="stat-icon blue"><svg><use href="#i-truck" /></svg></span></div>
+              <div class="stat-value">0</div>
+              <div class="stat-meta">All recorded loads</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-top"><span>Active Shipments</span><span class="stat-icon amber"><svg><use href="#i-doc" /></svg></span></div>
+              <div class="stat-value">0</div>
+              <div class="stat-meta">Not yet delivered or cancelled</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-top"><span>Completed</span><span class="stat-icon green"><svg><use href="#i-check-circle" /></svg></span></div>
+              <div class="stat-value">0</div>
+              <div class="stat-meta">Delivered shipments</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-top"><span>Available Carriers</span><span class="stat-icon sky"><svg><use href="#i-bolt" /></svg></span></div>
+              <div class="stat-value">0</div>
+              <div class="stat-meta">Ready for dispatch</div>
+            </div>
+          </div>
+
+          <div class="chart-row hidden">
+            <div class="card chart-card">
+              <div class="mini-head">
+                <span><strong>Shipment Volume</strong><small id="trendRange">Last 7 days</small></span>
+                <label class="select-pill">
+                  <span class="visually-hidden">Date range</span>
+                  <select id="dashboardRange">
+                    <option value="7">Last 7 days</option>
+                    <option value="30">Last 30 days</option>
+                    <option value="90">Last 90 days</option>
+                  </select>
+                </label>
+              </div>
+              <div class="chart-body">
+                <div class="y-axis" id="volumeYAxis"><span>4</span><span>3</span><span>2</span><span>1</span><span>0</span></div>
+                <div class="chart-graph">
+                  <span class="grid-line"></span><span class="grid-line"></span><span class="grid-line"></span><span class="grid-line"></span><span class="grid-line"></span>
+                  <svg viewBox="0 0 360 150" preserveAspectRatio="none">
+                    <defs>
+                      <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0" stop-color="#2563ff" stop-opacity=".45" />
+                        <stop offset="1" stop-color="#2563ff" stop-opacity="0" />
+                      </linearGradient>
+                    </defs>
+                    <path id="volumeArea" d="M0,150 L360,150 Z" fill="url(#areaGrad)" />
+                    <path id="volumeLine" class="line" d="M0,140 L360,140" />
+                  </svg>
+                  <div class="chart-dots" id="volumeDots"></div>
+                </div>
+                <div class="chart-labels" id="volumeLabels"></div>
+              </div>
+            </div>
+
+            <div class="card donut-card">
+              <div class="mini-head"><span><strong>Shipments by Status</strong></span></div>
+              <div class="donut-wrap">
+                <div class="donut-chart" id="statusDonut">
+                  <div class="donut-inner"><strong id="statusTotal">0</strong><small>Total</small></div>
+                </div>
+                <div class="status-list">
+                  <div data-status="New"><span class="dot" style="--c:#2563ff"></span>New <b>0</b></div>
+                  <div data-status="Sourcing"><span class="dot" style="--c:#38bdf8"></span>Sourcing <b>0</b></div>
+                  <div data-status="Pending Approval"><span class="dot" style="--c:#fbbf24"></span>Pending Approval <b>0</b></div>
+                  <div data-status="Dispatched"><span class="dot" style="--c:#a78bfa"></span>Dispatched <b>0</b></div>
+                  <div data-status="In Transit"><span class="dot" style="--c:#7dd3fc"></span>In Transit <b>0</b></div>
+                  <div data-status="Delivered"><span class="dot" style="--c:#14b8a6"></span>Delivered <b>0</b></div>
+                  <div data-status="Exception"><span class="dot" style="--c:#f87171"></span>Exception <b>0</b></div>
+                  <div data-status="Cancelled"><span class="dot" style="--c:#64748b"></span>Cancelled <b>0</b></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card table-block">
+            <div class="mini-head">
+              <span><strong>Recent Shipments</strong></span>
+              <a class="view-all" href="#/shipments">View All <svg class="ico sm rot"><use href="#i-chevron" /></svg></a>
+            </div>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th><th>Customer</th><th>Origin → Destination</th><th>Pickup</th><th>Delivery</th><th>Status</th><th>Details</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>SHP-1042</td><td>ABC Retail</td><td>Dallas, TX → Houston, TX</td><td>Oct 3</td><td>Oct 4</td>
+                    <td><span class="tag in-transit">In Transit</span></td>
+                    <td><button class="table-detail-button" type="button" data-shipment-id="SHP-1042">View</button></td>
+                  </tr>
+                  <tr>
+                    <td>SHP-1041</td><td>Global Parts</td><td>Chicago, IL → Atlanta, GA</td><td>Oct 3</td><td>Oct 5</td>
+                    <td><span class="tag pending-approval">Pending Approval</span></td>
+                    <td><button class="table-detail-button" type="button" data-shipment-id="SHP-1041">View</button></td>
+                  </tr>
+                  <tr>
+                    <td>SHP-1040</td><td>Prime Goods</td><td>Los Angeles, CA → Phoenix, AZ</td><td>Oct 2</td><td>Oct 3</td>
+                    <td><span class="tag delivered">Delivered</span></td>
+                    <td><button class="table-detail-button" type="button" data-shipment-id="SHP-1040">View</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card admin-panel hidden" id="adminPanel">
+            <div class="admin-panel-header">
+              <div>
+                <h3 class="head-label small">Operations Console</h3>
+                <div class="head-sub">Fleet performance, team access, and shipment control</div>
+              </div>
+              <div class="admin-actions">
+                <button class="btn btn-ghost small" type="button" data-export-csv>Export CSV</button>
+                <a class="btn btn-primary small" href="#/shipments?status=Sourcing">Dispatch Board</a>
+              </div>
+            </div>
+
+            <div class="admin-summary-grid" id="adminSummaryGrid"></div>
+
+            <div class="admin-grid">
+              <div class="admin-box">
+                <div class="mini-head"><span><strong>Team Access</strong></span><span class="muted" id="userCountLabel">0 users</span></div>
+                <div class="admin-toolbar">
+                  <button class="filter-button active" data-filter="all" type="button">All</button>
+                  <button class="filter-button" data-filter="admin" type="button">Admins</button>
+                  <button class="filter-button" data-filter="operations" type="button">Ops</button>
+                </div>
+                <div id="userList" class="admin-list"></div>
+              </div>
+
+              <div class="admin-box">
+                <div class="mini-head"><span><strong>Shipment Controls</strong></span><span class="live-chip"><i></i>Live</span></div>
+                <div class="admin-toolbar shipment-toolbar">
+                  <button class="filter-button shipment-filter active" data-shipment-filter="all" type="button">All</button>
+                  <button class="filter-button shipment-filter" data-shipment-filter="New" type="button">New</button>
+                  <button class="filter-button shipment-filter" data-shipment-filter="Sourcing" type="button">Sourcing</button>
+                  <button class="filter-button shipment-filter" data-shipment-filter="Pending Approval" type="button">Pending</button>
+                  <button class="filter-button shipment-filter" data-shipment-filter="Dispatched" type="button">Dispatched</button>
+                  <button class="filter-button shipment-filter" data-shipment-filter="In Transit" type="button">In Transit</button>
+                  <button class="filter-button shipment-filter" data-shipment-filter="Exception" type="button">Exception</button>
+                  <button class="filter-button shipment-filter" data-shipment-filter="Delivered" type="button">Delivered</button>
+                </div>
+                <div id="shipmentAdminList" class="admin-list shipment-list"></div>
+              </div>
+            </div>
+          </div>
+          </div>
+
+          <!-- ===== Shipments view ===== -->
+          <div class="view hidden" data-view="shipments">
+            <div class="board-head">
+              <div>
+                <h2 class="head-label">Shipments</h2>
+                <div class="head-sub">Every load in your workspace — search, filter, move status and dispatch.</div>
+              </div>
+              <div class="head-actions">
+                <button class="btn btn-ghost small" type="button" data-export-csv><svg class="ico sm"><use href="#i-doc" /></svg>Export CSV</button>
+                <button class="btn btn-primary small" type="button" data-new-shipment>+ New Shipment</button>
+              </div>
+            </div>
+            <div class="view-body" id="shipmentsView"></div>
+          </div>
+
+          <!-- ===== Carriers view ===== -->
+          <div class="view hidden" data-view="carriers">
+            <div class="board-head">
+              <div>
+                <h2 class="head-label">Carriers</h2>
+                <div class="head-sub">Your carrier network, availability and load history.</div>
+              </div>
+              <div class="head-actions">
+                <button class="btn btn-primary small hidden" type="button" id="addCarrierToggle">+ Add Carrier</button>
+              </div>
+            </div>
+            <div class="view-body" id="carriersView"></div>
+          </div>
+
+          <!-- ===== Analytics view ===== -->
+          <div class="view hidden" data-view="analytics">
+            <div class="board-head">
+              <div>
+                <h2 class="head-label">Analytics</h2>
+                <div class="head-sub">Volume, mix, lanes, customers and carrier performance.</div>
+              </div>
+              <div class="segmented" id="analyticsRange" role="group" aria-label="Date range">
+                <button type="button" data-days="7" class="active" aria-pressed="true">7 days</button>
+                <button type="button" data-days="30" aria-pressed="false">30 days</button>
+                <button type="button" data-days="90" aria-pressed="false">90 days</button>
+              </div>
+            </div>
+            <div class="view-body" id="analyticsView"></div>
+          </div>
+        </div>
+
+        <aside class="right-panel">
+          <div class="card assistant-card">
+            <div class="assistant-head">
+              <div class="mini-brand">
+                <span class="mini-mark"><svg viewBox="0 0 100 80"><use href="#logo-v" /></svg></span>
+                <span>VEYRA AI Assistant</span>
+              </div>
+              <div class="assistant-actions">
+                <button class="btn btn-primary small assist-btn" type="button">New Shipment</button>
+              </div>
+            </div>
+
+            <div class="chat-row user">
+              <div class="bubble prompt-label" id="assistantPrompt"></div>
+              <span class="avatar xs prompt-meta">?</span>
+            </div>
+
+            <div class="chat-row bot">
+              <span class="mini-mark sm"><svg viewBox="0 0 100 80"><use href="#logo-v" /></svg></span>
+              <div class="bubble bot-bubble details-card">
+                <div class="detail-title" id="assistantTitle">Here's a draft based on your latest load. Please confirm:</div>
+                <div class="shipment-details" id="assistantDetails"></div>
+                <p class="assistant-error" id="assistantError" role="alert"></p>
+                <div class="confidence-row">
+                  <span>Based on</span>
+                  <span id="assistantSource" class="assistant-source">Sample details</span>
+                </div>
+              </div>
+            </div>
+            <div class="detail-actions">
+              <button class="btn btn-primary small" id="createShipmentBtn" type="button">Create Shipment</button>
+              <button class="btn btn-ghost small" id="editDetailsBtn" type="button" aria-pressed="false">Edit Details</button>
+            </div>
+          </div>
+
+          <div class="card map-card">
+            <div class="map-head">
+              <strong>Map &amp; Tracking</strong>
+              <button type="button" class="view-all" id="mapDetailsBtn">View Details</button>
+            </div>
+            <div class="map-surface">
+              <svg class="map-svg" viewBox="0 0 400 260" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+                <defs>
+                  <linearGradient id="routeGrad" x1="0" x2="1">
+                    <stop offset="0" stop-color="#22c55e" />
+                    <stop offset="1" stop-color="#38bdf8" />
+                  </linearGradient>
+                  <filter id="glow"><feGaussianBlur stdDeviation="3" /></filter>
+                </defs>
+                <path class="land" d="M20 40 C80 20 160 30 230 28 C290 26 340 40 380 60 L390 110 C370 130 350 150 352 190 L330 205 C315 180 295 175 270 182 C250 190 240 205 238 225 L222 232 C210 205 190 200 160 196 C130 192 110 196 90 186 C60 170 40 130 24 100 Z" />
+                <path class="land" d="M330 205 C345 215 352 240 342 252 L336 252 C330 235 325 220 330 205Z" />
+                <g id="mapDots"></g>
+                <path d="M88 110 C 160 120 210 170 262 200" stroke="url(#routeGrad)" stroke-width="7" fill="none" opacity=".45" filter="url(#glow)" />
+                <path d="M88 110 C 160 120 210 170 262 200" stroke="url(#routeGrad)" stroke-width="2.5" fill="none" />
+              </svg>
+              <span class="route-dot dot-a"></span>
+              <span class="route-dot dot-b"></span>
+              <div class="map-label label-a"><strong id="mapOrigin">Dallas</strong><small id="mapOriginTime">Pickup Oct 3</small></div>
+              <div class="map-label label-b"><strong id="mapDestination">Houston</strong><small id="mapDestinationTime">Delivery Oct 4</small></div>
+              <div class="transit-chip">
+                <span class="stat-icon blue sm"><svg><use href="#i-truck" /></svg></span>
+                <strong id="mapStatus">Sample route</strong>
+                <small id="mapStatusSub">Sign in for live loads</small>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <footer class="site-footer">© 2026 VEYRA · The AI Workforce for Logistics</footer>
+    </div>
+
+    <!-- ============ MODALS ============ -->
+    <div class="shipment-details-modal hidden" id="shipmentDetailsModal" aria-modal="true" role="dialog" aria-labelledby="shipmentDetailsTitle">
+      <section class="modal-card shipment-details-dialog">
+        <button class="modal-close close-shipment-details" id="closeShipmentDetails" type="button" aria-label="Close">×</button>
+        <div class="shipment-form-heading">
+          <span class="eyebrow">LOAD RECORD</span>
+          <h2 id="shipmentDetailsTitle">Shipment details</h2>
+          <p id="shipmentDetailsSubtitle">Full shipment record and activity.</p>
+        </div>
+        <dl class="shipment-detail-grid">
+          <div><dt>Customer</dt><dd data-detail="customer">-</dd></div>
+          <div><dt>Reference</dt><dd data-detail="reference">-</dd></div>
+          <div><dt>Route</dt><dd data-detail="route">-</dd></div>
+          <div><dt>Pickup / Delivery</dt><dd data-detail="dates">-</dd></div>
+          <div><dt>Weight / Equipment</dt><dd data-detail="freight">-</dd></div>
+          <div><dt>Carrier / Rate</dt><dd data-detail="carrier">-</dd></div>
+          <div><dt>Status</dt><dd data-detail="status">-</dd></div>
+          <div><dt>Tracking number</dt><dd data-detail="tracking">-</dd></div>
+        </dl>
+        <div class="detail-timeline-head"><strong>Activity</strong><span>Newest first</span></div>
+        <div class="detail-timeline" id="shipmentDetailTimeline"></div>
+      </section>
+    </div>
+
+    <div class="shipment-modal hidden" id="shipmentModal" aria-modal="true" role="dialog" aria-labelledby="shipmentModalTitle">
+      <form class="modal-card shipment-form" id="shipmentForm">
+        <button class="modal-close close-shipment" id="closeShipment" type="button" aria-label="Close">×</button>
+        <div class="shipment-form-heading">
+          <span class="eyebrow">ORDER INTAKE</span>
+          <h2 id="shipmentModalTitle">Create shipment</h2>
+          <p>Enter the customer, route, and freight details to open a new load.</p>
+        </div>
+        <div class="shipment-form-grid">
+          <label>Customer<input name="customer" required maxlength="120" placeholder="Customer name" /></label>
+          <label>Customer reference<input name="reference" maxlength="80" placeholder="PO or reference (optional)" /></label>
+          <label>Origin<input name="origin" required maxlength="160" placeholder="City, state" /></label>
+          <label>Destination<input name="destination" required maxlength="160" placeholder="City, state" /></label>
+          <label>Pickup date<input name="pickup" type="date" required /></label>
+          <label>Delivery date<input name="delivery" type="date" required /></label>
+          <label>Weight (lb)<input name="weight" type="number" min="1" step="1" required placeholder="10000" /></label>
+          <label>Equipment<select name="equipment" required><option value="">Choose equipment</option><option>Dry Van</option><option>Reefer</option><option>Flatbed</option><option>LTL</option><option>Expedited</option></select></label>
+        </div>
+        <div class="shipment-form-footer">
+          <span>New loads enter the workflow at <strong>New</strong>.</span>
+          <button class="btn btn-primary" type="submit">Create load</button>
+        </div>
+        <p class="shipment-form-message" id="shipmentFormMessage" role="status"></p>
+      </form>
+    </div>
+
+    <div class="auth-modal hidden" id="authModal" aria-modal="true" role="dialog" aria-labelledby="authTitle">
+      <div class="modal-card auth-card">
+        <button class="modal-close close-auth" id="closeAuth" type="button" aria-label="Close">×</button>
+        <div class="auth-header">
+          <span class="mini-mark lg"><svg viewBox="0 0 100 80"><use href="#logo-v" /></svg></span>
+          <div>
+            <h3 id="authTitle">Welcome back</h3>
+            <p>Access your logistics workspace</p>
+          </div>
+        </div>
+        <form id="authForm">
+          <div class="auth-field name-field" id="authNameField">
+            <label for="authName">Full name</label>
+            <input id="authName" type="text" placeholder="Alex Carter" />
+          </div>
+          <div class="auth-field">
+            <label for="authEmail">Email</label>
+            <input id="authEmail" type="email" placeholder="you@company.com" required />
+          </div>
+          <div class="auth-field">
+            <label for="authPassword">Password</label>
+            <input id="authPassword" type="password" placeholder="••••••••" required />
+          </div>
+          <button type="submit" class="btn btn-primary full">Sign in</button>
+        </form>
+        <div class="auth-toggle">
+          <span id="authToggleLabel">Need an account?</span>
+          <button type="button" id="authSwitch">Create one</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="dispatch-modal hidden" id="dispatchModal" aria-modal="true" role="dialog" aria-labelledby="dispatchModalTitle">
+      <form class="modal-card dispatch-card" id="dispatchForm">
+        <button class="modal-close" id="closeDispatch" type="button" aria-label="Close">×</button>
+        <div class="shipment-form-heading">
+          <span class="eyebrow">CARRIER SOURCING</span>
+          <h2 id="dispatchModalTitle">Dispatch load</h2>
+          <p id="dispatchModalSubtitle">Assign an available carrier and the agreed rate.</p>
+        </div>
+        <div class="shipment-form-grid">
+          <label>Carrier<select name="carrierId" id="dispatchCarrier" required></select></label>
+          <label>Agreed rate (USD)<input name="rate" type="number" min="1" step="0.01" required placeholder="1250" /></label>
+        </div>
+        <div class="shipment-form-footer">
+          <span>The carrier is marked <strong>Busy</strong> until the load is delivered or cancelled.</span>
+          <button class="btn btn-primary" type="submit">Dispatch</button>
+        </div>
+        <p class="shipment-form-message" id="dispatchFormMessage" role="status"></p>
+      </form>
+    </div>
+
+    <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
+
+    <script src="script.js"></script>
+    <script src="assistant.js"></script>
+    <script src="views.js"></script>
+  </body>
+</html>
