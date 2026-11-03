@@ -236,6 +236,7 @@
             <a class="active" href="#/dashboard" data-nav="dashboard"><svg class="ico"><use href="#i-home" /></svg>Dashboard</a>
             <a href="#/shipments" data-nav="shipments"><svg class="ico"><use href="#i-truck" /></svg>Shipments</a>
             <a href="#/shipments?status=Pending%20Approval" data-nav="approvals"><svg class="ico"><use href="#i-check-square" /></svg>Approvals <span class="nav-badge hidden" id="navApprovalsBadge">0</span></a>
+            <a href="#/inbox" data-nav="inbox"><svg class="ico"><use href="#i-bell" /></svg>Inbox &amp; tasks <span class="nav-badge hidden" id="navInboxBadge">0</span></a>
             <a href="#/carriers" data-nav="carriers"><svg class="ico"><use href="#i-carrier" /></svg>Carriers</a>
             <a href="#/analytics" data-nav="analytics"><svg class="ico"><use href="#i-chart" /></svg>Analytics</a>
           </nav>
@@ -447,6 +448,30 @@
                 <div class="mini-head"><span><strong>Integrations</strong><small>AI agents, SMS / WhatsApp and GPS</small></span></div>
                 <div class="integration-list" id="integrationList"></div>
                 <div class="gps-token hidden" id="gpsTokenResult" role="status"></div>
+                <form class="settings-form hidden" id="messagingForm" autocomplete="off">
+                  <strong>Your company's Twilio account</strong>
+                  <small>Messages are sent from your own Twilio account and number. The token is checked with Twilio, stored encrypted and never shown again.</small>
+                  <label>Account SID<input name="accountSid" maxlength="40" placeholder="AC…" required /></label>
+                  <label>Auth Token<input name="authToken" type="password" maxlength="64" autocomplete="new-password" placeholder="Leave empty to keep the saved one" /></label>
+                  <label>SMS number<input name="smsFrom" maxlength="30" placeholder="+15551234567" /></label>
+                  <label>WhatsApp number<input name="whatsappFrom" maxlength="40" placeholder="+15551234567" /></label>
+                  <div class="settings-form-footer">
+                    <p class="shipment-form-message" id="messagingFormMessage" role="status"></p>
+                    <span class="message-actions">
+                      <button class="btn btn-ghost small hidden" type="button" id="messagingRemove">Remove</button>
+                      <button class="btn btn-primary small" type="submit">Check and save</button>
+                    </span>
+                  </div>
+                </form>
+                <form class="settings-form hidden" id="inboxSettingsForm" autocomplete="off">
+                  <strong>Allowed senders</strong>
+                  <small>Only emails from these addresses or domains are read. Leave empty to accept everyone who knows your inbox address.</small>
+                  <label>Addresses or domains, separated by commas<input name="allowedSenders" maxlength="2000" placeholder="customer.com, boss@partner.com" /></label>
+                  <div class="settings-form-footer">
+                    <p class="shipment-form-message" id="inboxSettingsMessage" role="status"></p>
+                    <button class="btn btn-primary small" type="submit">Save</button>
+                  </div>
+                </form>
               </div>
               <div class="admin-box hidden" id="companiesBox">
                 <div class="mini-head"><span><strong>Companies</strong><small>Each customer company sees only its own data</small></span><button class="btn btn-ghost small" type="button" id="addCompanyToggle" aria-expanded="false" aria-controls="addCompanyForm">Add company</button></div>
@@ -479,6 +504,17 @@
               </div>
             </div>
             <div class="view-body" id="shipmentsView"></div>
+          </div>
+
+          <!-- ===== Inbox & tasks view ===== -->
+          <div class="view hidden" data-view="inbox">
+            <div class="board-head">
+              <div>
+                <h2 class="head-label">Inbox &amp; tasks</h2>
+                <div class="head-sub">What the agents prepared for you. Nothing is sent or booked until you press the button.</div>
+              </div>
+            </div>
+            <div class="view-body" id="inboxView"></div>
           </div>
 
           <!-- ===== Carriers view ===== -->
@@ -619,6 +655,17 @@
           </div>
         </form>
         <div class="detail-timeline tracking-list" id="trackingList"></div>
+
+        <div class="detail-timeline-head"><strong>Documents</strong><span id="documentsStatus"></span></div>
+        <form class="tracking-form document-form hidden" id="documentForm">
+          <label>Type<select name="type"><option value="cmr">CMR</option><option value="pod">Proof of delivery</option><option value="other">Other</option></select></label>
+          <label>File (PDF, JPG, PNG, WebP)<input name="file" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" required /></label>
+          <div class="tracking-form-footer span-2">
+            <p class="shipment-form-message" id="documentFormMessage" role="status"></p>
+            <button class="btn btn-primary small" type="submit">Upload</button>
+          </div>
+        </form>
+        <div class="document-list" id="documentList"></div>
 
         <div class="detail-timeline-head"><strong>Messages</strong><span id="messagingStatus"></span></div>
         <form class="tracking-form message-form hidden" id="messageForm">

@@ -32,6 +32,9 @@ services:
         value: "10000000"
       - key: MESSAGE_LANGUAGE
         value: uz
+      # Encrypts each company's saved Twilio token. Keep it; if it changes, Twilio settings are entered again.
+      - key: SECRETS_KEY
+        generateValue: true
       # Optional keys: Render asks for them when the Blueprint is created; leave empty to keep a feature off.
       - key: OPENROUTER_API_KEY
         sync: false

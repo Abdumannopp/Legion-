@@ -7,6 +7,7 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const {
+  httpError,
   readPositiveInteger,
   parsePositiveNumber,
   parseMoney: parseMoneyUpTo,
@@ -29,6 +30,25 @@ const {
   createTenantWithAdmin,
   setTenantGpsTokenHash,
   findTenantByGpsTokenHash,
+  setTenantInboxTokenHash,
+  findTenantByInboxTokenHash,
+  setTenantInboxAllowedSenders,
+  setTenantMessagingSettings,
+  createInboxItem,
+  getInboxItem,
+  listInboxItems,
+  countInboxItemsToday,
+  updateInboxItem,
+  listTasks,
+  getTask,
+  resolveTask,
+  resolveTasksByKey,
+  addDocument,
+  getDocument,
+  listDocuments,
+  getDocumentFile,
+  updateDocumentExtraction,
+  deleteDocument,
   findUserByEmail,
   findUserById,
   updateUser,
@@ -67,6 +87,8 @@ const aiGateway = require('./ai/gateway');
 const flowAgent = require('./agents/flow');
 const scoutAgent = require('./agents/scout');
 const relayAgent = require('./agents/relay');
+const vaultAgent = require('./agents/vault');
+const nexus = require('./agents/nexus');
 const messaging = require('./integrations/messaging');
 
 const REGISTRATION_INVITE_CODE = process.env.REGISTRATION_INVITE_CODE || '';
@@ -82,9 +104,9 @@ const DUMMY_HASH = bcrypt.hashSync(crypto.randomBytes(16).toString('hex'), BCRYP
 
 const ROLE_PERMISSIONS = {
   admin: ['*'],
-  operations: ['analytics:read', 'dashboard:read', 'carriers:read', 'carriers:write', 'shipments:read', 'shipments:create', 'shipments:status', 'shipments:dispatch', 'shipments:track', 'shipments:message', 'users:read'],
+  operations: ['analytics:read', 'dashboard:read', 'carriers:read', 'carriers:write', 'shipments:read', 'shipments:create', 'shipments:status', 'shipments:dispatch', 'shipments:track', 'shipments:message', 'shipments:document', 'users:read'],
   // Dispatchers log where the truck is ("check calls") and message drivers, but cannot book or change status.
-  operator: ['dashboard:read', 'carriers:read', 'shipments:read', 'shipments:create', 'shipments:track', 'shipments:message']
+  operator: ['dashboard:read', 'carriers:read', 'shipments:read', 'shipments:create', 'shipments:track', 'shipments:message', 'shipments:document']
 };
 
 const app = express();
@@ -107,6 +129,13 @@ const MAX_RATE = readPositiveInteger(process.env.MAX_RATE, 10000000);
 const STALE_TRACKING_HOURS = readPositiveInteger(process.env.STALE_TRACKING_HOURS, 12);
 const GPS_MIN_INTERVAL_MINUTES = readPositiveInteger(process.env.GPS_MIN_INTERVAL_MINUTES, 15);
 const GPS_WEBHOOK_PATH = '/api/integrations/gps';
+const INBOX_WEBHOOK_PREFIX = '/api/integrations/inbox/';
+const INBOX_DAILY_LIMIT = readPositiveInteger(process.env.INBOX_DAILY_LIMIT, 200);
+// Automatic AI work (reading emails and documents) stops at this many AI calls per company per day.
+const AI_DAILY_LIMIT_PER_TENANT = readPositiveInteger(process.env.AI_DAILY_LIMIT_PER_TENANT, 300);
+const DOC_MAX_BYTES = readPositiveInteger(process.env.DOC_MAX_MB, 8) * 1024 * 1024;
+const DOC_MAX_PER_SHIPMENT = readPositiveInteger(process.env.DOC_MAX_PER_SHIPMENT, 20);
+const DOC_MIME_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
 // Open self-sign-up is a demo convenience. In production nobody can create an account
 // unless an invite code is configured or open registration is switched on explicitly.
 const REGISTRATION_MODE = REGISTRATION_INVITE_CODE
@@ -149,6 +178,20 @@ if (isProduction && !process.env.JWT_SECRET) {
 
 const parseMoney = (value) => parseMoneyUpTo(value, MAX_RATE);
 
+nexus.configure({
+  flow: { weightUnit: WEIGHT_UNIT, currency: CURRENCY, equipment: EQUIPMENT, maxRate: MAX_RATE, maxWeight: MAX_WEIGHT },
+  language: MESSAGE_LANGUAGE,
+  staleHours: STALE_TRACKING_HOURS,
+  aiDailyLimit: AI_DAILY_LIMIT_PER_TENANT,
+  formatMoney: (value) => {
+    try {
+      return Number(value).toLocaleString('en-US', { style: 'currency', currency: CURRENCY, maximumFractionDigits: 2 });
+    } catch (_) {
+      return `${Number(value).toFixed(2)} ${CURRENCY}`;
+    }
+  }
+});
+
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
 app.use((req, res, next) => {
@@ -183,7 +226,14 @@ app.use(cors({
 // GPS providers send batches of positions, so their endpoint accepts larger bodies.
 const smallJson = express.json({ limit: '50kb' });
 const gpsJson = express.json({ limit: '1mb' });
-app.use((req, res, next) => (req.path === GPS_WEBHOOK_PATH ? gpsJson : smallJson)(req, res, next));
+// Email providers post JSON or a form; both can be large (quoted threads), so the inbox webhook has its own limits.
+const inboxJson = express.json({ limit: '1mb' });
+const inboxForm = express.urlencoded({ extended: false, limit: '1mb' });
+app.use((req, res, next) => {
+  if (req.path === GPS_WEBHOOK_PATH) return gpsJson(req, res, next);
+  if (req.path.startsWith(INBOX_WEBHOOK_PREFIX)) return inboxJson(req, res, (error) => (error ? next(error) : inboxForm(req, res, next)));
+  return smallJson(req, res, next);
+});
 const PUBLIC_DIR = path.join(__dirname, 'public');
 app.use(express.static(PUBLIC_DIR));
 
@@ -366,6 +416,28 @@ const gpsLimiter = createRateLimiter({
   message: 'Too many GPS requests.'
 });
 
+const inboxLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: readPositiveInteger(process.env.INBOX_RATE_LIMIT_PER_MINUTE, 60),
+  keyGenerator: (req) => `inbox:${req.inboxTokenHash || getClientIp(req)}`,
+  message: 'Too many messages.'
+});
+
+// The inbox address is a secret in the URL: also limit by sender address, so guessing addresses is not free.
+const inboxIpLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: readPositiveInteger(process.env.INBOX_IP_RATE_LIMIT_PER_MINUTE, 600),
+  keyGenerator: (req) => `inbox-ip:${getClientIp(req)}`,
+  message: 'Too many requests.'
+});
+
+const documentLimiter = createRateLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: readPositiveInteger(process.env.DOC_RATE_LIMIT_PER_HOUR, 60),
+  keyGenerator: (req) => `doc:${req.user?.id}`,
+  message: 'Upload limit reached for this hour.'
+});
+
 const loginLimiter = async (req, res, next) => {
   const ip = getClientIp(req);
   const email = getNormalizedEmail(req);
@@ -412,7 +484,7 @@ const registerLimiter = async (req, res, next) => {
 };
 
 // The GPS webhook has its own token and limiter (providers send many requests from one address).
-app.use('/api', (req, res, next) => (req.path === '/integrations/gps' ? next() : normalApiLimiter(req, res, next)));
+app.use('/api', (req, res, next) => (req.path === '/integrations/gps' || req.path.startsWith('/integrations/inbox/') ? next() : normalApiLimiter(req, res, next)));
 
 const authRateLimiters = { login: loginLimiter, register: registerLimiter };
 
@@ -563,7 +635,10 @@ app.get('/api/config', (req, res) => {
     maxRate: MAX_RATE,
     staleTrackingHours: STALE_TRACKING_HOURS,
     ai: { enabled: aiGateway.isEnabled() },
-    messaging: { ...messaging.status(), language: MESSAGE_LANGUAGE, languages: relayAgent.LANGUAGES }
+    // Which channels can send depends on the company: see GET /api/messaging/status (after sign-in).
+    messaging: { language: MESSAGE_LANGUAGE, languages: relayAgent.LANGUAGES },
+    documents: { maxMb: DOC_MAX_BYTES / (1024 * 1024), types: DOC_MIME_TYPES },
+    nexus: { enabled: process.env.NEXUS_ENABLED !== 'false' }
   });
 });
 
@@ -807,6 +882,14 @@ app.post('/api/shipments', authMiddleware, requirePermission('shipments:create')
     }
     const customerPhone = readOptionalPhone(req.body, 'customerPhone');
     if (customerPhone.error) return res.status(400).json({ success: false, message: customerPhone.error });
+    // Optional: the email this load was made from (closes its task and marks it converted).
+    const inboxId = req.body?.inboxId === undefined || req.body?.inboxId === null || req.body?.inboxId === '' ? null : Number(req.body.inboxId);
+    if (inboxId !== null) {
+      const item = Number.isInteger(inboxId) && inboxId > 0 ? await getInboxItem(req.user.tenantId, inboxId) : null;
+      if (!item || ['converted', 'dismissed'].includes(item.status)) {
+        return res.status(400).json({ success: false, message: 'That incoming message no longer exists or was already handled.' });
+      }
+    }
 
     const textFields = { customer, origin, destination };
     for (const [field, value] of Object.entries(textFields)) {
@@ -846,6 +929,11 @@ app.post('/api/shipments', authMiddleware, requirePermission('shipments:create')
       actorId: req.user.id,
       tenantId: req.user.tenantId
     });
+
+    if (inboxId !== null) {
+      await updateInboxItem(req.user.tenantId, inboxId, { status: 'converted', shipmentId: parseShipmentId(shipment.id) });
+      await resolveTasksByKey(req.user.tenantId, `inbox:${inboxId}`, { userId: req.user.id });
+    }
 
     return res.status(201).json({
       success: true,
@@ -935,7 +1023,8 @@ app.post('/api/shipments/:id/messages/draft', authMiddleware, requirePermission(
       company: req.user.tenantName,
       formatMoney
     });
-    return res.json({ success: true, draft: { ...draft, recipient, channels: messaging.availableChannels() } });
+    const tenant = await getTenant(req.user.tenantId);
+    return res.json({ success: true, draft: { ...draft, recipient, channels: messaging.publicStatus(tenant, DEFAULT_TENANT_ID).channels } });
   } catch (error) {
     return sendError(res, error, 'Draft failed.', 'message draft');
   }
@@ -951,28 +1040,311 @@ app.post('/api/shipments/:id/messages', authMiddleware, requirePermission('shipm
   try {
     const shipment = await getShipment(req.user.tenantId, shipmentId);
     if (!shipment) return res.status(404).json({ success: false, message: 'Shipment not found.' });
-    // The number always comes from the load record, never from the browser.
-    const to = relayAgent.recipientPhone(shipment, recipient);
-    if (!to) return res.status(400).json({ success: false, message: `There is no ${recipient} phone number on this load.` });
-    const result = await messaging.send({ channel, to, body: body.trim() });
-    const saved = await createMessage(req.user.tenantId, {
-      shipmentId,
-      channel,
-      recipientType: recipient,
-      toPhone: to,
-      body: body.trim(),
-      status: result.status,
-      provider: result.provider,
-      providerMessageId: result.providerMessageId,
-      error: result.error,
-      createdBy: req.user.id
-    });
-    if (result.status !== 'sent') {
-      return res.status(502).json({ success: false, message: `The message was not delivered: ${result.error}`, messageId: saved.id });
+    const delivered = await deliverMessage(req, shipment, { recipient, channel, body: body.trim() });
+    if (delivered.result.status !== 'sent') {
+      return res.status(502).json({ success: false, message: `The message was not delivered: ${delivered.result.error}`, messageId: delivered.saved.id });
     }
-    return res.status(201).json({ success: true, message: { id: saved.id, status: result.status, to } });
+    return res.status(201).json({ success: true, message: { id: delivered.saved.id, status: delivered.result.status, to: delivered.to } });
   } catch (error) {
     return sendError(res, error, 'Message could not be sent.', 'message send');
+  }
+});
+
+// Sends one message with the signed-in company's Twilio account and records the result.
+// The number always comes from the load record, never from the browser.
+async function deliverMessage(req, shipment, { recipient, channel, body }) {
+  const to = relayAgent.recipientPhone(shipment, recipient);
+  if (!to) throw httpError(400, `There is no ${recipient} phone number on this load.`);
+  const tenant = await getTenant(req.user.tenantId);
+  const { config } = messaging.resolveConfig(tenant, DEFAULT_TENANT_ID);
+  const result = await messaging.send(config, { channel, to, body });
+  const saved = await createMessage(req.user.tenantId, {
+    shipmentId: shipment.id,
+    channel,
+    recipientType: recipient,
+    toPhone: to,
+    body,
+    status: result.status,
+    provider: result.provider,
+    providerMessageId: result.providerMessageId,
+    error: result.error,
+    createdBy: req.user.id
+  });
+  return { result, saved, to };
+}
+
+/* =========================================================
+   NEXUS TASKS: what the agents prepared for a person
+   ========================================================= */
+app.get('/api/tasks', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  try {
+    res.json({ success: true, tasks: await listTasks(req.user.tenantId, { status: 'open' }) });
+  } catch (error) {
+    return sendError(res, error, 'Tasks unavailable.', 'tasks');
+  }
+});
+
+app.post('/api/tasks/:id/dismiss', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  const taskId = Number(req.params.id);
+  if (!Number.isInteger(taskId) || taskId <= 0) return res.status(400).json({ success: false, message: 'Valid task ID is required.' });
+  try {
+    if (!(await getTask(req.user.tenantId, taskId))) return res.status(404).json({ success: false, message: 'Task not found.' });
+    await resolveTask(req.user.tenantId, taskId, { status: 'dismissed', userId: req.user.id });
+    return res.json({ success: true });
+  } catch (error) {
+    return sendError(res, error, 'Task could not be updated.', 'task dismiss');
+  }
+});
+
+// A person approves a drafted message: it is sent now (optionally edited), and the task is closed.
+app.post('/api/tasks/:id/approve', authMiddleware, requirePermission('shipments:message'), messageLimiter, async (req, res) => {
+  const taskId = Number(req.params.id);
+  const channel = req.body?.channel;
+  const edited = req.body?.body;
+  if (!Number.isInteger(taskId) || taskId <= 0 || !MESSAGE_CHANNELS.includes(channel)
+    || (edited !== undefined && (typeof edited !== 'string' || !edited.trim() || edited.length > MAX_LEN.message))) {
+    return res.status(400).json({ success: false, message: `A task, a channel (sms or whatsapp) and, if you edit it, a message of at most ${MAX_LEN.message} characters are required.` });
+  }
+  try {
+    const task = await getTask(req.user.tenantId, taskId);
+    if (!task) return res.status(404).json({ success: false, message: 'Task not found.' });
+    if (task.status !== 'open') return res.status(409).json({ success: false, message: 'This task was already handled.' });
+    if (task.kind !== 'message' || !task.shipmentId || !MESSAGE_RECIPIENTS.includes(task.payload?.recipient)) {
+      return res.status(400).json({ success: false, message: 'Only message tasks can be approved.' });
+    }
+    const shipment = await getShipment(req.user.tenantId, parseShipmentId(task.shipmentId));
+    if (!shipment) return res.status(404).json({ success: false, message: 'Shipment not found.' });
+    const body = (edited ?? task.payload.body).trim();
+    const delivered = await deliverMessage(req, shipment, { recipient: task.payload.recipient, channel, body });
+    if (delivered.result.status !== 'sent') {
+      return res.status(502).json({ success: false, message: `The message was not delivered: ${delivered.result.error}`, messageId: delivered.saved.id });
+    }
+    await resolveTask(req.user.tenantId, taskId, { status: 'done', userId: req.user.id });
+    return res.status(201).json({ success: true, message: { id: delivered.saved.id, status: 'sent', to: delivered.to } });
+  } catch (error) {
+    return sendError(res, error, 'Message could not be sent.', 'task approve');
+  }
+});
+
+/* =========================================================
+   INBOX: orders that arrive by email
+   ========================================================= */
+app.get('/api/inbox', authMiddleware, requirePermission('shipments:create'), async (req, res) => {
+  try {
+    res.json({ success: true, items: await listInboxItems(req.user.tenantId) });
+  } catch (error) {
+    return sendError(res, error, 'Inbox unavailable.', 'inbox');
+  }
+});
+
+app.post('/api/inbox/:id/dismiss', authMiddleware, requirePermission('shipments:create'), async (req, res) => {
+  const itemId = Number(req.params.id);
+  if (!Number.isInteger(itemId) || itemId <= 0) return res.status(400).json({ success: false, message: 'Valid inbox ID is required.' });
+  try {
+    if (!(await updateInboxItem(req.user.tenantId, itemId, { status: 'dismissed' }))) return res.status(404).json({ success: false, message: 'Message not found.' });
+    await resolveTasksByKey(req.user.tenantId, `inbox:${itemId}`, { status: 'dismissed', userId: req.user.id });
+    return res.json({ success: true });
+  } catch (error) {
+    return sendError(res, error, 'Message could not be dismissed.', 'inbox dismiss');
+  }
+});
+
+// Read a stored email with FLOW on demand (when it was not read automatically).
+app.post('/api/inbox/:id/parse', authMiddleware, requirePermission('shipments:create'), aiLimiter, async (req, res) => {
+  const itemId = Number(req.params.id);
+  if (!Number.isInteger(itemId) || itemId <= 0) return res.status(400).json({ success: false, message: 'Valid inbox ID is required.' });
+  try {
+    const item = await getInboxItem(req.user.tenantId, itemId);
+    if (!item) return res.status(404).json({ success: false, message: 'Message not found.' });
+    if (['converted', 'dismissed'].includes(item.status)) return res.status(409).json({ success: false, message: 'This message was already handled.' });
+    const parsed = await flowAgent.parseOrder(`Subject: ${item.subject || ''}\n\n${item.body}`, flowSettings(), agentLogger(req));
+    await updateInboxItem(req.user.tenantId, itemId, { status: 'parsed', parsed, error: null });
+    return res.json({ success: true, ...parsed });
+  } catch (error) {
+    return sendError(res, error, 'The AI assistant is unavailable.', 'inbox parse');
+  }
+});
+
+function flowSettings() {
+  return { weightUnit: WEIGHT_UNIT, currency: CURRENCY, equipment: EQUIPMENT, maxRate: MAX_RATE, maxWeight: MAX_WEIGHT };
+}
+
+const stripHtml = (html) => String(html)
+  .replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
+  .replace(/<br\s*\/?>/gi, '\n')
+  .replace(/<\/(p|div|tr|li|h\d)>/gi, '\n')
+  .replace(/<[^>]+>/g, ' ')
+  .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+  .replace(/[ \t]+/g, ' ').replace(/\n\s*\n\s*\n+/g, '\n\n').trim();
+
+const firstText = (...values) => values.find((value) => typeof value === 'string' && value.trim()) || '';
+
+// Understands the shapes email providers send (Postmark, Mailgun, SendGrid-style JSON, generic).
+function normalizeInbound(body) {
+  const b = body && typeof body === 'object' ? body : {};
+  const from = firstText(b.from, b.From, b.sender, b.FromFull?.Email, b.fromEmail);
+  const text = firstText(b.text, b.TextBody, b['stripped-text'], b['body-plain'], b.body, stripHtml(firstText(b.html, b.HtmlBody, b['body-html'])));
+  return {
+    from: from.trim(),
+    subject: firstText(b.subject, b.Subject).trim(),
+    text: text.trim(),
+    messageId: firstText(b.messageId, b.MessageID, b['Message-Id'], b['message-id']).trim().slice(0, 300)
+  };
+}
+
+function senderAddress(from) {
+  const match = /<([^>]+)>/.exec(from);
+  return (match ? match[1] : from).trim().toLowerCase();
+}
+
+// An empty allow-list accepts everyone; otherwise the sender or its domain must be listed.
+function senderAllowed(from, allowedSenders) {
+  if (!allowedSenders.length) return true;
+  const address = senderAddress(from);
+  const domain = address.includes('@') ? address.split('@').pop() : '';
+  return allowedSenders.some((entry) => {
+    const allowed = entry.toLowerCase().replace(/^@/, '');
+    return allowed === address || (domain && allowed === domain);
+  });
+}
+
+app.post(`${INBOX_WEBHOOK_PREFIX}:token`, (req, res, next) => {
+  req.inboxTokenHash = rateLimitKey(String(req.params.token));
+  return inboxIpLimiter(req, res, (error) => (error ? next(error) : inboxLimiter(req, res, next)));
+}, async (req, res) => {
+  try {
+    const tenant = await findTenantByInboxTokenHash(req.inboxTokenHash);
+    if (!tenant) return res.status(404).json({ success: false, message: 'Unknown inbox address.' });
+    const message = normalizeInbound(req.body);
+    // Providers retry on errors, so an unusable message is acknowledged, not rejected.
+    if (!message.text) return res.json({ success: true, ignored: 'empty' });
+    if ((await countInboxItemsToday(tenant.id)) >= INBOX_DAILY_LIMIT) {
+      return res.status(429).json({ success: false, message: 'Daily limit of incoming messages reached.' });
+    }
+    const settings = await getTenant(tenant.id);
+    const allowed = senderAllowed(message.from, settings.allowedSenders);
+    const { item, duplicate } = await createInboxItem(tenant.id, {
+      externalId: message.messageId || null,
+      from: message.from,
+      subject: message.subject,
+      body: message.text,
+      status: allowed ? 'new' : 'blocked'
+    });
+    if (duplicate) return res.json({ success: true, duplicate: true });
+    if (allowed) nexus.emit('inbox.received', { tenantId: tenant.id, inboxId: item.id });
+    return res.status(201).json({ success: true, id: item.id, accepted: allowed });
+  } catch (error) {
+    return sendError(res, error, 'Message could not be stored.', 'inbox webhook');
+  }
+});
+
+/* =========================================================
+   DOCUMENTS (VAULT): CMR, proof of delivery, other files
+   ========================================================= */
+// The real file type comes from the first bytes, not from the name or the browser's claim.
+function detectMime(buffer) {
+  if (buffer.length >= 5 && buffer.subarray(0, 5).toString('latin1') === '%PDF-') return 'application/pdf';
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg';
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+  if (buffer.length >= 12 && buffer.subarray(0, 4).toString('latin1') === 'RIFF' && buffer.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+  return null;
+}
+
+function safeFilename(raw, mime) {
+  const base = String(raw || '').split(/[\\/]/).pop().replace(/[\u0000-\u001f\u007f"<>:*?|]/g, '').trim().slice(0, 120);
+  const extension = { 'application/pdf': '.pdf', 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' }[mime];
+  return base || `document${extension}`;
+}
+
+const rawDocument = express.raw({
+  limit: DOC_MAX_BYTES,
+  type: (req) => DOC_MIME_TYPES.includes(String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase())
+});
+
+app.get('/api/shipments/:id/documents', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
+  try {
+    if (!(await getShipment(req.user.tenantId, shipmentId))) return res.status(404).json({ success: false, message: 'Shipment not found.' });
+    return res.json({ success: true, documents: await listDocuments(req.user.tenantId, shipmentId), readsDocuments: aiGateway.isEnabled() });
+  } catch (error) {
+    return sendError(res, error, 'Documents unavailable.', 'documents list');
+  }
+});
+
+app.post('/api/shipments/:id/documents', authMiddleware, requirePermission('shipments:document'), documentLimiter, rawDocument, async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  const type = String(req.query.type || 'other');
+  if (!shipmentId || !vaultAgent.DOC_TYPES.includes(type)) {
+    return res.status(400).json({ success: false, message: `A valid shipment and a document type (${vaultAgent.DOC_TYPES.join(', ')}) are required.` });
+  }
+  if (!Buffer.isBuffer(req.body) || !req.body.length) {
+    return res.status(415).json({ success: false, message: 'Send a PDF, JPEG, PNG or WebP file as the request body.' });
+  }
+  const mime = detectMime(req.body);
+  const claimed = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  if (!mime || mime !== claimed) {
+    return res.status(415).json({ success: false, message: 'The file is not a real PDF, JPEG, PNG or WebP.' });
+  }
+  try {
+    const existing = await listDocuments(req.user.tenantId, shipmentId);
+    if (existing.length >= DOC_MAX_PER_SHIPMENT) {
+      return res.status(409).json({ success: false, message: `A load can have at most ${DOC_MAX_PER_SHIPMENT} documents.` });
+    }
+    const { document, duplicate } = await addDocument(req.user.tenantId, shipmentId, {
+      type, filename: safeFilename(req.query.filename, mime), mime, content: req.body, uploadedBy: req.user.id
+    });
+    if (duplicate) return res.json({ success: true, duplicate: true, document });
+    nexus.emit('document.uploaded', { tenantId: req.user.tenantId, shipmentId, documentId: document.id });
+    return res.status(201).json({ success: true, document });
+  } catch (error) {
+    return sendError(res, error, 'Document could not be saved.', 'document upload');
+  }
+});
+
+// Downloads are always an attachment, never shown inside the app's own page.
+app.get('/api/shipments/:id/documents/:docId/file', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  const docId = Number(req.params.docId);
+  if (!shipmentId || !Number.isInteger(docId) || docId <= 0) return res.status(400).json({ success: false, message: 'Valid IDs are required.' });
+  try {
+    const file = await getDocumentFile(req.user.tenantId, shipmentId, docId);
+    if (!file) return res.status(404).json({ success: false, message: 'Document not found.' });
+    res.attachment(file.filename);
+    res.type(file.mime);
+    return res.send(file.content);
+  } catch (error) {
+    return sendError(res, error, 'Document unavailable.', 'document download');
+  }
+});
+
+// Read (or re-read) a document with VAULT. Runs in the background; the list shows the result.
+app.post('/api/shipments/:id/documents/:docId/extract', authMiddleware, requirePermission('shipments:document'), aiLimiter, async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  const docId = Number(req.params.docId);
+  if (!shipmentId || !Number.isInteger(docId) || docId <= 0) return res.status(400).json({ success: false, message: 'Valid IDs are required.' });
+  try {
+    const document = await getDocument(req.user.tenantId, shipmentId, docId);
+    if (!document) return res.status(404).json({ success: false, message: 'Document not found.' });
+    if (!aiGateway.isEnabled()) return res.status(503).json({ success: false, message: 'AI is not configured. Add OPENROUTER_API_KEY to the server settings.' });
+    await updateDocumentExtraction(req.user.tenantId, docId, { status: 'pending' });
+    nexus.emit('document.uploaded', { tenantId: req.user.tenantId, shipmentId, documentId: docId });
+    return res.status(202).json({ success: true, status: 'pending' });
+  } catch (error) {
+    return sendError(res, error, 'Document could not be read.', 'document extract');
+  }
+});
+
+app.delete('/api/shipments/:id/documents/:docId', authMiddleware, requirePermission('shipments:status'), async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  const docId = Number(req.params.docId);
+  if (!shipmentId || !Number.isInteger(docId) || docId <= 0) return res.status(400).json({ success: false, message: 'Valid IDs are required.' });
+  try {
+    if (!(await deleteDocument(req.user.tenantId, shipmentId, docId))) return res.status(404).json({ success: false, message: 'Document not found.' });
+    await resolveTasksByKey(req.user.tenantId, `doc:${docId}`, { status: 'dismissed', userId: req.user.id });
+    return res.json({ success: true });
+  } catch (error) {
+    return sendError(res, error, 'Document could not be deleted.', 'document delete');
   }
 });
 
@@ -1173,6 +1545,7 @@ app.patch('/api/admin/shipments/:id/status', authMiddleware, requirePermission('
     }
 
     const result = await updateShipmentStatus(req.user.tenantId, shipmentId, status, req.user.id, note);
+    nexus.emit('shipment.status', { tenantId: req.user.tenantId, shipmentId, status });
     return res.json({
       success: true,
       shipment: {
@@ -1211,6 +1584,7 @@ app.post('/api/admin/shipments/:id/dispatch', authMiddleware, requirePermission(
       driverPhone: driverPhone.value,
       truckPlate: truckPlate.value
     });
+    nexus.emit('shipment.dispatched', { tenantId: req.user.tenantId, shipmentId });
     return res.json({ success: true, shipment: { ...shipment, id: `SHP-${shipment.id}` } });
   } catch (error) {
     return sendError(res, error, 'Dispatch failed', 'dispatch');
@@ -1226,11 +1600,97 @@ app.get('/api/integrations/status', authMiddleware, requirePermission('users:rea
     res.json({
       success: true,
       ai: { enabled: aiGateway.isEnabled(), model: process.env.OPENROUTER_MODEL || null },
-      messaging: messaging.status(),
-      gps: { configured: Boolean(tenant?.gpsTokenHash), webhookPath: GPS_WEBHOOK_PATH, minIntervalMinutes: GPS_MIN_INTERVAL_MINUTES }
+      messaging: messaging.publicStatus(tenant, DEFAULT_TENANT_ID),
+      gps: { configured: Boolean(tenant?.gpsTokenHash), webhookPath: GPS_WEBHOOK_PATH, minIntervalMinutes: GPS_MIN_INTERVAL_MINUTES },
+      inbox: { configured: Boolean(tenant?.inboxTokenHash), pathPrefix: INBOX_WEBHOOK_PREFIX, allowedSenders: tenant?.allowedSenders || [], dailyLimit: INBOX_DAILY_LIMIT },
+      documents: { reads: aiGateway.isEnabled(), maxMb: DOC_MAX_BYTES / (1024 * 1024) },
+      nexus: { enabled: process.env.NEXUS_ENABLED !== 'false', staleHours: STALE_TRACKING_HOURS, aiDailyLimit: AI_DAILY_LIMIT_PER_TENANT }
     });
   } catch (error) {
     return sendError(res, error, 'Integration status unavailable.', 'integrations');
+  }
+});
+
+// Which channels (SMS / WhatsApp) this company can send with. Open to every signed-in user: the
+// message form needs it. It contains no credentials.
+app.get('/api/messaging/status', authMiddleware, async (req, res) => {
+  try {
+    res.json({ success: true, ...messaging.publicStatus(await getTenant(req.user.tenantId), DEFAULT_TENANT_ID) });
+  } catch (error) {
+    return sendError(res, error, 'Messaging status unavailable.', 'messaging status');
+  }
+});
+
+// This company's own Twilio account. Checked with Twilio before saving, stored encrypted,
+// never returned. Leave the token empty to keep the saved one when only the numbers change.
+app.put('/api/settings/messaging', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  const { accountSid, authToken, smsFrom, whatsappFrom } = req.body || {};
+  const sid = typeof accountSid === 'string' ? accountSid.trim() : '';
+  if (!/^AC[0-9a-fA-F]{32}$/.test(sid)) {
+    return res.status(400).json({ success: false, message: 'Account SID looks like AC followed by 32 letters and digits (find it on the Twilio console home page).' });
+  }
+  const readNumber = (value) => {
+    if (value === undefined || value === null || String(value).trim() === '') return { value: '' };
+    const number = messaging.toE164(String(value).trim().replace(/^whatsapp:/i, ''));
+    return number ? { value: number } : { error: true };
+  };
+  const sms = readNumber(smsFrom);
+  const whatsapp = readNumber(whatsappFrom);
+  if (sms.error || whatsapp.error) {
+    return res.status(400).json({ success: false, message: 'Sender numbers must be in international format, e.g. +15551234567.' });
+  }
+  if (!sms.value && !whatsapp.value) {
+    return res.status(400).json({ success: false, message: 'Enter at least one sender number (SMS or WhatsApp).' });
+  }
+  try {
+    const tenant = await getTenant(req.user.tenantId);
+    let token = typeof authToken === 'string' ? authToken.trim() : '';
+    if (!token && tenant.messagingSettings?.sid === sid) token = tenant.messagingSettings.token;
+    if (!/^[0-9a-zA-Z]{16,64}$/.test(token)) {
+      return res.status(400).json({ success: false, message: 'Enter the Auth Token from the Twilio console.' });
+    }
+    const settings = { sid, token, smsFrom: sms.value, whatsappFrom: whatsapp.value };
+    const check = await messaging.verifyCredentials(settings);
+    if (!check.ok) return res.status(400).json({ success: false, message: check.reason });
+    await setTenantMessagingSettings(req.user.tenantId, settings);
+    return res.json({ success: true, messaging: messaging.publicStatus({ id: req.user.tenantId, messagingSettings: settings }, DEFAULT_TENANT_ID) });
+  } catch (error) {
+    return sendError(res, error, 'Settings could not be saved.', 'messaging settings');
+  }
+});
+
+app.delete('/api/settings/messaging', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    await setTenantMessagingSettings(req.user.tenantId, null);
+    return res.json({ success: true, messaging: messaging.publicStatus(await getTenant(req.user.tenantId), DEFAULT_TENANT_ID) });
+  } catch (error) {
+    return sendError(res, error, 'Settings could not be removed.', 'messaging settings delete');
+  }
+});
+
+// The company's email inbox address. The token is shown once; only its hash is stored.
+app.post('/api/settings/inbox/token', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    const token = `inbox_${crypto.randomBytes(24).toString('hex')}`;
+    await setTenantInboxTokenHash(req.user.tenantId, rateLimitKey(token));
+    res.status(201).json({ success: true, token, webhookPath: `${INBOX_WEBHOOK_PREFIX}${token}` });
+  } catch (error) {
+    return sendError(res, error, 'Token could not be created.', 'inbox token');
+  }
+});
+
+// Who may send orders in. Empty = anyone who knows the address. Entries: an address or a domain.
+app.put('/api/settings/inbox', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  const list = req.body?.allowedSenders;
+  if (!Array.isArray(list) || list.length > 50 || list.some((entry) => typeof entry !== 'string' || !/^@?[a-z0-9._+-]+(@[a-z0-9.-]+)?$/i.test(entry.trim()) || entry.length > 254)) {
+    return res.status(400).json({ success: false, message: 'Send up to 50 email addresses or domains, e.g. ["customer.com", "boss@partner.com"].' });
+  }
+  try {
+    const cleaned = [...new Set(list.map((entry) => entry.trim().toLowerCase()))];
+    await setTenantInboxAllowedSenders(req.user.tenantId, cleaned);
+    return res.json({ success: true, allowedSenders: cleaned });
+  } catch (error) {
+    return sendError(res, error, 'Settings could not be saved.', 'inbox settings');
   }
 });
 
@@ -1364,7 +1824,8 @@ function startServer() {
   return initialize()
     .then(() => new Promise((resolve) => {
       const server = app.listen(PORT, HOST, () => {
-        console.log(`VEYRA API running at http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT} (${isProduction ? 'production' : 'development'}, ${WEIGHT_UNIT}, ${CURRENCY}, sign-up: ${REGISTRATION_MODE}, AI: ${aiGateway.isEnabled() ? 'on' : 'off'}, messaging: ${messaging.availableChannels().join('+') || 'off'})`);
+        console.log(`VEYRA API running at http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT} (${isProduction ? 'production' : 'development'}, ${WEIGHT_UNIT}, ${CURRENCY}, sign-up: ${REGISTRATION_MODE}, AI: ${aiGateway.isEnabled() ? 'on' : 'off'}, messaging: ${messaging.channelsOf(messaging.envConfig()).join('+') || 'per company only'}, NEXUS: ${process.env.NEXUS_ENABLED === 'false' ? 'off' : 'on'})`);
+        nexus.startSweeper();
         if (!isProduction) {
           console.warn('[VEYRA] Development mode: demo accounts with public passwords exist. Never expose this server to the internet.');
         }

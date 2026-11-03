@@ -7,7 +7,7 @@
    fetchDashboardData, loadAdminConsole.
    ========================================================= */
 (function () {
-  const VIEWS = ['dashboard', 'shipments', 'carriers', 'analytics'];
+  const VIEWS = ['dashboard', 'shipments', 'inbox', 'carriers', 'analytics'];
   const STATUS_ORDER = ['New', 'Sourcing', 'Pending Approval', 'Dispatched', 'In Transit', 'Exception', 'Delivered', 'Cancelled'];
   const STATUS_COLORS = {
     New: '#2563ff',
@@ -153,7 +153,7 @@
     const { view, params } = parseHash();
     state.view = view;
     state.params = params;
-    const TITLES = { dashboard: 'Dashboard', shipments: 'Shipments', carriers: 'Carriers', analytics: 'Analytics' };
+    const TITLES = { dashboard: 'Dashboard', shipments: 'Shipments', inbox: 'Inbox & tasks', carriers: 'Carriers', analytics: 'Analytics' };
     document.title = `${TITLES[view]} | VEYRA`;
 
     document.querySelectorAll('.view[data-view]').forEach((node) => node.classList.toggle('hidden', node.dataset.view !== view));
@@ -177,6 +177,9 @@
     } else if (view === 'carriers') {
       if (search) search.value = state.carriers.q;
       renderCarriers();
+    } else if (view === 'inbox') {
+      if (search) search.value = '';
+      renderInbox();
     } else if (view === 'analytics') {
       if (search) search.value = '';
       renderAnalytics();
@@ -857,6 +860,192 @@
   }
 
   /* =========================================================
+     INBOX & TASKS (what NEXUS and the other agents prepared)
+     ========================================================= */
+  async function renderInbox() {
+    const container = document.getElementById('inboxView');
+    if (!container) return;
+    if (!currentUser()) return gate(container, 'signin');
+    if (!can('shipments:read')) return gate(container, 'denied');
+    if (!container.children.length) loading(container);
+    try {
+      const [{ tasks }, inbox] = await Promise.all([
+        api('/api/tasks'),
+        can('shipments:create') ? api('/api/inbox') : Promise.resolve({ items: [] })
+      ]);
+      if (state.view !== 'inbox') return;
+      state.inbox = { tasks, items: inbox.items };
+    } catch (error) {
+      return errorState(container, error.message, renderInbox);
+    }
+    buildInboxLayout(container);
+    loadNotifications();
+  }
+
+  function taskCard(task) {
+    const when = typeof formatTimestamp === 'function' ? formatTimestamp(task.createdAt) : task.createdAt;
+    const body = el('div', { class: 'task-body' });
+    const actions = el('div', { class: 'task-actions' });
+    const dismiss = (label) => el('button', { class: 'btn btn-ghost small', type: 'button', onclick: (event) => taskAction(event.currentTarget, `/api/tasks/${task.id}/dismiss`, {}, 'Task closed.') }, label);
+    const openLoad = () => el('button', { class: 'btn btn-ghost small', type: 'button', onclick: () => openShipmentDetails(task.shipmentId) }, 'Open load');
+    const payload = task.payload || {};
+
+    if (task.kind === 'review_intake') {
+      const draft = payload.parsed?.draft;
+      const missing = payload.parsed?.missing || [];
+      body.append(el('p', { class: 'muted', text: `${payload.from || 'Unknown sender'}${payload.subject ? ` · ${payload.subject}` : ''}` }));
+      if (draft) {
+        body.append(el('ul', { class: 'task-facts' }, [
+          ['Customer', draft.customer], ['Route', draft.origin && draft.destination ? `${draft.origin} → ${draft.destination}` : null],
+          ['Pickup', draft.pickup], ['Delivery', draft.delivery],
+          ['Weight', draft.weight ? `${draft.weight} ${window.VeyraConfig?.weightUnit || 'kg'}` : null], ['Equipment', draft.equipment],
+          ['Price', draft.customerRate ? money(draft.customerRate) : null]
+        ].map(([label, value]) => el('li', { class: value ? '' : 'missing' }, [el('span', { text: label }), el('strong', { text: value || 'missing' })]))));
+        (payload.parsed.questions || []).forEach((question) => body.append(el('p', { class: 'task-question', text: `Ask the customer: ${question}` })));
+        (payload.parsed.notes || []).forEach((note) => body.append(el('p', { class: 'muted', text: note })));
+      } else {
+        body.append(el('p', { text: payload.preview || '' }));
+        body.append(el('p', { class: 'warn-line', text: payload.note || 'Not read yet.' }));
+      }
+      actions.append(
+        el('button', {
+          class: 'btn btn-primary small', type: 'button',
+          onclick: () => {
+            const item = (state.inbox?.items || []).find((entry) => entry.id === task.inboxId);
+            if (typeof window.openShipmentModal === 'function') {
+              window.openShipmentModal({ ...(draft || {}) }, { inboxId: task.inboxId, missing, emailText: item ? `${item.subject ? `Subject: ${item.subject}\n\n` : ''}${item.body}` : (payload.preview || '') });
+            }
+          }
+        }, 'Create load'),
+        dismiss('Dismiss')
+      );
+    } else if (task.kind === 'book_carrier') {
+      const recommendations = payload.recommendations || [];
+      if (!recommendations.length) body.append(el('p', { class: 'warn-line', text: 'No carrier is available. Add or reactivate one on the Carriers page.' }));
+      recommendations.forEach((item, index) => body.append(el('div', { class: `task-reco${index === 0 ? ' best' : ''}` }, [
+        el('span', { class: 'scout-title' }, [el('strong', { text: item.name }), el('span', { class: 'scout-score', text: `${item.score} pts` })]),
+        el('small', { text: item.reasons.join(' · ') || item.mode }),
+        item.suggestedRate ? el('small', { class: 'scout-rate', text: `Suggested ${money(item.suggestedRate)} — ${item.rateBasis}` }) : null
+      ])));
+      actions.append(
+        el('button', {
+          class: 'btn btn-primary small', type: 'button',
+          onclick: async () => {
+            try {
+              const shipment = await api(`/api/shipments/${encodeURIComponent(task.shipmentId)}`);
+              openDispatch(shipment);
+            } catch (error) {
+              toast(error.message, 'error');
+            }
+          }
+        }, 'Open dispatch'),
+        openLoad(),
+        dismiss('Dismiss')
+      );
+    } else if (task.kind === 'message') {
+      const channels = window.VeyraConfig?.messaging?.channels || [];
+      const textarea = el('textarea', { rows: '3', maxlength: '1000', 'aria-label': 'Message text' });
+      textarea.value = payload.body || '';
+      const channelSelect = el('select', { 'aria-label': 'Send by' }, ['whatsapp', 'sms'].map((channel) => el('option', { value: channel, text: channel === 'sms' ? 'SMS' : 'WhatsApp', disabled: !channels.includes(channel) })));
+      const firstOn = ['whatsapp', 'sms'].find((channel) => channels.includes(channel));
+      if (firstOn) channelSelect.value = firstOn;
+      body.append(el('p', { class: 'muted', text: `To the ${payload.recipient}: ${payload.to || 'no number'}` }), textarea);
+      if (!channels.length) body.append(el('p', { class: 'warn-line', text: 'Sending is off for your company. Copy the text and send it from your phone, then close the task.' }));
+      if (can('shipments:message')) {
+        actions.append(el('span', { class: 'task-send' }, [channelSelect, el('button', {
+          class: 'btn btn-primary small', type: 'button', disabled: !channels.length,
+          onclick: (event) => taskAction(event.currentTarget, `/api/tasks/${task.id}/approve`, { channel: channelSelect.value, body: textarea.value }, 'Message sent.')
+        }, 'Approve & send')]));
+      }
+      actions.append(
+        el('button', {
+          class: 'btn btn-ghost small', type: 'button',
+          onclick: async () => {
+            try {
+              await navigator.clipboard.writeText(textarea.value);
+              toast('Text copied. Paste it into WhatsApp or SMS.');
+            } catch (_) {
+              textarea.select();
+              toast('Select the text and copy it (Ctrl+C).', 'info');
+            }
+          }
+        }, 'Copy'),
+        openLoad(),
+        dismiss('Skip')
+      );
+    } else if (task.kind === 'check_document') {
+      body.append(el('div', { class: 'table-scroll' }, el('table', { class: 'data-table compact' }, [
+        el('thead', {}, el('tr', {}, ['Field', 'Document says', 'Load says', ''].map((h) => el('th', { text: h })))),
+        el('tbody', {}, (payload.mismatches || []).map((check) => el('tr', {}, [
+          el('td', { text: check.label }), el('td', { text: check.document ?? '—' }), el('td', { text: check.load ?? '—' }), el('td', { class: 'warn-line', text: check.hint || '' })
+        ])))
+      ])));
+      actions.append(openLoad(), dismiss('Checked'));
+    } else {
+      body.append(el('p', { text: payload.text || '' }));
+      [['Carrier', payload.carrierPhone], ['Driver', payload.driverPhone]].filter(([, phone]) => phone).forEach(([who, phone]) => body.append(
+        el('p', { class: 'muted' }, [`${who}: `, el('a', { href: `tel:${String(phone).replace(/[^+\d]/g, '')}`, text: phone })])
+      ));
+      actions.append(openLoad(), dismiss('Done'));
+    }
+    return el('article', { class: `card task-card kind-${task.kind}` }, [
+      el('header', {}, [el('strong', { text: task.title }), el('small', { class: 'muted', text: when })]),
+      body,
+      actions
+    ]);
+  }
+
+  async function taskAction(button, url, body, doneText) {
+    button.disabled = true;
+    try {
+      await api(url, { method: 'POST', body: JSON.stringify(body) });
+      toast(doneText);
+      await Promise.allSettled([renderInbox(), loadNotifications()]);
+    } catch (error) {
+      toast(error.message, 'error');
+      button.disabled = false;
+    }
+  }
+
+  function buildInboxLayout(container) {
+    const { tasks, items } = state.inbox;
+    const blocked = items.filter((item) => item.status === 'blocked');
+    const hasTaskEmail = (id) => tasks.some((task) => task.inboxId === id);
+    const waiting = items.filter((item) => item.status !== 'blocked' && !hasTaskEmail(item.id));
+
+    const taskList = tasks.length
+      ? tasks.map(taskCard)
+      : [el('div', { class: 'card empty-state wide' }, [el('p', { text: 'Nothing is waiting for you. New orders by email, bookings and late trucks will show up here.' })])];
+
+    const sections = [el('div', { class: 'task-list' }, taskList)];
+    if (waiting.length) {
+      sections.push(el('h3', { class: 'task-heading', text: 'Emails without a task' }), ...waiting.map((item) => emailCard(item)));
+    }
+    if (blocked.length) {
+      sections.push(
+        el('h3', { class: 'task-heading', text: 'Blocked emails' }),
+        el('p', { class: 'muted', text: 'These senders are not on your allowed list, so they were not read.' }),
+        ...blocked.map((item) => emailCard(item, true))
+      );
+    }
+    container.replaceChildren(...sections);
+  }
+
+  function emailCard(item, blocked = false) {
+    return el('article', { class: 'card task-card' }, [
+      el('header', {}, [el('strong', { text: item.subject || '(no subject)' }), el('small', { class: 'muted', text: item.from || '' })]),
+      el('div', { class: 'task-body' }, [el('p', { text: item.body.slice(0, 400) })]),
+      el('div', { class: 'task-actions' }, [
+        blocked ? null : el('button', {
+          class: 'btn btn-primary small', type: 'button',
+          onclick: () => window.openShipmentModal?.({}, { inboxId: item.id, emailText: `${item.subject ? `Subject: ${item.subject}\n\n` : ''}${item.body}` })
+        }, 'Create load'),
+        el('button', { class: 'btn btn-ghost small', type: 'button', onclick: (event) => taskAction(event.currentTarget, `/api/inbox/${item.id}/dismiss`, {}, 'Email dismissed.') }, 'Dismiss')
+      ])
+    ]);
+  }
+
+  /* =========================================================
      NOTIFICATIONS (derived from real shipments and carriers)
      ========================================================= */
   const notifications = { items: [], open: false, failed: false };
@@ -866,6 +1055,7 @@
     if (!currentUser() || !can('shipments:read')) {
       notifications.items = [];
       notifications.failed = false;
+      document.getElementById('navInboxBadge')?.classList.add('hidden');
       renderNotifications();
       return;
     }
@@ -882,6 +1072,12 @@
       if (available === 0 && (sourcing || pending)) items.push({ tone: 'danger', title: 'No carriers are available', hint: 'Reactivate or add a carrier', href: '#/carriers' });
       else if (sourcing) items.push({ tone: 'info', title: `${plural(sourcing, 'load needs', 'loads need')} a carrier`, hint: 'In Sourcing', href: '#/shipments?status=Sourcing' });
       if (fresh) items.push({ tone: 'info', title: `${plural(fresh, 'new load is', 'new loads are')} waiting to be sourced`, hint: 'Move to Sourcing', href: '#/shipments?status=New' });
+      if (alerts.openTasks) items.unshift({ tone: 'warn', title: `${plural(alerts.openTasks, 'task is', 'tasks are')} waiting for you`, hint: 'Orders, bookings and messages the agents prepared', href: '#/inbox' });
+      const badge = document.getElementById('navInboxBadge');
+      if (badge) {
+        badge.textContent = alerts.openTasks;
+        badge.classList.toggle('hidden', !alerts.openTasks);
+      }
       notifications.items = items;
     } catch (_) {
       notifications.items = [];
@@ -930,6 +1126,10 @@
   }
 
   function bindNotifications() {
+    // New emails and tasks can arrive while someone works on another page: refresh the counts quietly.
+    setInterval(() => {
+      if (!document.hidden && currentUser()) loadNotifications();
+    }, 60000);
     document.getElementById('notifBtn')?.addEventListener('click', () => setNotificationsOpen(!notifications.open));
     document.addEventListener('click', (event) => {
       if (notifications.open && !event.target.closest('.notif-wrap')) setNotificationsOpen(false);
@@ -952,6 +1152,7 @@
     if (state.view === 'shipments') await renderShipments();
     if (state.view === 'carriers') await renderCarriers();
     if (state.view === 'analytics') await renderAnalytics();
+    if (state.view === 'inbox') await renderInbox();
     loadNotifications();
   }
 

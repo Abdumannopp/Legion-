@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 const { httpError, normalizePlate } = require('./lib/validation');
+const secrets = require('./lib/secrets');
 
 const DB_PATH = process.env.DATABASE_PATH
   ? path.resolve(process.env.DATABASE_PATH)
@@ -290,6 +291,76 @@ async function initialize() {
     )
   `);
 
+  await ensureColumns('tenants', [
+    ['inbox_token_hash', 'TEXT'],
+    ['inbox_allowed_senders', 'TEXT'],
+    // Encrypted JSON (see lib/secrets.js): this company's own Twilio account.
+    ['messaging_config', 'TEXT']
+  ]);
+
+  // Emails (and other messages) that arrived for a company, waiting to become loads.
+  await run(`
+    CREATE TABLE IF NOT EXISTS inbox_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+      source TEXT NOT NULL DEFAULT 'email',
+      external_id TEXT,
+      from_address TEXT,
+      subject TEXT,
+      body TEXT NOT NULL,
+      status TEXT NOT NULL,
+      parsed_json TEXT,
+      error TEXT,
+      shipment_id INTEGER REFERENCES shipments(id),
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await run('CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_dedupe ON inbox_items (tenant_id, external_id) WHERE external_id IS NOT NULL');
+
+  // Work NEXUS prepared for a person: review an order, book a carrier, approve a message...
+  // dedupe_key makes every event idempotent: the same event twice never creates a second task.
+  await run(`
+    CREATE TABLE IF NOT EXISTS nexus_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      shipment_id INTEGER REFERENCES shipments(id),
+      inbox_id INTEGER REFERENCES inbox_items(id),
+      payload TEXT,
+      status TEXT NOT NULL DEFAULT 'open',
+      dedupe_key TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      resolved_at TEXT,
+      resolved_by INTEGER REFERENCES users(id)
+    )
+  `);
+  await run('CREATE UNIQUE INDEX IF NOT EXISTS idx_nexus_tasks_dedupe ON nexus_tasks (tenant_id, dedupe_key)');
+
+  // CMR, proof of delivery and other files attached to a load (stored in the database file itself,
+  // so one backup covers everything).
+  await run(`
+    CREATE TABLE IF NOT EXISTS documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+      shipment_id INTEGER NOT NULL REFERENCES shipments(id),
+      doc_type TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      mime TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      sha256 TEXT NOT NULL,
+      content BLOB NOT NULL,
+      extraction_status TEXT NOT NULL DEFAULT 'pending',
+      extracted_json TEXT,
+      comparison_json TEXT,
+      error TEXT,
+      uploaded_by INTEGER REFERENCES users(id),
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await run('CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_dedupe ON documents (shipment_id, sha256)');
+
   const seedUsers = [
     { name: 'Alex Carter', email: 'admin@veyra.ai', password: 'admin123', role: 'admin', platform: 1 },
     { name: 'Emma Wilson', email: 'ops@veyra.ai', password: 'ops123', role: 'operations', platform: 0 },
@@ -374,7 +445,11 @@ async function initialize() {
     'CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions (user_id)',
     'CREATE INDEX IF NOT EXISTS idx_tracking_updates_shipment ON tracking_updates (shipment_id, id)',
     'CREATE INDEX IF NOT EXISTS idx_messages_shipment ON messages (shipment_id, id)',
-    'CREATE INDEX IF NOT EXISTS idx_agent_tasks_tenant ON agent_tasks (tenant_id, id)'
+    'CREATE INDEX IF NOT EXISTS idx_agent_tasks_tenant ON agent_tasks (tenant_id, id)',
+    'CREATE INDEX IF NOT EXISTS idx_inbox_tenant ON inbox_items (tenant_id, id)',
+    'CREATE INDEX IF NOT EXISTS idx_nexus_tasks_open ON nexus_tasks (tenant_id, status, id)',
+    'CREATE INDEX IF NOT EXISTS idx_nexus_tasks_shipment ON nexus_tasks (shipment_id)',
+    'CREATE INDEX IF NOT EXISTS idx_documents_shipment ON documents (shipment_id, id)'
   ];
   for (const statement of indexes) await run(statement);
 
@@ -397,7 +472,23 @@ async function checkIntegrity() {
 /* ---------------- tenants (companies) ---------------- */
 
 async function getTenant(tenantId) {
-  return get('SELECT id, name, gps_token_hash AS gpsTokenHash, created_at AS createdAt FROM tenants WHERE id = ?', [assertTenant(tenantId)]);
+  const row = await get(
+    `SELECT id, name, gps_token_hash AS gpsTokenHash, inbox_token_hash AS inboxTokenHash,
+       inbox_allowed_senders AS inboxAllowedSenders, messaging_config AS messagingConfig, created_at AS createdAt
+     FROM tenants WHERE id = ?`,
+    [assertTenant(tenantId)]
+  );
+  if (!row) return null;
+  let allowedSenders = [];
+  try {
+    const parsed = JSON.parse(row.inboxAllowedSenders || '[]');
+    if (Array.isArray(parsed)) allowedSenders = parsed.filter((entry) => typeof entry === 'string');
+  } catch (_) {
+    allowedSenders = [];
+  }
+  // The decrypted Twilio settings stay on the server; callers outside messaging never expose them.
+  const messagingSettings = row.messagingConfig ? secrets.decrypt(row.messagingConfig) : null;
+  return { ...row, allowedSenders, messagingSettings };
 }
 
 async function listTenants() {
@@ -435,6 +526,24 @@ async function setTenantGpsTokenHash(tenantId, tokenHash) {
 async function findTenantByGpsTokenHash(tokenHash) {
   if (!tokenHash) return null;
   return get('SELECT id, name FROM tenants WHERE gps_token_hash = ?', [tokenHash]);
+}
+
+async function setTenantInboxTokenHash(tenantId, tokenHash) {
+  await run('UPDATE tenants SET inbox_token_hash = ? WHERE id = ?', [tokenHash, assertTenant(tenantId)]);
+}
+
+async function findTenantByInboxTokenHash(tokenHash) {
+  if (!tokenHash) return null;
+  return get('SELECT id, name FROM tenants WHERE inbox_token_hash = ?', [tokenHash]);
+}
+
+async function setTenantInboxAllowedSenders(tenantId, senders) {
+  await run('UPDATE tenants SET inbox_allowed_senders = ? WHERE id = ?', [JSON.stringify(senders), assertTenant(tenantId)]);
+}
+
+// settings = { sid, token, smsFrom, whatsappFrom } or null to remove. Stored encrypted.
+async function setTenantMessagingSettings(tenantId, settings) {
+  await run('UPDATE tenants SET messaging_config = ? WHERE id = ?', [settings ? secrets.encrypt(settings) : null, assertTenant(tenantId)]);
 }
 
 /* ---------------- users and sessions ---------------- */
@@ -1204,6 +1313,12 @@ async function getDashboardPayload(tenantId, { days = 7 } = {}) {
   };
 }
 
+// The last time anyone heard from a truck: its latest location update, otherwise when it was booked.
+// A truck booked a minute ago has not "missed" an update yet.
+const LAST_SIGN_OF_LIFE = `COALESCE(last_tracked_at,
+  (SELECT MAX(created_at) FROM shipment_events WHERE shipment_events.shipment_id = shipments.id AND shipment_events.to_status = 'Dispatched'),
+  created_at)`;
+
 // Counts behind the notification bell, computed in SQL so they stay right at any volume.
 async function getAlerts(tenantId, { staleHours = 12 } = {}) {
   assertTenant(tenantId);
@@ -1213,9 +1328,10 @@ async function getAlerts(tenantId, { staleHours = 12 } = {}) {
       SUM(CASE WHEN status = 'Pending Approval' THEN 1 ELSE 0 END) AS pending,
       SUM(CASE WHEN status = 'New' THEN 1 ELSE 0 END) AS fresh,
       SUM(CASE WHEN status = 'Sourcing' THEN 1 ELSE 0 END) AS sourcing,
-      SUM(CASE WHEN status IN ('Dispatched', 'In Transit') AND (last_tracked_at IS NULL OR last_tracked_at < datetime('now', ?)) THEN 1 ELSE 0 END) AS staleTracking
+      SUM(CASE WHEN status IN ('Dispatched', 'In Transit') AND ${LAST_SIGN_OF_LIFE} < datetime('now', ?) THEN 1 ELSE 0 END) AS staleTracking
     FROM shipments WHERE tenant_id = ?
   `, [`-${Number(staleHours)} hours`, tenantId]);
+  const openTasks = await get("SELECT COUNT(*) AS total FROM nexus_tasks WHERE tenant_id = ? AND status = 'open'", [tenantId]);
   const carriers = await get("SELECT SUM(CASE WHEN status = 'Available' THEN 1 ELSE 0 END) AS available, COUNT(*) AS total FROM carriers WHERE tenant_id = ?", [tenantId]);
   return {
     exceptions: Number(row?.exceptions) || 0,
@@ -1224,9 +1340,261 @@ async function getAlerts(tenantId, { staleHours = 12 } = {}) {
     sourcing: Number(row?.sourcing) || 0,
     staleTracking: Number(row?.staleTracking) || 0,
     staleHours,
+    openTasks: Number(openTasks?.total) || 0,
     availableCarriers: Number(carriers?.available) || 0,
     totalCarriers: Number(carriers?.total) || 0
   };
+}
+
+/* ---------------- inbox (incoming email) ---------------- */
+
+const INBOX_BODY_MAX = 8000;
+
+function mapInboxItem(row) {
+  let parsed = null;
+  try {
+    parsed = row.parsed_json ? JSON.parse(row.parsed_json) : null;
+  } catch (_) {
+    parsed = null;
+  }
+  return {
+    id: row.id,
+    source: row.source,
+    from: row.from_address,
+    subject: row.subject,
+    body: row.body,
+    status: row.status,
+    parsed,
+    error: row.error,
+    shipmentId: row.shipment_id ? `SHP-${row.shipment_id}` : null,
+    createdAt: row.created_at
+  };
+}
+
+// Returns { item, duplicate }. The same message (same external id) is stored once.
+async function createInboxItem(tenantId, { externalId, from, subject, body, status = 'new', source = 'email' }) {
+  assertTenant(tenantId);
+  const text = String(body || '').slice(0, INBOX_BODY_MAX);
+  const result = await run(
+    `INSERT OR IGNORE INTO inbox_items (tenant_id, source, external_id, from_address, subject, body, status) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [tenantId, source, externalId || null, from ? String(from).slice(0, 254) : null, subject ? String(subject).slice(0, 300) : null, text, status]
+  );
+  if (!result.changes) return { item: null, duplicate: true };
+  return { item: await getInboxItem(tenantId, result.id), duplicate: false };
+}
+
+async function getInboxItem(tenantId, id) {
+  const row = await get('SELECT * FROM inbox_items WHERE id = ? AND tenant_id = ?', [id, assertTenant(tenantId)]);
+  return row ? mapInboxItem(row) : null;
+}
+
+async function listInboxItems(tenantId, { status, limit = 50 } = {}) {
+  assertTenant(tenantId);
+  const where = status ? 'AND status = ?' : "AND status NOT IN ('converted', 'dismissed')";
+  const params = status ? [tenantId, status, limit] : [tenantId, limit];
+  const rows = await all(`SELECT * FROM inbox_items WHERE tenant_id = ? ${where} ORDER BY id DESC LIMIT ?`, params);
+  return rows.map(mapInboxItem);
+}
+
+async function countInboxItemsToday(tenantId) {
+  const row = await get("SELECT COUNT(*) AS total FROM inbox_items WHERE tenant_id = ? AND created_at >= datetime('now', '-1 day')", [assertTenant(tenantId)]);
+  return Number(row?.total) || 0;
+}
+
+async function updateInboxItem(tenantId, id, { status, parsed, error, shipmentId }) {
+  assertTenant(tenantId);
+  const fields = ["updated_at = CURRENT_TIMESTAMP"];
+  const params = [];
+  if (status !== undefined) { fields.push('status = ?'); params.push(status); }
+  if (parsed !== undefined) { fields.push('parsed_json = ?'); params.push(parsed === null ? null : JSON.stringify(parsed)); }
+  if (error !== undefined) { fields.push('error = ?'); params.push(error ? String(error).slice(0, 300) : null); }
+  if (shipmentId !== undefined) { fields.push('shipment_id = ?'); params.push(shipmentId); }
+  const result = await run(`UPDATE inbox_items SET ${fields.join(', ')} WHERE id = ? AND tenant_id = ?`, [...params, id, tenantId]);
+  return result.changes === 1;
+}
+
+/* ---------------- NEXUS tasks ---------------- */
+
+function mapTask(row) {
+  let payload = null;
+  try {
+    payload = row.payload ? JSON.parse(row.payload) : null;
+  } catch (_) {
+    payload = null;
+  }
+  return {
+    id: row.id,
+    kind: row.kind,
+    title: row.title,
+    shipmentId: row.shipment_id ? `SHP-${row.shipment_id}` : null,
+    inboxId: row.inbox_id || null,
+    payload,
+    status: row.status,
+    createdAt: row.created_at,
+    resolvedAt: row.resolved_at || null
+  };
+}
+
+// Idempotent: returns { created: false } when a task with this dedupe key already exists.
+async function createTask(tenantId, { kind, title, shipmentId = null, inboxId = null, payload = null, dedupeKey }) {
+  assertTenant(tenantId);
+  const result = await run(
+    'INSERT OR IGNORE INTO nexus_tasks (tenant_id, kind, title, shipment_id, inbox_id, payload, dedupe_key) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [tenantId, kind, String(title).slice(0, 200), shipmentId, inboxId, payload === null ? null : JSON.stringify(payload), dedupeKey]
+  );
+  return { created: result.changes === 1, id: result.changes === 1 ? result.id : null };
+}
+
+async function listTasks(tenantId, { status = 'open', limit = 100 } = {}) {
+  assertTenant(tenantId);
+  const rows = await all('SELECT * FROM nexus_tasks WHERE tenant_id = ? AND status = ? ORDER BY id DESC LIMIT ?', [tenantId, status, limit]);
+  return rows.map(mapTask);
+}
+
+async function getTask(tenantId, id) {
+  const row = await get('SELECT * FROM nexus_tasks WHERE id = ? AND tenant_id = ?', [id, assertTenant(tenantId)]);
+  return row ? mapTask(row) : null;
+}
+
+// Closes one open task. Returns false when it was not open (already handled by someone else).
+async function resolveTask(tenantId, id, { status = 'done', userId = null } = {}) {
+  assertTenant(tenantId);
+  const result = await run(
+    "UPDATE nexus_tasks SET status = ?, resolved_at = CURRENT_TIMESTAMP, resolved_by = ? WHERE id = ? AND tenant_id = ? AND status = 'open'",
+    [status, userId, id, tenantId]
+  );
+  return result.changes === 1;
+}
+
+// Closes the open tasks of a load whose dedupe key starts with a prefix (e.g. "book:" once it is booked).
+async function resolveTasksByKey(tenantId, dedupeKeyPrefix, { status = 'done', userId = null } = {}) {
+  assertTenant(tenantId);
+  const like = `${String(dedupeKeyPrefix).replace(/[\\%_]/g, '\\$&')}%`;
+  const result = await run(
+    "UPDATE nexus_tasks SET status = ?, resolved_at = CURRENT_TIMESTAMP, resolved_by = ? WHERE tenant_id = ? AND status = 'open' AND dedupe_key LIKE ? ESCAPE '\\'",
+    [status, userId, tenantId, like]
+  );
+  return result.changes;
+}
+
+async function resolveTasksForShipment(tenantId, shipmentId, { status = 'done', userId = null } = {}) {
+  assertTenant(tenantId);
+  const result = await run(
+    "UPDATE nexus_tasks SET status = ?, resolved_at = CURRENT_TIMESTAMP, resolved_by = ? WHERE tenant_id = ? AND shipment_id = ? AND status = 'open'",
+    [status, userId, tenantId, shipmentId]
+  );
+  return result.changes;
+}
+
+// How many AI calls this company made in the last 24 hours (automatic AI work stops at a daily cap).
+async function countAgentTasksToday(tenantId) {
+  const row = await get("SELECT COUNT(*) AS total FROM agent_tasks WHERE tenant_id = ? AND created_at >= datetime('now', '-1 day')", [assertTenant(tenantId)]);
+  return Number(row?.total) || 0;
+}
+
+// System job only (NEXUS sweeper): loads in any company with no sign of life for staleHours.
+// Tenant-scoped callers must never use this.
+async function listStaleLoadsAllTenants(staleHours) {
+  return all(
+    `SELECT id, tenant_id AS tenantId, last_tracked_at AS lastTrackedAt FROM shipments
+     WHERE status IN ('Dispatched', 'In Transit') AND ${LAST_SIGN_OF_LIFE} < datetime('now', ?)`,
+    [`-${Number(staleHours)} hours`]
+  );
+}
+
+async function countShipmentExceptions(tenantId, shipmentId) {
+  const row = await get(
+    `SELECT COUNT(*) AS total FROM shipment_events JOIN shipments ON shipments.id = shipment_events.shipment_id
+     WHERE shipment_events.shipment_id = ? AND shipments.tenant_id = ? AND shipment_events.to_status = 'Exception'`,
+    [shipmentId, assertTenant(tenantId)]
+  );
+  return Number(row?.total) || 0;
+}
+
+/* ---------------- documents (VAULT) ---------------- */
+
+function mapDocument(row) {
+  const parse = (text) => {
+    try {
+      return text ? JSON.parse(text) : null;
+    } catch (_) {
+      return null;
+    }
+  };
+  return {
+    id: row.id,
+    type: row.doc_type,
+    filename: row.filename,
+    mime: row.mime,
+    size: row.size,
+    extractionStatus: row.extraction_status,
+    extracted: parse(row.extracted_json),
+    comparison: parse(row.comparison_json),
+    error: row.error,
+    uploadedBy: row.uploadedBy || null,
+    createdAt: row.created_at
+  };
+}
+
+const DOCUMENT_COLUMNS = `documents.id, documents.doc_type, documents.filename, documents.mime, documents.size, documents.extraction_status,
+  documents.extracted_json, documents.comparison_json, documents.error, documents.created_at, users.name AS uploadedBy`;
+
+// Returns { document, duplicate }. The same file attached twice to one load is kept once.
+async function addDocument(tenantId, shipmentId, { type, filename, mime, content, uploadedBy }) {
+  assertTenant(tenantId);
+  const crypto = require('crypto');
+  const sha256 = crypto.createHash('sha256').update(content).digest('hex');
+  return withTransaction(async (transaction) => {
+    const shipment = await transaction.get('SELECT id FROM shipments WHERE id = ? AND tenant_id = ?', [shipmentId, tenantId]);
+    if (!shipment) throw httpError(404, 'Shipment not found.');
+    const existing = await transaction.get('SELECT id FROM documents WHERE shipment_id = ? AND sha256 = ?', [shipmentId, sha256]);
+    if (existing) return { id: existing.id, duplicate: true };
+    const result = await transaction.run(
+      `INSERT INTO documents (tenant_id, shipment_id, doc_type, filename, mime, size, sha256, content, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [tenantId, shipmentId, type, filename, mime, content.length, sha256, content, uploadedBy || null]
+    );
+    return { id: result.id, duplicate: false };
+  }).then(async (result) => ({ document: await getDocument(tenantId, shipmentId, result.id), duplicate: result.duplicate }));
+}
+
+async function getDocument(tenantId, shipmentId, id) {
+  const row = await get(
+    `SELECT ${DOCUMENT_COLUMNS} FROM documents LEFT JOIN users ON users.id = documents.uploaded_by
+     WHERE documents.id = ? AND documents.shipment_id = ? AND documents.tenant_id = ?`,
+    [id, shipmentId, assertTenant(tenantId)]
+  );
+  return row ? mapDocument(row) : null;
+}
+
+async function listDocuments(tenantId, shipmentId) {
+  const rows = await all(
+    `SELECT ${DOCUMENT_COLUMNS} FROM documents LEFT JOIN users ON users.id = documents.uploaded_by
+     WHERE documents.shipment_id = ? AND documents.tenant_id = ? ORDER BY documents.id DESC`,
+    [shipmentId, assertTenant(tenantId)]
+  );
+  return rows.map(mapDocument);
+}
+
+// The stored file itself (for download and for reading by VAULT).
+async function getDocumentFile(tenantId, shipmentId, id) {
+  return get(
+    'SELECT id, filename, mime, doc_type AS type, content FROM documents WHERE id = ? AND shipment_id = ? AND tenant_id = ?',
+    [id, shipmentId, assertTenant(tenantId)]
+  );
+}
+
+async function updateDocumentExtraction(tenantId, id, { status, extracted, comparison, error }) {
+  assertTenant(tenantId);
+  await run(
+    'UPDATE documents SET extraction_status = ?, extracted_json = ?, comparison_json = ?, error = ? WHERE id = ? AND tenant_id = ?',
+    [status, extracted ? JSON.stringify(extracted) : null, comparison ? JSON.stringify(comparison) : null, error ? String(error).slice(0, 300) : null, id, tenantId]
+  );
+}
+
+async function deleteDocument(tenantId, shipmentId, id) {
+  assertTenant(tenantId);
+  const result = await run('DELETE FROM documents WHERE id = ? AND shipment_id = ? AND tenant_id = ?', [id, shipmentId, tenantId]);
+  return result.changes === 1;
 }
 
 module.exports = {
@@ -1244,6 +1612,30 @@ module.exports = {
   createTenantWithAdmin,
   setTenantGpsTokenHash,
   findTenantByGpsTokenHash,
+  setTenantInboxTokenHash,
+  findTenantByInboxTokenHash,
+  setTenantInboxAllowedSenders,
+  setTenantMessagingSettings,
+  createInboxItem,
+  getInboxItem,
+  listInboxItems,
+  countInboxItemsToday,
+  updateInboxItem,
+  createTask,
+  listTasks,
+  getTask,
+  resolveTask,
+  resolveTasksByKey,
+  resolveTasksForShipment,
+  countAgentTasksToday,
+  listStaleLoadsAllTenants,
+  countShipmentExceptions,
+  addDocument,
+  getDocument,
+  listDocuments,
+  getDocumentFile,
+  updateDocumentExtraction,
+  deleteDocument,
   findUserByEmail,
   findUserById,
   updateUser,

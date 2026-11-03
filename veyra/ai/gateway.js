@@ -67,10 +67,12 @@ async function callOnce(body, signal) {
  * @param {object} options
  * @param {string} options.agent        Agent name for the log (FLOW, RELAY, ...).
  * @param {string} options.system       Trusted instructions.
- * @param {string} options.user         Untrusted content (an email, a chat message).
+ * @param {string|object[]} options.user  Untrusted content: text (an email, a chat message) or a list of
+ *        content parts (text plus an image or PDF as a data: URL) for documents.
+ * @param {number} [options.timeoutMs]  Longer for documents than for short messages.
  * @param {(task: object) => Promise<void>} options.log  Writes the agent_tasks row.
  */
-async function completeJson({ agent, system, user, maxTokens = 700, log }) {
+async function completeJson({ agent, system, user, maxTokens = 700, timeoutMs = TIMEOUT_MS, log }) {
   if (!isEnabled()) throw httpError(503, 'AI is not configured. Add OPENROUTER_API_KEY to the server settings.');
   const body = {
     messages: [
@@ -87,7 +89,7 @@ async function completeJson({ agent, system, user, maxTokens = 700, log }) {
   let lastError;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const data = await callOnce(body, controller.signal);
       clearTimeout(timer);

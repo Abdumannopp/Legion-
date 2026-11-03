@@ -274,7 +274,7 @@ test('sending is refused without a phone, with a bad number, or when the provide
   const saved = process.env.MESSAGING_PROVIDER;
   delete process.env.MESSAGING_PROVIDER;
   try {
-    assert.deepEqual((await (await call(null, 'GET', '/api/config')).json()).messaging.channels, []);
+    assert.deepEqual((await (await call(admin, 'GET', '/api/messaging/status')).json()).channels, []);
     assert.equal((await call(admin, 'POST', `/api/shipments/${id}/messages`, { recipient: 'carrier', channel: 'sms', body: 'Hi' })).status, 503);
   } finally {
     process.env.MESSAGING_PROVIDER = saved;
@@ -356,6 +356,8 @@ test('the shipment list is paged and filtered on the server', async () => {
 });
 
 test('alerts count trucks without a recent location', async () => {
+  // A truck booked a minute ago is not overdue yet; make the booked loads old, except the GPS-tracked one.
+  await new Promise((resolve, reject) => db.run("UPDATE shipment_events SET created_at = datetime('now', '-2 days') WHERE to_status = 'Dispatched'", (e) => (e ? reject(e) : resolve())));
   const alerts = (await (await call(admin, 'GET', '/api/alerts')).json()).alerts;
   // Loads booked in this file without any location update are stale; the GPS one is not.
   assert.ok(alerts.staleTracking >= 3);

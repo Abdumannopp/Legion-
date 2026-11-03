@@ -1268,3 +1268,98 @@ td:first-child { color: #fff; font-weight: 500; }
 .gps-token small { color: var(--text-2); overflow-wrap: anywhere; }
 .gps-token code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: #fde68a; overflow-wrap: anywhere; }
 .gps-token .btn { justify-self: start; }
+
+/* ===== Inbox & tasks, documents, settings forms ===== */
+.task-list { display: grid; gap: 14px; }
+.task-heading { margin: 22px 0 6px; font-size: 14px; color: var(--text-2); font-weight: 600; }
+.task-card { padding: 16px 18px; display: grid; gap: 12px; }
+.task-card header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.task-card header strong { font-size: 15px; }
+.task-body { display: grid; gap: 8px; min-width: 0; }
+.task-body p { margin: 0; overflow-wrap: anywhere; }
+.task-body textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line-2);
+  background: #070e1d;
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+  outline: none;
+}
+.task-body textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(37, 99, 255, .25); }
+.task-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.task-send { display: inline-flex; gap: 8px; align-items: center; }
+.task-send select { height: 34px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--line-2); background: #070e1d; color: var(--text); }
+.task-facts { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
+.task-facts li { display: grid; gap: 2px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); min-width: 0; }
+.task-facts li span { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; }
+.task-facts li strong { font-weight: 500; overflow-wrap: anywhere; }
+.task-facts li.missing { border-color: rgba(251, 191, 36, .5); }
+.task-facts li.missing strong { color: var(--amber); }
+.task-question { color: #7dd3fc; font-size: 13px; }
+.task-reco { display: grid; gap: 2px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--surface); }
+.task-reco.best { border-color: rgba(20, 184, 166, .55); }
+.task-reco small { color: var(--muted); font-size: 12px; }
+.task-reco .scout-rate { color: #7dd3fc; }
+.kind-attention { border-color: rgba(248, 113, 113, .35); }
+
+.document-list { display: grid; gap: 10px; margin-bottom: 18px; }
+.document-card { display: grid; gap: 8px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); }
+.document-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+.document-head strong { display: block; overflow-wrap: anywhere; }
+.document-head small { color: var(--muted); font-size: 12px; }
+.document-buttons { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.document-card p { margin: 0; font-size: 13px; }
+.document-card tr.check-mismatch td:last-child { color: var(--red); }
+.document-card tr.check-ok td:last-child { color: #5eead4; }
+.document-card tr.check-unknown td:last-child { color: var(--muted); }
+.document-form input[type="file"] { height: auto; padding: 8px 12px; }
+
+.settings-form { display: grid; gap: 8px; margin-top: 12px; padding: 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); }
+.settings-form small { color: var(--muted); font-size: 12px; }
+.settings-form label { display: grid; gap: 6px; font-size: 13px; color: var(--text-2); font-weight: 500; }
+.settings-form input {
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line-2);
+  background: #070e1d;
+  color: var(--text);
+  outline: none;
+}
+.settings-form input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(37, 99, 255, .25); }
+.settings-form-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.settings-form-footer .shipment-form-message { margin: 0; }
+.gps-token code { display: block; }
+
+@media (max-width: 560px) {
+  .task-send { width: 100%; }
+}
+
+/* Documents: the form controls match the dark theme and the comparison table fits the dialog. */
+.tracking-form select, .document-form select {
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line-2);
+  background: #070e1d;
+  color: var(--text);
+  outline: none;
+}
+.document-form input[type="file"] { width: 100%; max-width: 100%; color: var(--text-2); }
+.document-form input[type="file"]::file-selector-button {
+  margin-right: 10px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line-2);
+  background: var(--surface-3);
+  color: var(--text);
+  cursor: pointer;
+}
+.document-card .table-scroll { overflow-x: visible; }
+.document-card table.data-table { width: 100%; table-layout: fixed; }
+.document-card .data-table th, .document-card .data-table td { white-space: normal; overflow-wrap: anywhere; font-size: 12.5px; padding: 8px 8px; vertical-align: top; }
+.document-card .data-table th:nth-child(1), .document-card .data-table td:nth-child(1) { width: 17%; }
+.document-card .data-table th:nth-child(4), .document-card .data-table td:nth-child(4) { width: 30%; }

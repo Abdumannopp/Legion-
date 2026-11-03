@@ -6,6 +6,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   bindShipmentActions();
   bindShipmentDetails();
   bindTeamManagement();
+  bindIntegrationForms();
   await loadConfig();
   await restoreSession();
   fetchDashboardData();
@@ -90,6 +91,18 @@ function formatDay(value) {
   return new Date(Date.UTC(+match[1], +match[2] - 1, +match[3])).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
 
+// Which channels (SMS / WhatsApp) this company can send with. Needs a signed-in user.
+async function loadMessagingStatus(signedIn) {
+  window.VeyraConfig.messaging = { ...(window.VeyraConfig.messaging || {}), channels: [] };
+  if (!signedIn) return;
+  try {
+    const response = await fetch('/api/messaging/status', { headers: getAuthHeaders() });
+    if (response.ok) window.VeyraConfig.messaging.channels = (await response.json()).channels || [];
+  } catch (_) {
+    // Sending simply stays off.
+  }
+}
+
 async function restoreSession() {
   // Older builds kept a token in localStorage; sessions now live in an HttpOnly cookie only.
   localStorage.removeItem('veyraToken');
@@ -99,6 +112,7 @@ async function restoreSession() {
     const response = await fetch('/api/me', { headers: getAuthHeaders() });
     if (!response.ok) {
       localStorage.removeItem('veyraUser');
+      await loadMessagingStatus(false);
       if (topButton) { topButton.textContent = 'Login'; topButton.disabled = false; }
       if (logoutButton) logoutButton.classList.add('hidden');
       document.getElementById('adminPanel')?.classList.add('hidden');
@@ -111,6 +125,7 @@ async function restoreSession() {
     const result = await response.json();
     const user = result.user;
     localStorage.setItem('veyraUser', JSON.stringify(user));
+    await loadMessagingStatus(true);
     applyUserChrome(user);
     if (!topButton || !user?.name) return user;
     topButton.textContent = `Hi, ${user.name.split(' ')[0]}`;
@@ -334,7 +349,8 @@ function bindShipmentActions() {
   const closeButton = document.getElementById('closeShipment');
   const message = document.getElementById('shipmentFormMessage');
 
-  const openModal = (prefill) => {
+  // options: { inboxId, missing: [field names to leave empty and flag], emailText }
+  const openModal = (prefill, options = {}) => {
     if (!modal || !form) return;
     if (!isSignedIn()) {
       notify('Sign in to create a shipment.', 'info');
@@ -348,11 +364,24 @@ function bindShipmentActions() {
     form.elements.pickup.value = today.toISOString().slice(0, 10);
     form.elements.delivery.value = delivery.toISOString().slice(0, 10);
     const values = prefill && typeof prefill === 'object' && !(prefill instanceof Event) ? prefill : {};
-    ['customer', 'reference', 'origin', 'destination', 'pickup', 'delivery', 'weight', 'equipment'].forEach((name) => {
+    const extra = options && typeof options === 'object' && !(options instanceof Event) ? options : {};
+    ['customer', 'customerPhone', 'reference', 'origin', 'destination', 'pickup', 'delivery', 'weight', 'equipment', 'customerRate'].forEach((name) => {
       if (values[name] !== undefined && values[name] !== null && form.elements[name]) form.elements[name].value = String(values[name]);
     });
     if (message) message.textContent = '';
     resetFlowIntake(form);
+    // An order that came by email: remember which one, so creating the load closes it.
+    window.VeyraPendingInbox = Number.isInteger(extra.inboxId) ? extra.inboxId : null;
+    (extra.missing || []).forEach((name) => {
+      const field = form.elements[name];
+      if (!field) return;
+      if (name === 'pickup' || name === 'delivery') field.value = '';
+      field.classList.add('needs-input');
+    });
+    if (extra.emailText) {
+      const text = document.getElementById('aiOrderText');
+      if (text) text.value = extra.emailText;
+    }
     modal.classList.remove('hidden');
     (window.VeyraConfig.ai?.enabled ? document.getElementById('aiOrderText') : form.elements.customer)?.focus();
   };
@@ -361,6 +390,7 @@ function bindShipmentActions() {
 
   const closeModal = () => {
     if (modal) modal.classList.add('hidden');
+    window.VeyraPendingInbox = null;
   };
 
   if (createShipmentBtn) createShipmentBtn.addEventListener('click', () => openModal(window.VeyraAssistant?.getDraft()));
@@ -376,10 +406,12 @@ function bindShipmentActions() {
     if (event.key === 'Escape') closeModal();
   });
 
+  form?.addEventListener('input', (event) => event.target.classList?.remove('needs-input'));
   if (form) form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const formData = new FormData(form);
     const payload = Object.fromEntries(formData.entries());
+    if (Number.isInteger(window.VeyraPendingInbox)) payload.inboxId = window.VeyraPendingInbox;
     const submitButton = form.querySelector('button[type="submit"]');
     if (submitButton) submitButton.disabled = true;
     if (message) message.textContent = 'Creating load...';
@@ -395,6 +427,7 @@ function bindShipmentActions() {
       if (!response.ok) throw new Error(result.message || 'Shipment creation failed');
 
       form.reset();
+      form.querySelectorAll('.needs-input').forEach((node) => node.classList.remove('needs-input'));
       closeModal();
       window.VeyraAssistant?.reset();
       const createdId = result.shipment?.id ? `SHP-${String(result.shipment.id).replace(/^SHP-/, '')}` : 'Shipment';
@@ -858,6 +891,8 @@ function integrationRow(name, on, detail, extra) {
   return row;
 }
 
+const messagingSourceText = { company: 'your own Twilio account', platform: 'the platform owner\'s Twilio account' };
+
 async function loadIntegrationsPanel() {
   const list = document.getElementById('integrationList');
   if (!list) return;
@@ -865,24 +900,141 @@ async function loadIntegrationsPanel() {
     const response = await fetch('/api/integrations/status', { headers: getAuthHeaders() });
     const status = await response.json();
     if (!response.ok) throw new Error(status.message || 'Unavailable');
-    let gpsButton = null;
-    if (hasPermission('settings:write')) {
-      gpsButton = createTextElement('button', 'btn btn-ghost small', status.gps.configured ? 'New GPS token' : 'Create GPS token');
-      gpsButton.type = 'button';
-      gpsButton.addEventListener('click', createGpsToken);
-    }
+    const admin = hasPermission('settings:write');
+    const button = (label, handler) => {
+      const node = createTextElement('button', 'btn btn-ghost small', label);
+      node.type = 'button';
+      node.addEventListener('click', handler);
+      return node;
+    };
+    const messagingChannels = status.messaging.channels;
     list.replaceChildren(
-      integrationRow('AI agents (FLOW)', status.ai.enabled,
-        status.ai.enabled ? `OpenRouter · model: ${status.ai.model || 'account default'}` : 'Add OPENROUTER_API_KEY to the server settings to read orders with AI.'),
+      integrationRow('AI agents (FLOW, VAULT)', status.ai.enabled,
+        status.ai.enabled
+          ? `OpenRouter · model: ${status.ai.model || 'account default'} · automatic AI work stops at ${status.nexus.aiDailyLimit} calls a day. Reading CMR files needs a model that can read images or PDFs.`
+          : 'Add OPENROUTER_API_KEY to the server settings to read orders and documents with AI.'),
+      integrationRow('NEXUS (orchestrator)', status.nexus.enabled,
+        status.nexus.enabled ? 'Prepares tasks from emails, bookings and quiet trucks. It never sends, books or changes anything on its own.' : 'Off (NEXUS_ENABLED=false).'),
       integrationRow('SCOUT carrier ranking', true, 'Built in, no key needed.'),
-      integrationRow('SMS / WhatsApp (RELAY)', status.messaging.channels.length > 0,
-        status.messaging.channels.length ? `Twilio · ${status.messaging.channels.join(' + ').toUpperCase()}` : 'Drafts work; to send automatically add Twilio settings.'),
+      integrationRow('SMS / WhatsApp (RELAY)', messagingChannels.length > 0,
+        messagingChannels.length
+          ? `${messagingChannels.join(' + ').toUpperCase()} through ${messagingSourceText[status.messaging.source] || 'Twilio'}${status.messaging.accountHint ? ` (${status.messaging.accountHint})` : ''}`
+          : 'Drafts work and can be copied. To send from VEYRA, connect your Twilio account.',
+        admin ? button(status.messaging.source === 'company' ? 'Change' : 'Connect Twilio', () => toggleMessagingForm(status.messaging)) : null),
+      integrationRow('Email inbox', status.inbox.configured,
+        status.inbox.configured ? `Orders emailed to your inbox address become tasks · ${status.inbox.allowedSenders.length ? `${status.inbox.allowedSenders.length} allowed sender(s)` : 'any sender allowed'}` : 'Create an address and point your email provider at it.',
+        admin ? button(status.inbox.configured ? 'New address' : 'Create address', createInboxAddress) : null),
       integrationRow('GPS tracking', status.gps.configured,
-        status.gps.configured ? `Connected · positions every ${status.gps.minIntervalMinutes} min are saved` : 'Create a token and give it to your GPS provider.', gpsButton)
+        status.gps.configured ? `Connected · positions every ${status.gps.minIntervalMinutes} min are saved` : 'Create a token and give it to your GPS provider.',
+        admin ? button(status.gps.configured ? 'New GPS token' : 'Create GPS token', createGpsToken) : null)
     );
+    const inboxForm = document.getElementById('inboxSettingsForm');
+    if (inboxForm) {
+      inboxForm.classList.toggle('hidden', !admin || !status.inbox.configured);
+      inboxForm.elements.allowedSenders.value = status.inbox.allowedSenders.join(', ');
+    }
+    const removeButton = document.getElementById('messagingRemove');
+    if (removeButton) removeButton.classList.toggle('hidden', status.messaging.source !== 'company');
   } catch (error) {
     list.replaceChildren(createTextElement('p', 'muted', `Integrations unavailable: ${error.message}`));
   }
+}
+
+function toggleMessagingForm(messagingStatus) {
+  const form = document.getElementById('messagingForm');
+  if (!form) return;
+  const open = form.classList.toggle('hidden') === false;
+  if (open) {
+    form.elements.smsFrom.value = messagingStatus.smsFrom || '';
+    form.elements.whatsappFrom.value = messagingStatus.whatsappFrom || '';
+    form.elements.accountSid.focus();
+  }
+}
+
+async function createInboxAddress() {
+  const result = document.getElementById('gpsTokenResult');
+  if (!window.confirm('Create a new inbox address? The previous address stops working.')) return;
+  try {
+    const response = await fetch('/api/settings/inbox/token', { method: 'POST', headers: getAuthHeaders() });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'Address could not be created');
+    const url = `${window.location.origin}${data.webhookPath}`;
+    const copyButton = createTextElement('button', 'btn btn-ghost small', 'Copy address');
+    copyButton.type = 'button';
+    copyButton.addEventListener('click', () => navigator.clipboard?.writeText(url).then(() => notify('Address copied.', 'ok')).catch(() => {}));
+    result.replaceChildren(
+      createTextElement('strong', '', 'Your inbox address. It is shown only once.'),
+      createTextElement('code', '', url),
+      createTextElement('small', '', 'Give it to an email service that can post incoming mail to a web address (a "webhook"): Postmark inbound stream, Mailgun routes ("forward to URL"), or Zapier / Make (trigger: new email, action: webhook POST). Then forward customers\' orders to that service\'s address, or ask customers to write to it.'),
+      createTextElement('small', '', 'Tip: set the allowed senders below so strangers cannot use your address.'),
+      copyButton
+    );
+    result.classList.remove('hidden');
+    loadIntegrationsPanel();
+  } catch (error) {
+    notify(error.message, 'error');
+  }
+}
+
+function bindIntegrationForms() {
+  const messagingForm = document.getElementById('messagingForm');
+  const messagingMessage = document.getElementById('messagingFormMessage');
+  messagingForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const submit = messagingForm.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    messagingMessage.textContent = 'Checking with Twilio…';
+    try {
+      const body = {
+        accountSid: messagingForm.elements.accountSid.value.trim(),
+        smsFrom: messagingForm.elements.smsFrom.value.trim(),
+        whatsappFrom: messagingForm.elements.whatsappFrom.value.trim()
+      };
+      if (messagingForm.elements.authToken.value) body.authToken = messagingForm.elements.authToken.value;
+      const response = await fetch('/api/settings/messaging', { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify(body) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Could not save');
+      messagingForm.reset();
+      messagingForm.classList.add('hidden');
+      messagingMessage.textContent = '';
+      notify('Twilio account connected. Messages now go through it.', 'ok');
+      await loadMessagingStatus(true);
+      loadIntegrationsPanel();
+    } catch (error) {
+      messagingMessage.textContent = error.message;
+    }
+    submit.disabled = false;
+  });
+  document.getElementById('messagingRemove')?.addEventListener('click', async () => {
+    if (!window.confirm('Remove your Twilio account from VEYRA? Sending will stop.')) return;
+    try {
+      const response = await fetch('/api/settings/messaging', { method: 'DELETE', headers: getAuthHeaders() });
+      if (!response.ok) throw new Error((await response.json()).message || 'Could not remove');
+      messagingForm.classList.add('hidden');
+      notify('Twilio account removed.', 'ok');
+      await loadMessagingStatus(true);
+      loadIntegrationsPanel();
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+  });
+
+  const inboxForm = document.getElementById('inboxSettingsForm');
+  const inboxMessage = document.getElementById('inboxSettingsMessage');
+  inboxForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const allowedSenders = inboxForm.elements.allowedSenders.value.split(',').map((entry) => entry.trim()).filter(Boolean);
+    inboxMessage.textContent = '';
+    try {
+      const response = await fetch('/api/settings/inbox', { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ allowedSenders }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Could not save');
+      notify(allowedSenders.length ? 'Allowed senders saved.' : 'Everyone who knows the address is accepted.', 'ok');
+      loadIntegrationsPanel();
+    } catch (error) {
+      inboxMessage.textContent = error.message;
+    }
+  });
 }
 
 async function createGpsToken() {
@@ -1179,6 +1331,162 @@ function updateDashboard(data) {
 
 let detailsShipmentId = null;
 
+/* ---------- VAULT: documents attached to a load ---------- */
+const DOC_TYPE_LABELS = { cmr: 'CMR', pod: 'Proof of delivery', other: 'Other' };
+let documentPollTimer = null;
+
+function formatSize(bytes) {
+  return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+async function loadDocuments(shipmentId) {
+  const list = document.getElementById('documentList');
+  const status = document.getElementById('documentsStatus');
+  const form = document.getElementById('documentForm');
+  if (!list) return;
+  clearTimeout(documentPollTimer);
+  form?.classList.toggle('hidden', !hasPermission('shipments:document'));
+  try {
+    const response = await fetch(`/api/shipments/${encodeURIComponent(shipmentId)}/documents`, { headers: getAuthHeaders() });
+    const result = response.ok ? await response.json() : { documents: [], readsDocuments: false };
+    if (detailsShipmentId !== shipmentId) return;
+    if (status) status.textContent = result.readsDocuments ? 'AI reads CMR and proof of delivery' : 'Reading is off · files are kept';
+    const canRead = result.readsDocuments && hasPermission('shipments:document');
+    const canDelete = hasPermission('shipments:status');
+    const cards = result.documents.map((doc) => documentCard(shipmentId, doc, canRead, canDelete));
+    if (!cards.length) cards.push(createTextElement('p', 'muted', 'No documents yet. Upload the CMR when the truck is loaded.'));
+    list.replaceChildren(...cards);
+    // The AI reads in the background; check again until it is done.
+    if (result.documents.some((doc) => doc.extractionStatus === 'pending')) {
+      documentPollTimer = setTimeout(() => loadDocuments(shipmentId), 3000);
+    }
+  } catch (_) {
+    list.replaceChildren(createTextElement('p', 'muted', 'Documents unavailable.'));
+  }
+}
+
+function documentCard(shipmentId, doc, canRead, canDelete) {
+  const card = createTextElement('div', 'document-card');
+  const head = createTextElement('div', 'document-head');
+  const title = document.createElement('div');
+  title.append(
+    createTextElement('strong', '', doc.filename),
+    createTextElement('small', '', `${DOC_TYPE_LABELS[doc.type] || doc.type} · ${formatSize(doc.size)} · ${formatTimestamp(doc.createdAt)}${doc.uploadedBy ? ` · ${doc.uploadedBy}` : ''}`)
+  );
+  const buttons = createTextElement('div', 'document-buttons');
+  const download = Object.assign(createTextElement('a', 'btn btn-ghost small', 'Download'), {
+    href: `/api/shipments/${encodeURIComponent(shipmentId)}/documents/${Number(doc.id)}/file`
+  });
+  buttons.append(download);
+  if (canRead && ['skipped', 'failed'].includes(doc.extractionStatus) && ['cmr', 'pod'].includes(doc.type)) {
+    const read = createTextElement('button', 'btn btn-ghost small', 'Read with AI');
+    read.type = 'button';
+    read.addEventListener('click', async () => {
+      read.disabled = true;
+      try {
+        const response = await fetch(`/api/shipments/${encodeURIComponent(shipmentId)}/documents/${Number(doc.id)}/extract`, { method: 'POST', headers: getAuthHeaders() });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message || 'Could not start reading');
+      } catch (error) {
+        notify(error.message, 'error');
+      }
+      loadDocuments(shipmentId);
+    });
+    buttons.append(read);
+  }
+  if (canDelete) {
+    const remove = createTextElement('button', 'btn btn-ghost small', 'Delete');
+    remove.type = 'button';
+    remove.addEventListener('click', async () => {
+      if (!window.confirm(`Delete ${doc.filename}?`)) return;
+      try {
+        const response = await fetch(`/api/shipments/${encodeURIComponent(shipmentId)}/documents/${Number(doc.id)}`, { method: 'DELETE', headers: getAuthHeaders() });
+        if (!response.ok) throw new Error((await response.json()).message || 'Could not delete');
+        window.VeyraViews?.refresh();
+      } catch (error) {
+        notify(error.message, 'error');
+      }
+      loadDocuments(shipmentId);
+    });
+    buttons.append(remove);
+  }
+  head.append(title, buttons);
+  card.append(head);
+
+  if (doc.extractionStatus === 'pending') {
+    card.append(createTextElement('p', 'muted', 'AI is reading this document…'));
+  } else if (doc.extractionStatus === 'done' && doc.comparison) {
+    const labels = { ok: 'matches', mismatch: 'differs', unknown: 'not clear' };
+    const rows = doc.comparison.checks.map((check) => {
+      const row = createTextElement('tr', `check-${check.status}`);
+      row.append(
+        createTextElement('td', '', check.label),
+        createTextElement('td', '', check.document ?? '—'),
+        createTextElement('td', '', check.load ?? '—'),
+        createTextElement('td', '', `${labels[check.status]}${check.hint && check.status === 'mismatch' ? ` · ${check.hint}` : ''}`)
+      );
+      return row;
+    });
+    const head = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    ['Field', 'Document says', 'Load says', ''].forEach((text) => headRow.append(createTextElement('th', '', text)));
+    head.append(headRow);
+    const body = document.createElement('tbody');
+    body.append(...rows);
+    const table = document.createElement('table');
+    table.className = 'data-table compact';
+    table.append(head, body);
+    const wrap = createTextElement('div', 'table-scroll');
+    wrap.append(table);
+    card.append(wrap);
+    const extracted = doc.extracted || {};
+    if (extracted.signedByConsignee !== null && extracted.signedByConsignee !== undefined) {
+      card.append(createTextElement('p', 'muted', extracted.signedByConsignee ? 'Receiver signature or stamp found.' : 'No receiver signature on the document.'));
+    }
+    if (extracted.notes) card.append(createTextElement('p', 'muted', `Remark on the document: ${extracted.notes}`));
+    card.append(createTextElement('p', doc.comparison.mismatches ? 'warn-line' : 'muted', doc.comparison.mismatches
+      ? `${doc.comparison.mismatches} difference${doc.comparison.mismatches === 1 ? '' : 's'}: check the paper against the load. Nothing was changed.`
+      : 'Everything that could be read matches the load.'));
+  } else if (doc.error) {
+    card.append(createTextElement('p', 'muted', doc.extractionStatus === 'failed' ? `Could not be read: ${doc.error} (a model that can read images or PDFs is needed).` : doc.error));
+  }
+  return card;
+}
+
+function bindDocumentForm() {
+  const form = document.getElementById('documentForm');
+  const message = document.getElementById('documentFormMessage');
+  if (!form) return;
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const file = form.elements.file.files[0];
+    if (!file || !detailsShipmentId) return;
+    const maxBytes = (window.VeyraConfig.documents?.maxMb || 8) * 1048576;
+    if (file.size > maxBytes) {
+      message.textContent = `The file is larger than ${window.VeyraConfig.documents?.maxMb || 8} MB.`;
+      return;
+    }
+    const submit = form.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    message.textContent = 'Uploading…';
+    try {
+      const response = await fetch(`/api/shipments/${encodeURIComponent(detailsShipmentId)}/documents?type=${encodeURIComponent(form.elements.type.value)}&filename=${encodeURIComponent(file.name)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': file.type },
+        body: file
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Upload failed');
+      form.reset();
+      message.textContent = result.duplicate ? 'That file is already attached.' : '';
+    } catch (error) {
+      message.textContent = error.message;
+    }
+    submit.disabled = false;
+    loadDocuments(detailsShipmentId);
+  });
+}
+
 /* ---------- RELAY: drafted messages to driver / carrier / customer ---------- */
 const MESSAGE_PURPOSES = {
   driver: [['location_request', 'Ask for location'], ['pickup_details', 'Pickup details']],
@@ -1299,17 +1607,23 @@ async function renderMessageList(shipmentId) {
 function bindShipmentDetails() {
   const modal = document.getElementById('shipmentDetailsModal');
   const closeButton = document.getElementById('closeShipmentDetails');
-  if (closeButton) closeButton.addEventListener('click', () => modal?.classList.add('hidden'));
+  const closeDetails = () => {
+    modal?.classList.add('hidden');
+    detailsShipmentId = null;
+    clearTimeout(documentPollTimer);
+  };
+  if (closeButton) closeButton.addEventListener('click', closeDetails);
   if (modal) {
     modal.addEventListener('click', (event) => {
-      if (event.target === modal) modal.classList.add('hidden');
+      if (event.target === modal) closeDetails();
     });
   }
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && modal) modal.classList.add('hidden');
+    if (event.key === 'Escape' && modal && !modal.classList.contains('hidden')) closeDetails();
   });
 
   bindMessageForm();
+  bindDocumentForm();
   const trackingForm = document.getElementById('trackingForm');
   const trackingMessage = document.getElementById('trackingFormMessage');
   trackingForm?.addEventListener('submit', async (event) => {
@@ -1452,6 +1766,7 @@ async function openShipmentDetails(shipmentId) {
       loadMessageDraft();
     }
     renderMessageList(shipment.id);
+    loadDocuments(shipment.id);
     modal.classList.remove('hidden');
   } catch (error) {
     notify(error.message, 'error');
