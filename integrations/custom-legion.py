@@ -413,6 +413,12 @@ def main(argv):
 
 SPOOL_DIR = os.environ.get("LEGION_SPOOL_DIR", "/var/ossec/tmp/legion-spool")
 SPOOL_MAX_FILES = int(os.environ.get("LEGION_SPOOL_MAX_FILES", "50000"))
+# An event Legion keeps answering "500 Internal Server Error" for while it accepts
+# others is the problem, not Legion being down: after this many such answers it is
+# set aside in dead/ (kept for review) so it cannot hold back everything behind it.
+POISON_AFTER = int(os.environ.get("LEGION_POISON_AFTER", "10"))
+# This many different events in a row answered 500 looks like an outage, not poison.
+OUTAGE_AFTER_CONSECUTIVE = 3
 DRAIN_BATCH = int(os.environ.get("LEGION_DRAIN_BATCH", "200"))
 STALE_CLAIM_SECONDS = 600
 
@@ -502,6 +508,37 @@ def _release_stale_claims(directory):
             pass
 
 
+def _failures_path(directory):
+    return os.path.join(directory, "failures.state")  # not .json: _spool_files() must never mistake it for an event
+
+
+def _load_failures(directory):
+    try:
+        with open(_failures_path(directory), "r") as handle:
+            data = json.load(handle)
+        return {k: int(v) for k, v in data.items() if isinstance(v, int)} if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_failures(directory, failures):
+    path = _failures_path(directory)
+    if not failures:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            json.dump(failures, handle)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def drain(hook_url, key_id, secret, limit, source_key_id=None):
     """Re-sends this credential's spooled events (or, with source_key_id, a
     rotated-away credential's -- an explicit operator action), oldest first,
@@ -518,6 +555,8 @@ def drain(hook_url, key_id, secret, limit, source_key_id=None):
                 os.rename(os.path.join(dead, name), os.path.join(directory, name))
     _release_stale_claims(directory)
     sent = 0
+    failures = _load_failures(directory)
+    consecutive_500 = 0
     for name in _spool_files(source)[: limit or None]:
         path = os.path.join(directory, name)
         claimed = f"{path}.claim-{os.getpid()}"
@@ -534,19 +573,39 @@ def drain(hook_url, key_id, secret, limit, source_key_id=None):
         if outcome == "ok":
             os.remove(claimed)
             sent += 1
+            consecutive_500 = 0
+            failures.pop(name, None)
             continue
+        if status == 500:
+            # Legion answered, so it is up: this event may be what it cannot handle.
+            failures[name] = failures.get(name, 0) + 1
+            consecutive_500 += 1
+            if failures[name] >= POISON_AFTER:
+                os.makedirs(os.path.join(directory, "dead"), mode=0o700, exist_ok=True)
+                os.rename(claimed, os.path.join(directory, "dead", name))
+                failures.pop(name, None)
+                log(f"ERROR a spooled event got HTTP 500 {POISON_AFTER} times while Legion accepted others; moved to dead/ for review")
+            else:
+                os.rename(claimed, path)
+            if consecutive_500 >= OUTAGE_AFTER_CONSECUTIVE:
+                _save_failures(directory, failures)
+                return "blocked"
+            continue  # try the next one: do not let one event hold back the rest
         if is_retryable(status) or status in (401, 403):
             # Still down -- or this credential is refused: keep it, stop here.
             os.rename(claimed, path)
+            _save_failures(directory, failures)
             if sent:
                 log(f"DRAIN re-sent {sent} spooled event(s) before Legion stopped accepting")
             return "blocked"
         os.makedirs(os.path.join(directory, "dead"), mode=0o700, exist_ok=True)
         os.rename(claimed, os.path.join(directory, "dead", name))
         log(f"ERROR a spooled event was refused (HTTP {status}); moved to dead/ for review")
+    left = _spool_files(source)
+    _save_failures(directory, {k: v for k, v in failures.items() if k in set(left)})
     if sent:
         log(f"DRAIN re-sent {sent} spooled event(s)")
-    return "clear" if not _spool_files(source) else "more"
+    return "clear" if not left else "more"
 
 
 def build_payload(alert):

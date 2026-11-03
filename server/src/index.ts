@@ -2153,7 +2153,15 @@ app.post(payments.PAYMENT_CHECK_PATH,
   try { body = JSON.parse(rawBody!.toString("utf8")); } catch { /* checked below */ }
   const parsed = payments.paymentCheckSchema.safeParse(body);
   if (!parsed.success) return res.status(400).json({ detail: "Invalid request" });
-  const result = await payments.checkPayment(authResult.tenantId, parsed.data);
+  let result;
+  try { result = await payments.checkPayment(authResult.tenantId, parsed.data); }
+  catch (err) {
+    if (err instanceof payments.PaymentRateLimited) {
+      res.setHeader("Retry-After", "60");
+      return res.status(429).json({ detail: "Too many attempts. Wait a minute and try again." });
+    }
+    throw err;
+  }
   res.setHeader("Cache-Control", "no-store");
   res.json({ id: result.check.id, decision: result.check.decision, reasons: result.reasons, verify: result.verify });
   });

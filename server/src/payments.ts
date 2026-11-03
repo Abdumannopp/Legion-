@@ -103,11 +103,27 @@ const COLUMNS = "id, created_at, beneficiary_hint, beneficiary_name, amount::tex
 
 const money = (amount: number, currency: string) => `${amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`;
 
+/** Per organisation, so a stolen sensor key used from many addresses cannot flood the table and the alert list. */
+export const CHECKS_PER_MINUTE = 120;
+export const ALERTS_PER_HOUR = 20;
+export class PaymentRateLimited extends Error {
+  constructor() { super("Too many payment checks"); this.name = "PaymentRateLimited"; }
+}
+
 export async function checkPayment(tenantId: string, input: PaymentCheckInput): Promise<{ check: PaymentCheck; reasons: { code: HoldReason; message: string }[]; verify: string | null }> {
   const hash = beneficiaryHash(tenantId, input.beneficiary.account);
   const currency = input.currency.toUpperCase();
   const amount = Math.round(input.amount * 100) / 100;
   const requester = input.requestedBy?.toLowerCase() ?? null;
+
+  const recent = await queryOne<{ minute: number; holds: number }>(
+    `SELECT count(*) FILTER (WHERE created_at > now() - interval '1 minute')::int AS minute,
+            count(*) FILTER (WHERE decision = 'hold' AND created_at > now() - interval '1 hour')::int AS holds
+       FROM payment_checks WHERE tenant_id = $1 AND created_at > now() - interval '1 hour'`,
+    [tenantId],
+  );
+  if ((recent?.minute ?? 0) >= CHECKS_PER_MINUTE) throw new PaymentRateLimited();
+  const quietAlerts = (recent?.holds ?? 0) >= ALERTS_PER_HOUR;
 
   const ben = await queryOne<{ verified_at: Date | null }>(
     `INSERT INTO payment_beneficiaries (tenant_id, beneficiary_hash) VALUES ($1, $2)
@@ -159,7 +175,7 @@ export async function checkPayment(tenantId: string, input: PaymentCheckInput): 
       amount, currency, input.requestedBy ? clip(input.requestedBy, 200) : null, input.reference ? clip(input.reference, 200) : null, decision, reasons],
   );
 
-  if (decision === "hold") {
+  if (decision === "hold" && !quietAlerts) {
     // One alert per payment per day, however often the payment software asks.
     const day = new Date().toISOString().slice(0, 10);
     const alertId = `PAY-${createHmac("sha256", config.webhookSecret || "legion-payments").update(`${tenantId}:${hash}:${amount}:${currency}:${day}`).digest("hex").slice(0, 16).toUpperCase()}`;

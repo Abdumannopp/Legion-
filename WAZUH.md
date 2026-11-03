@@ -304,3 +304,15 @@ ogohlantirish bo'lib qaytib kelmaydi — ikki tomonda ham tekshiriladi.
 - Yangi `legion-blocklist.log` fayli: Wazuh kech topgan faylni oxiridan o'qiydi.
   Yuqoridagi `touch` qadamini o'tkazib yuborsangiz, skript faylni o'zi yaratadi
   va 2 daqiqa kutadi — birinchi bloklash shuncha kechikadi.
+
+## Buzilgan hodisa navbatni to'xtatmaydi
+
+Sensor Legion javob bera olmaganda hodisalarni `spool/` papkasida saqlaydi va keyin qayta yuboradi.
+Agar bitta hodisaning o'zi serverda xatoga olib kelsa (HTTP 500), u butun navbatni to'sib qo'ymaydi:
+
+- sensor uni o'tkazib yuboradi va keyingilarni yuboradi;
+- bir hodisa `LEGION_POISON_AFTER` marta (standart 10) muvaffaqiyatsiz bo'lsa, `spool/dead/` papkasiga ko'chiriladi (o'chirilmaydi, qo'lda ko'rish mumkin);
+- ketma-ket 3 ta hodisa 500 bersa, bu server muammosi deb hisoblanadi va sensor to'xtab, keyinroq qayta urinadi;
+- ulanish, 401 va 403 xatolarida sensor darrov to'xtaydi (hodisalar saqlanib qoladi).
+
+Urinishlar soni `spool/failures.state` faylida turadi.

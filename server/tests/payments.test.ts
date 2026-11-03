@@ -12,7 +12,7 @@ import { closePool, migrate, query } from "../src/db/pool.js";
 import { truncateAll } from "../src/seed.js";
 import { config } from "../src/config.js";
 import * as store from "../src/store.js";
-import { accountHint, beneficiaryHash, HOLD_REASONS } from "../src/payments.js";
+import { accountHint, ALERTS_PER_HOUR, beneficiaryHash, CHECKS_PER_MINUTE, HOLD_REASONS } from "../src/payments.js";
 import { readFileSync } from "node:fs";
 import type { User } from "../src/types.js";
 import { issueCredential, sendSigned, type TestCredential } from "./helpers/webhook.js";
@@ -163,6 +163,33 @@ describe("controls", () => {
   it("answers in the person's language", async () => {
     const r = await request(app).post("/security/payments/PAY-0000000000000000/release").set("Authorization", bearer(adminA)).set("Accept-Language", "uz").expect(404);
     expect(r.body.detail).toBe("Bunday to'xtatilgan to'lov yo'q");
+  });
+});
+
+describe("one organisation cannot flood the payment check", () => {
+  it("over the per-minute cap the answer is 429 (fail closed), and other organisations are unaffected", async () => {
+    await query(
+      `INSERT INTO payment_checks (tenant_id, id, beneficiary_hash, beneficiary_hint, amount, currency, decision, reasons)
+       SELECT $1, 'PAY-' || lpad(g::text, 16, '0'), repeat('a', 64), '0000', 1, 'EUR', 'allow', '{}' FROM generate_series(1, $2) g`,
+      [tenantA, CHECKS_PER_MINUTE],
+    );
+    const r = await check(credA, pay());
+    expect(r.status).toBe(429);
+    expect(r.headers["retry-after"]).toBe("60");
+    expect((await check(credB, pay())).status).toBe(200);
+  });
+  it("past the hourly alert cap a payment is still held, but no new alert is raised", async () => {
+    await query(
+      `INSERT INTO payment_checks (tenant_id, id, beneficiary_hash, beneficiary_hint, amount, currency, decision, reasons, created_at)
+       SELECT $1, 'PAY-' || lpad(g::text, 16, '0'), repeat('a', 64), '0000', 1, 'EUR', 'hold', '{new_beneficiary}', now() - interval '10 minutes' FROM generate_series(1, $2) g`,
+      [tenantA, ALERTS_PER_HOUR],
+    );
+    const before = Number((await query("SELECT count(*) FROM alerts WHERE tenant_id = $1 AND source = 'legion-payments'", [tenantA])).rows[0].count);
+    const r = await check(credA, pay({ account: "GB82 WEST 1234 5698 7654 32" }));
+    expect(r.status).toBe(200);
+    expect(r.body.decision).toBe("hold");
+    const after = Number((await query("SELECT count(*) FROM alerts WHERE tenant_id = $1 AND source = 'legion-payments'", [tenantA])).rows[0].count);
+    expect(after).toBe(before);
   });
 });
 

@@ -312,6 +312,65 @@ class SpoolTests(unittest.TestCase):
         self.assertEqual(len(server.requests), 2)
         self.assertEqual(len(self.spooled()), 3)
 
+    def test_one_event_that_always_gets_500_does_not_hold_back_the_ones_behind_it(self):
+        down = self.down_url()
+        for i in range(4):
+            self.send(down, f"e-{i}")                       # e-0 is the oldest: it drains first
+        server = Server([500], default=202)                 # 500 for the oldest, then Legion accepts the rest
+        try:
+            self.assertEqual(self.mod.main(["custom-legion", "--drain", API_KEY, server.url]), 1)
+        finally:
+            server.close()
+        self.assertEqual(len(server.requests), 4)           # it went on to the other three
+        left = self.spooled()
+        self.assertEqual(len(left), 1)                      # only the oldest remains, still queued
+        with open(os.path.join(self.spool_dir, KEY_ID, left[0]), "rb") as f:
+            self.assertEqual(json.loads(f.read())["event"]["id"], "e-0")
+        # The count is kept beside the spool, and is never mistaken for an event.
+        self.assertTrue(os.path.exists(os.path.join(self.spool_dir, KEY_ID, "failures.state")))
+        self.assertEqual(self.dead(), [])
+
+    def test_after_ten_500s_while_others_are_accepted_it_is_set_aside_not_lost(self):
+        down = self.down_url()
+        self.send(down, "poison")
+        for run in range(10):
+            self.send(down, f"ok-{run}")
+            server = Server([500], default=202)
+            try:
+                self.mod.main(["custom-legion", "--drain", API_KEY, server.url])
+            finally:
+                server.close()
+        self.assertEqual(self.spooled(), [])                # nothing is waiting any more
+        self.assertEqual(len(self.dead()), 1)               # the poison one is kept for review
+        self.assertIn("moved to dead/ for review", open(self.log).read())
+        self.assertFalse(os.path.exists(os.path.join(self.spool_dir, KEY_ID, "failures.state")))
+        with open(os.path.join(self.spool_dir, KEY_ID, "dead", self.dead()[0]), "rb") as f:
+            self.assertEqual(json.loads(f.read())["event"]["id"], "poison")
+
+    def test_three_different_events_in_a_row_getting_500_looks_like_an_outage_and_stops(self):
+        down = self.down_url()
+        for i in range(6):
+            self.send(down, f"e-{i}")
+        server = Server([], default=500)
+        try:
+            self.assertEqual(self.mod.main(["custom-legion", "--drain", API_KEY, server.url]), 1)
+        finally:
+            server.close()
+        self.assertEqual(len(server.requests), 3)           # did not hammer the rest
+        self.assertEqual(len(self.spooled()), 6)            # and nothing was set aside
+
+    def test_503_is_still_an_outage_and_stops_at_once(self):
+        down = self.down_url()
+        for i in range(4):
+            self.send(down, f"e-{i}")
+        server = Server([], default=503)
+        try:
+            self.mod.main(["custom-legion", "--drain", API_KEY, server.url])
+        finally:
+            server.close()
+        self.assertEqual(len(server.requests), 1)
+        self.assertEqual(len(self.spooled()), 4)
+
     def test_a_refused_credential_keeps_the_event_and_an_operator_can_resend_it_after_rotation(self):
         server = Server([], default=401)
         try:
