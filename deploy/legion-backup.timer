@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly Legion backup
+
+[Timer]
+OnCalendar=*-*-* 02:40:00
+RandomizedDelaySec=10min
+# A server that was off at 02:40 takes the backup when it boots.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

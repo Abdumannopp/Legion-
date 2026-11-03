@@ -1,0 +1,23 @@
+# On the WAZUH MANAGER (not the Legion server): re-sends alerts that
+# custom-legion.py spooled while Legion was unreachable. Normally the next
+# alert drains the spool on its own; this timer covers quiet periods.
+#
+#   sudo cp deploy/wazuh-legion-drain.{service,timer} /etc/systemd/system/
+#   sudo install -m 600 -o root -g wazuh /dev/null /var/ossec/etc/legion-drain.env
+#   # put LEGION_API_KEY=whk_...:whs_...  and  LEGION_HOOK_URL=https://.../api/security-events/webhook in it
+#   sudo systemctl enable --now wazuh-legion-drain.timer
+
+[Unit]
+Description=Re-send spooled Wazuh alerts to Legion
+After=network-online.target wazuh-manager.service
+
+[Service]
+Type=oneshot
+User=wazuh
+Group=wazuh
+EnvironmentFile=/var/ossec/etc/legion-drain.env
+Environment=LEGION_SPOOL_DIR=/var/ossec/tmp/legion-spool
+ExecStart=/var/ossec/framework/python/bin/python3 /var/ossec/integrations/custom-legion.py --drain
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/ossec/tmp /var/ossec/logs

@@ -1,0 +1,9 @@
+[Unit]
+Description=Re-send spooled Wazuh alerts to Legion every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target

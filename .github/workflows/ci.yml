@@ -1,0 +1,324 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-scripts:
+    name: Deploy scripts and backup/restore checks
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: legion
+          POSTGRES_PASSWORD: legion-ops
+          POSTGRES_DB: legion_ops
+        ports: ["55434:5432"]
+        options: >-
+          --health-cmd "pg_isready -U legion" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://legion:legion-ops@localhost:55434/legion_ops
+    steps:
+      - uses: actions/checkout@v4
+      # Fails if anyone adds continue-on-error or unhooks the security gate.
+      - name: CI security gate is intact
+        run: node .github/scripts/check-ci-gate.mjs
+      - name: CI gate cannot be switched off quietly (self-test)
+        run: bash ops/tests/test-ci-gate.sh
+      - name: shellcheck
+        # -x follows `source ops/lib/common.sh`, so the shared library is checked too.
+        run: shellcheck -x ops/*.sh ops/tests/*.sh
+      # Backups are always encrypted with age, so the test needs it too.
+      - name: Tools for the backup test (PostgreSQL client, age)
+        run: |
+          if ! command -v pg_dump >/dev/null || ! command -v pg_restore >/dev/null || ! command -v psql >/dev/null || ! command -v age >/dev/null; then
+            sudo apt-get update && sudo apt-get install -y postgresql-client age
+          fi
+      - name: Backup, verify and restore against real Postgres
+        run: bash ops/tests/test-backup-restore.sh
+      - name: Wazuh integration script (retries, spool, drain)
+        run: python3 -m unittest integrations/test_custom_legion.py
+      - name: Cloudflare setup checker catches each misconfiguration
+        run: bash ops/tests/test-check-cloudflare.sh
+
+  # The Docker path a non-technical customer takes: install.sh generates the
+  # secrets, builds both images and starts the stack. Catches a broken
+  # Dockerfile, a missing build input, or an unsafe default before a customer does.
+  docker:
+    name: Docker stack builds, starts and answers (install.sh)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Legion the way DOCKER-WINDOWS.md describes
+        run: bash install.sh
+      - name: The API and the dashboard answer
+        run: |
+          curl -fsS http://localhost:8000/health
+          curl -fsS -o /dev/null http://localhost:3000/login
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --tail=200
+      - name: Stop and remove the stack
+        if: always()
+        run: docker compose down -v
+
+  dependencies:
+    name: Known vulnerabilities in the lockfile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Fails the build on high/critical advisories. The docs once claimed
+      # "0 vulnerabilities" while a critical Next.js RCE sat in the lockfile;
+      # a claim nobody re-checks goes stale silently. A real advisory with no
+      # fix that cannot affect us may be accepted in .github/audit-exceptions.json
+      # — with a reason and an expiry date, after which this fails again.
+      - name: The gate itself (self-test)
+        run: bash ops/tests/test-audit-gate.sh
+      - run: node .github/scripts/audit-gate.mjs
+
+  agent-identity:
+    name: Agent identity module
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/agent-identity
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: legion
+          POSTGRES_PASSWORD: legion-test
+          POSTGRES_DB: legion_test
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U legion" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://legion:legion-test@localhost:55432/legion_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/agent-identity/package-lock.json
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+
+  app:
+    name: Typecheck, tests and build
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: legion
+          POSTGRES_PASSWORD: legion-ci
+          POSTGRES_DB: legion_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U legion" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/legion_test
+    steps:
+      - uses: actions/checkout@v4
+      # The application sources were not part of the initial upload. Fail
+      # loudly rather than report a green build that tested nothing.
+      - name: Application sources present
+        run: |
+          for d in server frontend; do
+            [ -f "$d/package.json" ] || { echo "::error::$d/ is missing from the repository — nothing to test"; exit 1; }
+          done
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/agent-identity/package-lock.json
+      - run: npm ci
+      # The server links packages/agent-identity (AI agents, firewall, skills);
+      # it is built first so the server can typecheck, test and build against it.
+      - name: Build agent-identity
+        working-directory: packages/agent-identity
+        run: npm ci && npm run build
+      - run: npm run check
+      # The reliability suites inject real failures: they restart redis-server
+      # and use age-encrypted backups. Without these tools those scenarios used
+      # to skip silently; LEGION_REQUIRE_FAILURE_INJECTION turns a missing
+      # tool into a failure instead.
+      - name: Tools for the failure-injection tests
+        run: sudo apt-get update && sudo apt-get install -y redis-server age
+      - run: npm test
+        env:
+          LEGION_REQUIRE_FAILURE_INJECTION: "1"
+      - run: npm run build
+      # The built API, self-hosted, as its own hardened database role;
+      # Wazuh alerts delivered by the real integration script; an AI agent
+      # reading them and running skills. See ops/tests/e2e-wazuh.mjs.
+      # (Runs here, not in the agent-identity job: it needs the built server
+      # and this job's database.)
+      - name: End-to-end (provision-cli, API as app role, Wazuh integration, agents)
+        env:
+          E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+        run: node ops/tests/e2e-wazuh.mjs
+      # The main user journeys in a real browser against the built API and
+      # dashboard: sign up, workspace, connect Wazuh, first alert, incident,
+      # first agent, permission change, approve/block, billing, errors,
+      # another language. See ops/tests/e2e-journeys.mjs.
+      - name: Browser for the journey tests
+        run: npm i -g playwright@1.56.1 && playwright install --with-deps chromium
+      - name: User journeys (browser, end to end)
+        env:
+          E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+        run: node ops/tests/e2e-journeys.mjs
+      # Turnstile (CAPTCHA) on the sign-in forms: the dashboard built with a
+      # site key, the API with a secret key; Cloudflare itself is stood in for.
+      # See ops/tests/e2e-turnstile.mjs and DEPLOY-ONLINE.md §12.7.
+      - name: Turnstile on sign-in (browser, end to end)
+        env:
+          E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+        run: node ops/tests/e2e-turnstile.mjs
+      # Black-box attack on the built API in production mode: headers, CORS,
+      # CSRF, cookies, forged/replayed webhooks, IDOR between two real orgs,
+      # RBAC, MFA, sessions, WebSocket origin, rate limits, secret leakage.
+      # See ops/tests/production-probe.mjs.
+      - name: Production-mode security probe (black box)
+        env:
+          E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+        run: node ops/tests/production-probe.mjs
+      # Password hashing must not stall the instance, and the per-account
+      # sign-in limit must hold across instances under concurrency
+      # (PRODUCTION-VALIDATION-2026-10-01.md, RED-1). See ops/tests/auth-load-probe.mjs.
+      - name: Sign-in under load (event loop, limit across instances)
+        env:
+          E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+        run: node ops/tests/auth-load-probe.mjs
+      # Denial of service, measured: a distributed flood must not cost legitimate
+      # users their reads or sensor events, silent/slow connections are reaped,
+      # and the real nginx config (limits, real client address behind a CDN,
+      # forged CF-Connecting-IP ignored) behaves as documented.
+      # See ops/tests/ddos-resilience.mjs and DEPLOY-ONLINE.md §12.
+      - name: nginx for the edge tests
+        run: sudo apt-get install -y nginx
+      - name: Denial-of-service resilience (API under flood, real nginx in front)
+        env:
+          E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+          DOS_SCALE: "0.5"
+        run: node ops/tests/ddos-resilience.mjs
+
+  # ---------------------------------------------------------------------------
+  # Security gate. Separate from the normal test jobs above so its result is
+  # visible on its own. Fails when: a security regression test fails; the
+  # attack assessment has a NOT DEFENDED finding at Critical/High severity; a
+  # required scenario is missing; the run file is malformed or incomplete; or
+  # its provenance is missing, dirty, or from a different commit than this one.
+  security-assessment:
+    name: Security tests and attack assessment
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: legion
+          POSTGRES_PASSWORD: legion-sec
+          POSTGRES_DB: legion_sec
+        ports: ["55433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U legion" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://legion:legion-sec@localhost:55433/legion_sec
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            packages/agent-identity/package-lock.json
+      - name: Application sources present
+        run: |
+          for d in server packages/agent-identity; do
+            [ -f "$d/package.json" ] || { echo "::error::$d/ is missing — nothing to test"; exit 1; }
+          done
+      - name: Install (server)
+        run: npm ci
+      - name: Install and build (agent-identity)
+        working-directory: packages/agent-identity
+        run: npm ci && npm run build
+      # shell: bash runs with pipefail, so a failing test fails the step even through tee.
+      - name: Server security regression tests
+        shell: bash
+        run: npm run test:security -w server 2>&1 | tee security-server.log
+      - name: Agent security regression tests
+        working-directory: packages/agent-identity
+        shell: bash
+        run: npm run test:security 2>&1 | tee ../../security-agent.log
+      - name: Attack assessment
+        working-directory: packages/agent-identity
+        shell: bash
+        run: npm run assess 2>&1 | tee ../../security-assessment.log
+      - name: Validate assessment run (format, provenance, required scenarios, verdicts)
+        working-directory: packages/agent-identity
+        run: node assessment/provenance.mjs validate assessment/results/latest.jsonl --require-clean --expect-commit "$(git rev-parse HEAD)"
+      - name: Keep evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-assessment-${{ github.sha }}
+          path: |
+            packages/agent-identity/assessment/results/
+            security-*.log
+          if-no-files-found: warn
+          retention-days: 90
+
+  # The single check to mark "required" in branch protection. It runs even
+  # when a job it waits for failed, and then fails itself.
+  release-gate:
+    name: Release gate
+    runs-on: ubuntu-latest
+    needs: [deploy-scripts, dependencies, agent-identity, app, security-assessment]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every required job passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: node .github/scripts/release-gate.mjs
+
+  # Release artifact for version tags only, and only past the gate.
+  release:
+    name: Release package
+    runs-on: ubuntu-latest
+    needs: [release-gate]
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Source package of the tested commit
+        run: git archive --format=zip --prefix=legion/ -o "legion-${GITHUB_REF_NAME}.zip" HEAD
+      - uses: actions/download-artifact@v4
+        with:
+          name: security-assessment-${{ github.sha }}
+          path: security-evidence
+      - uses: actions/upload-artifact@v4
+        with:
+          name: legion-release-${{ github.ref_name }}
+          path: |
+            legion-${{ github.ref_name }}.zip
+            security-evidence/
+

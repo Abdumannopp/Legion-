@@ -1,0 +1,680 @@
+-- Legion schema.
+--
+-- Applied idempotently on boot (see migrate.ts). Every statement must be safe
+-- to re-run, because it executes on every start of every instance.
+
+CREATE TABLE IF NOT EXISTS tenants (
+  id                 uuid        PRIMARY KEY,
+  name               text        NOT NULL,
+  notification_email text,
+  trial_ends_at      timestamptz,
+  created_at         timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS users (
+  id             uuid        PRIMARY KEY,
+  email          text        NOT NULL,
+  password_hash  text        NOT NULL,
+  tenant_id      uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  role           text        NOT NULL CHECK (role IN ('admin', 'analyst', 'viewer')),
+  status         text        NOT NULL DEFAULT 'active'
+                             CHECK (status IN ('active', 'invited', 'disabled')),
+  token_version  integer     NOT NULL DEFAULT 0,
+  reset_token    text,
+  reset_expires  timestamptz,
+  invite_token   text,
+  invite_expires timestamptz,
+  invited_by     uuid,
+  created_at     timestamptz NOT NULL DEFAULT now()
+);
+
+-- MFA. Added after the initial release, so these are ALTERs rather than columns
+-- in the CREATE above — existing deployments must pick them up on boot.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_secret text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enabled boolean NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_enrolled_at timestamptz;
+
+-- Email verification (hosted sign-up). Added later: the DEFAULT on the ADD
+-- marks every account that already existed as verified (they were created
+-- by invitation or first-run setup, which prove the address another way);
+-- dropping it right after means new rows start unverified unless the code
+-- says otherwise. Both statements are no-ops on the next boot.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at timestamptz DEFAULT now();
+ALTER TABLE users ALTER COLUMN email_verified_at DROP DEFAULT;
+-- Only a SHA-256 of the emailed token is stored: a copy of the database is
+-- not a set of working verification links.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS verify_token_hash text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS verify_expires timestamptz;
+CREATE UNIQUE INDEX IF NOT EXISTS users_verify_token_hash_idx ON users (verify_token_hash) WHERE verify_token_hash IS NOT NULL;
+
+-- Recovery codes, one row per code, stored as bcrypt hashes. A used code is
+-- marked rather than deleted so the user can see how many remain and the audit
+-- trail records that one was spent.
+CREATE TABLE IF NOT EXISTS mfa_recovery_codes (
+  id         uuid        PRIMARY KEY,
+  user_id    uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  code_hash  text        NOT NULL,
+  used_at    timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS mfa_recovery_user_idx ON mfa_recovery_codes (user_id)
+  WHERE used_at IS NULL;
+
+-- Replay protection. TOTP codes stay valid for a whole step (plus the window
+-- either side), so a code observed in transit could otherwise be reused within
+-- that period. One row per accepted counter value makes reuse impossible.
+CREATE TABLE IF NOT EXISTS mfa_used_counters (
+  user_id    uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  counter    bigint      NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, counter)
+);
+
+-- Email is the login identifier, so uniqueness is global and case-insensitive.
+-- Enforcing it here rather than in application code is what makes concurrent
+-- registration safe: two simultaneous requests can no longer both pass a
+-- "does this email exist?" check and then both insert.
+CREATE UNIQUE INDEX IF NOT EXISTS users_email_key ON users (lower(email));
+CREATE INDEX IF NOT EXISTS users_tenant_idx ON users (tenant_id);
+-- (Reset and invitation tokens are stored as hashes; see "Authentication
+-- secrets at rest" at the end of this file.)
+
+/**
+ * Long-lived sessions.
+ *
+ * Access tokens are deliberately short (minutes) because they are stateless and
+ * cannot be revoked; the refresh token is the revocable half and lives here.
+ * Storing a hash, not the token, means a database leak does not hand over live
+ * sessions.
+ */
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+  id          uuid        PRIMARY KEY,
+  user_id     uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash  text        NOT NULL,
+  -- Every token descended from one login shares a family id. If a stolen token
+  -- is replayed after rotation, the whole family is revoked at once.
+  family_id   uuid        NOT NULL,
+  expires_at  timestamptz NOT NULL,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  -- Set when this token is exchanged. A second use of a rotated token is the
+  -- signal that someone else has a copy.
+  rotated_at  timestamptz,
+  revoked_at  timestamptz,
+  user_agent  text,
+  ip_address  text
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS refresh_tokens_hash_idx ON refresh_tokens (token_hash);
+CREATE INDEX IF NOT EXISTS refresh_tokens_user_idx ON refresh_tokens (user_id);
+CREATE INDEX IF NOT EXISTS refresh_tokens_family_idx ON refresh_tokens (family_id);
+
+CREATE TABLE IF NOT EXISTS alerts (
+  tenant_id       uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  id              text        NOT NULL,
+  title           text        NOT NULL,
+  severity        text        NOT NULL CHECK (severity IN ('critical', 'high', 'medium', 'low')),
+  agent           text        NOT NULL,
+  status          text        NOT NULL DEFAULT 'open'
+                              CHECK (status IN ('open', 'investigating', 'resolved')),
+  summary         text        NOT NULL,
+  confidence      real        NOT NULL DEFAULT 0,
+  ai_explanation  text,
+  explained_at    timestamptz,
+  source_ip       text,
+  target          text,
+  mitre_technique text,
+  source          text        NOT NULL DEFAULT 'manual',
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  -- Composite key, not a global one. An alert ID supplied by one tenant must
+  -- never collide with — or reveal the existence of — another tenant's alert.
+  PRIMARY KEY (tenant_id, id)
+);
+
+CREATE INDEX IF NOT EXISTS alerts_tenant_created_idx ON alerts (tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS alerts_tenant_status_idx ON alerts (tenant_id, status);
+CREATE INDEX IF NOT EXISTS alerts_tenant_severity_idx ON alerts (tenant_id, severity);
+-- Backs the trailing-window risk recalculation for a given asset.
+CREATE INDEX IF NOT EXISTS alerts_tenant_target_idx ON alerts (tenant_id, target, created_at DESC)
+  WHERE target IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS assets (
+  id          text        NOT NULL,
+  tenant_id   uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  name        text        NOT NULL,
+  os          text        NOT NULL DEFAULT 'unknown',
+  ip_address  text,
+  risk        text        NOT NULL DEFAULT 'low'
+                          CHECK (risk IN ('critical', 'high', 'medium', 'low')),
+  online      boolean     NOT NULL DEFAULT true,
+  last_seen   timestamptz NOT NULL DEFAULT now(),
+  -- Hostname is the natural key the sensors report, and it is what makes the
+  -- ingestion upsert possible without a read-then-write race.
+  PRIMARY KEY (tenant_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS assets_tenant_seen_idx ON assets (tenant_id, last_seen DESC);
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id            uuid        PRIMARY KEY,
+  tenant_id     uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  user_id       uuid,
+  user_email    text,
+  action        text        NOT NULL,
+  resource_type text,
+  resource_id   text,
+  detail        text,
+  ip_address    text,
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS audit_tenant_created_idx ON audit_log (tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS audit_tenant_action_idx ON audit_log (tenant_id, action);
+
+CREATE TABLE IF NOT EXISTS subscriptions (
+  tenant_id              uuid        PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+  status                 text        NOT NULL
+                                     CHECK (status IN ('trialing', 'active', 'past_due', 'paused', 'canceled')),
+  paddle_customer_id     text        NOT NULL DEFAULT '',
+  paddle_subscription_id text,
+  paddle_price_id        text,
+  current_period_end     timestamptz,
+  cancel_at_period_end   boolean     NOT NULL DEFAULT false,
+  last_event_at          timestamptz
+);
+
+-- One Paddle subscription maps to exactly one tenant.
+CREATE UNIQUE INDEX IF NOT EXISTS subscriptions_paddle_idx
+  ON subscriptions (paddle_subscription_id)
+  WHERE paddle_subscription_id IS NOT NULL;
+
+-- One-time token that authorises creating the FIRST administrator on a
+-- self-hosted install. At most one row. Only the SHA-256 is stored, so a copy
+-- of the database (or a backup) cannot be used to claim a fresh install.
+-- Printed to the server console at startup; deleted the moment it is used.
+CREATE TABLE IF NOT EXISTS setup_token (
+  id          smallint    PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  token_hash  text        NOT NULL,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- Transactional outbox for notifications that must not be lost.
+-- A row is written in the SAME transaction as the alert that needs it, so an
+-- alert can never be stored without its notification also being stored. A
+-- background worker delivers due rows, retrying with exponential backoff
+-- until max_attempts, then marks the row 'dead' so it stays visible.
+CREATE TABLE IF NOT EXISTS notification_outbox (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  kind            text        NOT NULL CHECK (kind IN ('alert_email')),
+  -- One notification per (tenant, kind, subject): enqueueing twice is a no-op.
+  dedupe_key      text        NOT NULL,
+  recipient       text        NOT NULL,
+  payload         jsonb       NOT NULL,
+  status          text        NOT NULL DEFAULT 'pending'
+                              CHECK (status IN ('pending', 'sending', 'sent', 'dead')),
+  attempts        integer     NOT NULL DEFAULT 0,
+  max_attempts    integer     NOT NULL,
+  next_attempt_at timestamptz NOT NULL DEFAULT now(),
+  -- While 'sending', the claim expires at this time; a crashed worker's row
+  -- becomes due again instead of being stuck forever.
+  locked_until    timestamptz,
+  last_error      text,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  sent_at         timestamptz
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS notification_outbox_dedupe
+  ON notification_outbox (tenant_id, kind, dedupe_key);
+CREATE INDEX IF NOT EXISTS notification_outbox_due
+  ON notification_outbox (next_attempt_at) WHERE status IN ('pending', 'sending');
+CREATE INDEX IF NOT EXISTS notification_outbox_tenant
+  ON notification_outbox (tenant_id, created_at DESC);
+
+-- Languages (en / ru / uz). notification_locale: the language of this
+-- organisation's alert emails, chosen in Settings. ai_explanation_locale: the
+-- language a stored AI explanation was written in, so a reader in another
+-- language gets a fresh one instead of a foreign-language answer.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS notification_locale text NOT NULL DEFAULT 'en';
+ALTER TABLE tenants DROP CONSTRAINT IF EXISTS tenants_notification_locale_check;
+ALTER TABLE tenants ADD CONSTRAINT tenants_notification_locale_check
+  CHECK (notification_locale IN ('en', 'ru', 'uz'));
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS ai_explanation_locale text;
+
+-- Durable realtime delivery. The dashboard's "new alert" frame used to be
+-- published fire-and-forget after the alert committed: a Redis outage, or a
+-- crash between commit and publish, meant other instances never pushed it.
+-- It is now an outbox job of its own kind, written in the alert's
+-- transaction and retried like an email. (The inline CHECK above is named
+-- notification_outbox_kind_check by Postgres; replacing it is idempotent.)
+ALTER TABLE notification_outbox DROP CONSTRAINT IF EXISTS notification_outbox_kind_check;
+ALTER TABLE notification_outbox ADD CONSTRAINT notification_outbox_kind_check
+  CHECK (kind IN ('alert_email', 'realtime_alert'));
+-- Queue health metrics: oldest undelivered job and the dead-letter count,
+-- without scanning delivered history.
+CREATE INDEX IF NOT EXISTS notification_outbox_undelivered_age
+  ON notification_outbox (created_at) WHERE status IN ('pending', 'sending');
+CREATE INDEX IF NOT EXISTS notification_outbox_dead
+  ON notification_outbox (tenant_id, created_at DESC) WHERE status = 'dead';
+
+-- Sensor webhook credentials (Wazuh and anything speaking the same shape).
+--
+-- One row per credential; a tenant may hold several at once, which is what
+-- makes rotation with an overlap possible. Nothing here is derived from a
+-- server-wide secret: the secret is 256 random bits generated per credential.
+--
+--   key_id      Public identifier sent with every request. It is how the
+--               server learns WHICH tenant a request claims to belong to —
+--               from the credential, never from a header the sender chooses.
+--               Not a secret; its only power is to select a row.
+--   secret_enc  The HMAC key, AES-256-GCM encrypted (webhook-auth.ts) under a
+--               key that lives in the server's environment, not in this
+--               database — a copy of the database or a backup does not hand
+--               over working credentials. The signature scheme needs the
+--               server to know the secret, so it cannot be a one-way hash.
+--   expires_at  Set when the credential is rotated: the old one keeps working
+--               until then, so the sender can be reconfigured without an outage.
+--   revoked_at  Immediate kill switch. Checked on every request, no caching.
+CREATE TABLE IF NOT EXISTS webhook_credentials (
+  key_id       text        PRIMARY KEY,
+  tenant_id    uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  secret_enc   text        NOT NULL,
+  label        text        NOT NULL DEFAULT '',
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  created_by   uuid,
+  expires_at   timestamptz,
+  revoked_at   timestamptz,
+  last_used_at timestamptz,
+  rotated_from text
+);
+CREATE INDEX IF NOT EXISTS webhook_credentials_tenant_idx
+  ON webhook_credentials (tenant_id, created_at DESC);
+
+-- Replay protection: every accepted request's nonce is recorded, per
+-- credential, until its timestamp can no longer pass the freshness check.
+-- The primary key makes "have I seen this?" and "remember it" one atomic
+-- statement, so two instances cannot both accept the same request.
+CREATE TABLE IF NOT EXISTS webhook_nonces (
+  key_id     text        NOT NULL REFERENCES webhook_credentials(key_id) ON DELETE CASCADE,
+  nonce      text        NOT NULL,
+  expires_at timestamptz NOT NULL,
+  PRIMARY KEY (key_id, nonce)
+);
+CREATE INDEX IF NOT EXISTS webhook_nonces_expiry_idx ON webhook_nonces (expires_at);
+
+-- Per-organisation AI control. ai_enabled NULL = "never chosen": the
+-- deployment default applies (config.aiTenantDefault). ai_data_mode 'strict'
+-- replaces IP addresses, e-mail addresses and hostnames with reversible
+-- placeholders before anything is sent to the provider.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS ai_enabled boolean;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS ai_data_mode text NOT NULL DEFAULT 'standard';
+ALTER TABLE tenants DROP CONSTRAINT IF EXISTS tenants_ai_data_mode_check;
+ALTER TABLE tenants ADD CONSTRAINT tenants_ai_data_mode_check CHECK (ai_data_mode IN ('standard', 'strict'));
+-- Provenance of a stored explanation: written by a model ('ai') or by
+-- Legion's deterministic fallback ('local'). NULL = from before this existed.
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS ai_explanation_source text;
+ALTER TABLE alerts DROP CONSTRAINT IF EXISTS alerts_ai_explanation_source_check;
+ALTER TABLE alerts ADD CONSTRAINT alerts_ai_explanation_source_check CHECK (ai_explanation_source IN ('ai', 'local'));
+
+-- Alert change cursor (realtime reliability).
+--
+-- PostgreSQL is the source of truth; WebSocket/Redis frames are only hints that
+-- something changed. A client that missed frames (Redis down, socket dropped,
+-- server restarted, tab in the background) recovers by asking Postgres for
+-- "everything after the last change I have", which needs a cursor that cannot
+-- skip rows.
+--
+--   seq          Per-tenant version of the row: bumped on EVERY insert and
+--                update (a status change or an explanation is a change too).
+--   created_seq  The seq the row was created with. A change with
+--                created_seq > a client's baseline is an alert that client has
+--                never seen; otherwise it is an update to one it has.
+--   tenants.alert_seq  The tenant's latest seq (the cursor).
+--
+-- Why a counter on the tenant row and not a sequence: a sequence hands out
+-- numbers in the order transactions START, but they become visible in the
+-- order they COMMIT. A client that had seen seq 101 would then never fetch 100
+-- if 100 committed second. Incrementing a counter on the tenant row takes that
+-- row's lock until commit, so numbers are handed out — and become visible — in
+-- the same order, with no gaps (a rolled-back insert rolls its number back).
+-- The cost is that one tenant's alert writes commit one at a time.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS alert_seq bigint NOT NULL DEFAULT 0;
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS seq bigint;
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS created_seq bigint;
+
+CREATE OR REPLACE FUNCTION alerts_assign_seq() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.seq IS NULL THEN
+      UPDATE tenants SET alert_seq = alert_seq + 1 WHERE id = NEW.tenant_id RETURNING alert_seq INTO NEW.seq;
+    END IF;
+    NEW.created_seq := COALESCE(NEW.created_seq, NEW.seq);
+  -- An UPDATE that sets seq itself (the one-time backfill below) is left alone.
+  ELSIF NEW.seq IS NOT DISTINCT FROM OLD.seq THEN
+    UPDATE tenants SET alert_seq = alert_seq + 1 WHERE id = NEW.tenant_id RETURNING alert_seq INTO NEW.seq;
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+CREATE OR REPLACE TRIGGER alerts_assign_seq_trg
+  BEFORE INSERT OR UPDATE ON alerts
+  FOR EACH ROW EXECUTE FUNCTION alerts_assign_seq();
+
+-- Existing rows (a database from before this existed): number them in creation
+-- order, after whatever the counter already holds. Runs only while some row has
+-- no seq, and the migration lock means one instance does it.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM alerts WHERE seq IS NULL) THEN
+    UPDATE alerts a SET seq = n.value, created_seq = n.value
+      FROM (
+        SELECT x.tenant_id, x.id, t.alert_seq + row_number() OVER (PARTITION BY x.tenant_id ORDER BY x.created_at, x.id) AS value
+          FROM alerts x JOIN tenants t ON t.id = x.tenant_id
+         WHERE x.seq IS NULL
+      ) n
+     WHERE a.tenant_id = n.tenant_id AND a.id = n.id;
+    UPDATE tenants t SET alert_seq = m.top
+      FROM (SELECT tenant_id, max(seq) AS top FROM alerts GROUP BY tenant_id) m
+     WHERE m.tenant_id = t.id AND m.top > t.alert_seq;
+  END IF;
+END
+$$;
+
+ALTER TABLE alerts ALTER COLUMN seq SET NOT NULL;
+ALTER TABLE alerts ALTER COLUMN created_seq SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS alerts_tenant_seq_idx ON alerts (tenant_id, seq);
+-- The dashboard's list order (newest first, arrival order among equals).
+CREATE INDEX IF NOT EXISTS alerts_tenant_created_seq_idx ON alerts (tenant_id, created_at DESC, seq DESC);
+
+-- Authentication secrets at rest.
+--
+-- Reset and invitation tokens were stored in plaintext, so a copy of the
+-- database (or a backup, or a read-only SQL injection) was a set of working
+-- account-takeover and account-claim links. They are now stored as SHA-256
+-- hashes — the tokens are 256 random bits, so a fast hash is enough — and
+-- looked up by hash. The same scheme verify_token_hash already used.
+--
+-- TOTP seeds cannot be hashed (the server recomputes codes from them), so they
+-- are encrypted with AES-256-GCM under LEGION_ENCRYPTION_KEYS
+-- (secret-box.ts). That needs the key, which SQL does not have: the conversion
+-- of existing plaintext seeds runs in the application at boot
+-- (secrets-migration.ts), and until then a plaintext seed keeps working.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_hash text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_token_hash text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_secret_enc text;
+
+-- Existing live links keep working: hashing the stored token gives exactly the
+-- hash of the token in the e-mail. Idempotent — after the first run there is
+-- nothing left to convert.
+UPDATE users SET reset_token_hash = encode(sha256(convert_to(reset_token, 'UTF8')), 'hex'), reset_token = NULL
+ WHERE reset_token IS NOT NULL;
+UPDATE users SET invite_token_hash = encode(sha256(convert_to(invite_token, 'UTF8')), 'hex'), invite_token = NULL
+ WHERE invite_token IS NOT NULL;
+
+-- The old plaintext columns stay (so an older instance still running during a
+-- rolling upgrade gets an error rather than a missing column), but nothing may
+-- ever be written to them again. An older instance's reset or invite therefore
+-- FAILS during the rollout instead of storing a plaintext token.
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_no_plaintext_tokens;
+ALTER TABLE users ADD CONSTRAINT users_no_plaintext_tokens CHECK (reset_token IS NULL AND invite_token IS NULL);
+
+DROP INDEX IF EXISTS users_invite_token_idx;
+DROP INDEX IF EXISTS users_reset_token_idx;
+CREATE UNIQUE INDEX IF NOT EXISTS users_reset_token_hash_idx ON users (reset_token_hash) WHERE reset_token_hash IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS users_invite_token_hash_idx ON users (invite_token_hash) WHERE invite_token_hash IS NOT NULL;
+
+-- Notification address confirmation. An administrator's NEW address waits in
+-- notification_email_pending until its owner confirms it by link; only then does
+-- it become notification_email, the address alert emails go to. Without this, any
+-- (hosted) tenant could make the platform send its alert text to any inbox.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS notification_email_pending text;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS notification_email_token_hash text;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS notification_email_token_expires timestamptz;
+CREATE UNIQUE INDEX IF NOT EXISTS tenants_notification_token_hash_idx ON tenants (notification_email_token_hash) WHERE notification_email_token_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS notification_outbox_tenant_kind_created_idx ON notification_outbox (tenant_id, kind, created_at);
+CREATE INDEX IF NOT EXISTS audit_log_tenant_action_created_idx ON audit_log (tenant_id, action, created_at);
+
+-- Devices a user has signed in from (security hardening, 2026-09). Additive.
+-- device_hash is SHA-256 of the user agent with version numbers removed, so a
+-- browser update is not a "new device"; last_network is the coarse /24 or /48.
+-- Used only to tell the owner about a sign-in from somewhere new.
+CREATE TABLE IF NOT EXISTS user_known_devices (
+  user_id      uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  device_hash  text        NOT NULL,
+  last_network text,
+  first_seen   timestamptz NOT NULL DEFAULT now(),
+  last_seen    timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, device_hash)
+);
+-- Failed sign-ins per account (new audit action auth.login_failed).
+CREATE INDEX IF NOT EXISTS audit_log_tenant_action_user_created_idx ON audit_log (tenant_id, action, user_id, created_at);
+-- Refresh sessions: absolute lifetime and the multi-tab reuse allowance.
+-- Nullable, no default: metadata-only ALTERs, no table rewrite. Existing rows
+-- (family_started_at NULL) use their own created_at as the start.
+ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS family_started_at timestamptz;
+ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS grace_used_at timestamptz;
+
+-- Reliability (2026-09): when the event happened at its source. created_at is
+-- when Legion stored it; the two differ when a sensor re-sends from its spool
+-- after an outage. Nullable, no default: a metadata-only ALTER.
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS occurred_at timestamptz;
+
+-- =============================================================================
+-- Global SaaS architecture (2026-09-30). All additive; see
+-- GLOBAL-SAAS-ARCHITECTURE.md for the model and the migration plan.
+-- =============================================================================
+
+-- Workspaces ------------------------------------------------------------------
+-- A workspace is a tenant (the table keeps its name: every tenant_id column in
+-- the schema already means "workspace"). A person can belong to several.
+--
+-- workspace_memberships is the source of truth for (workspace, role, status)
+-- on every request. users.tenant_id / role / status remain the person's HOME
+-- workspace — the one that created the account — and the trigger below keeps
+-- the home membership identical to them, so every existing code path that
+-- writes users keeps working unchanged.
+CREATE TABLE IF NOT EXISTS workspace_memberships (
+  tenant_id         uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  user_id           uuid        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role              text        NOT NULL CHECK (role IN ('admin', 'analyst', 'viewer')),
+  status            text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'invited', 'disabled')),
+  invited_by        uuid,
+  -- Invitations of people who already have an account (SHA-256 only, like every one-time token).
+  invite_token_hash text,
+  invite_expires    timestamptz,
+  created_at        timestamptz NOT NULL DEFAULT now(),
+  updated_at        timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS workspace_memberships_user_idx ON workspace_memberships (user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS workspace_memberships_invite_idx
+  ON workspace_memberships (invite_token_hash) WHERE invite_token_hash IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION legion_sync_home_membership() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO workspace_memberships (tenant_id, user_id, role, status, invited_by, created_at)
+  VALUES (NEW.tenant_id, NEW.id, NEW.role, NEW.status, NEW.invited_by, NEW.created_at)
+  ON CONFLICT (tenant_id, user_id) DO UPDATE
+    SET role = EXCLUDED.role, status = EXCLUDED.status, updated_at = now()
+    WHERE workspace_memberships.role IS DISTINCT FROM EXCLUDED.role
+       OR workspace_memberships.status IS DISTINCT FROM EXCLUDED.status;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS users_home_membership ON users;
+CREATE TRIGGER users_home_membership AFTER INSERT OR UPDATE OF tenant_id, role, status ON users
+  FOR EACH ROW EXECUTE FUNCTION legion_sync_home_membership();
+-- Backfill: every existing account's home membership (idempotent).
+INSERT INTO workspace_memberships (tenant_id, user_id, role, status, invited_by, created_at)
+  SELECT tenant_id, id, role, status, invited_by, created_at FROM users
+  ON CONFLICT (tenant_id, user_id) DO NOTHING;
+
+-- The workspace a sign-in lands in (NULL: the home workspace).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS default_workspace_id uuid;
+-- A session belongs to one workspace. NULL: issued before workspaces, i.e. home.
+ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS tenant_id uuid;
+
+-- Global readiness -----------------------------------------------------------
+-- region: where the workspace's data lives. NULL = created before regions,
+-- i.e. the region of the deployment that holds it (see config.region).
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS region text;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS timezone text NOT NULL DEFAULT 'UTC';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS locale text NOT NULL DEFAULT 'en';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS currency text NOT NULL DEFAULT 'USD' CHECK (currency ~ '^[A-Z]{3}$');
+-- 'locale': follow the reader's language (the behaviour before these settings existed).
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS date_format text NOT NULL DEFAULT 'locale';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS time_format text NOT NULL DEFAULT 'locale';
+ALTER TABLE tenants ALTER COLUMN date_format SET DEFAULT 'locale';
+ALTER TABLE tenants ALTER COLUMN time_format SET DEFAULT 'locale';
+-- Personal overrides (NULL: the workspace's setting).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS timezone text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS locale text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS date_format text;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS time_format text;
+
+-- Shared counters ------------------------------------------------------------
+-- Per-workspace metering that must hold across every instance (the AI quota;
+-- later: usage-based billing). One row per (workspace, meter, window).
+CREATE TABLE IF NOT EXISTS usage_counters (
+  tenant_id    uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  meter        text        NOT NULL,
+  window_start timestamptz NOT NULL,
+  count        integer     NOT NULL DEFAULT 0,
+  PRIMARY KEY (tenant_id, meter, window_start)
+);
+
+-- Integrations ---------------------------------------------------------------
+-- One row per configured connection of an integration adapter
+-- (src/integrations). Wazuh keeps its own credentials table
+-- (webhook_credentials); pull integrations (cloud security findings,
+-- Microsoft 365, GitHub…) are scheduled from here by any instance.
+CREATE TABLE IF NOT EXISTS integration_connections (
+  id              uuid        PRIMARY KEY,
+  tenant_id       uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  kind            text        NOT NULL CHECK (kind ~ '^[a-z][a-z0-9_]{1,40}$'),
+  name            text        NOT NULL CHECK (length(name) BETWEEN 1 AND 100),
+  status          text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'paused', 'error', 'disabled')),
+  -- Non-secret settings, validated by the adapter's schema.
+  config          jsonb       NOT NULL DEFAULT '{}',
+  -- Secrets sealed with the secret box (AES-256-GCM, keyring); never returned.
+  secrets_enc     text,
+  -- Where the next poll resumes (the adapter's own opaque cursor).
+  cursor          jsonb,
+  poll_seconds    integer     NOT NULL DEFAULT 300 CHECK (poll_seconds BETWEEN 60 AND 86400),
+  next_poll_at    timestamptz NOT NULL DEFAULT now(),
+  lease_until     timestamptz,
+  lease_owner     text,
+  failures        integer     NOT NULL DEFAULT 0,
+  last_success_at timestamptz,
+  last_error      text,
+  created_by      uuid,
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  updated_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS integration_connections_tenant_idx ON integration_connections (tenant_id, created_at);
+CREATE INDEX IF NOT EXISTS integration_connections_due_idx ON integration_connections (next_poll_at) WHERE status = 'active';
+
+-- Attack campaigns and automatic response (campaigns.ts, blocklist.ts) -------
+-- Automated and AI-driven attacks show themselves in their SHAPE more than in
+-- any single event: one address working through several techniques in minutes,
+-- sweeping many hosts, or many addresses converging on one host at once. A
+-- campaign is the correlation of those alerts; it gets its own alert, and can
+-- feed the blocklist the Wazuh manager enforces (active response).
+CREATE INDEX IF NOT EXISTS alerts_tenant_source_ip_idx ON alerts (tenant_id, source_ip, created_at DESC)
+  WHERE source_ip IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS attack_campaigns (
+  tenant_id    uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  id           text        NOT NULL,
+  rule         text        NOT NULL,
+  -- What the campaign is about: the attacking address, or the attacked host.
+  subject      text        NOT NULL CHECK (length(subject) BETWEEN 1 AND 255),
+  status       text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed')),
+  first_seen   timestamptz NOT NULL DEFAULT now(),
+  last_seen    timestamptz NOT NULL DEFAULT now(),
+  alert_count  integer     NOT NULL DEFAULT 0,
+  sources      text[]      NOT NULL DEFAULT '{}',
+  targets      text[]      NOT NULL DEFAULT '{}',
+  techniques   text[]      NOT NULL DEFAULT '{}',
+  -- The alert that announced it (source 'legion-correlation').
+  alert_id     text,
+  PRIMARY KEY (tenant_id, id)
+);
+-- At most one ACTIVE campaign per rule and subject: concurrent instances
+-- detecting the same thing converge on one row.
+-- The rules, widened as detection grows. NOT VALID: every existing row is
+-- already one of these, so no scan or long lock is needed on upgrade.
+ALTER TABLE attack_campaigns DROP CONSTRAINT IF EXISTS attack_campaigns_rule_check;
+ALTER TABLE attack_campaigns ADD CONSTRAINT attack_campaigns_rule_check CHECK (rule IN (
+  'rapid_chain', 'wide_sweep', 'swarm', 'velocity', 'ai_manipulation',
+  'ransomware', 'mailbox_takeover', 'phishing_execution', 'supply_chain', 'slow_intrusion',
+  'credential_attack', 'account_compromise')) NOT VALID;
+CREATE UNIQUE INDEX IF NOT EXISTS attack_campaigns_active_uniq
+  ON attack_campaigns (tenant_id, rule, subject) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS attack_campaigns_tenant_seen_idx ON attack_campaigns (tenant_id, last_seen DESC);
+
+-- Addresses the workspace's Wazuh manager should block (custom-legion.py
+-- --sync-blocklist turns each new entry into a Wazuh active response). An entry
+-- is active while revoked_at is null and expires_at is in the future.
+CREATE TABLE IF NOT EXISTS ip_blocks (
+  tenant_id    uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  id           uuid        NOT NULL,
+  ip           text        NOT NULL CHECK (length(ip) BETWEEN 2 AND 45),
+  reason       text        NOT NULL CHECK (length(reason) BETWEEN 1 AND 500),
+  campaign_id  text,
+  created_by   uuid,       -- null: Legion decided automatically
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  expires_at   timestamptz NOT NULL,
+  revoked_at   timestamptz,
+  revoked_by   uuid,
+  PRIMARY KEY (tenant_id, id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ip_blocks_active_uniq ON ip_blocks (tenant_id, ip) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS ip_blocks_tenant_created_idx ON ip_blocks (tenant_id, created_at DESC);
+
+-- Per-workspace automatic response. 'off' (default): campaigns are detected
+-- and reported, and an administrator blocks by hand. 'auto': a campaign from a
+-- public address blocks it for auto_block_minutes, within the safety limits.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS auto_block_mode text NOT NULL DEFAULT 'off';
+ALTER TABLE tenants DROP CONSTRAINT IF EXISTS tenants_auto_block_mode_check;
+ALTER TABLE tenants ADD CONSTRAINT tenants_auto_block_mode_check CHECK (auto_block_mode IN ('off', 'auto'));
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS auto_block_minutes integer NOT NULL DEFAULT 60;
+ALTER TABLE tenants DROP CONSTRAINT IF EXISTS tenants_auto_block_minutes_check;
+ALTER TABLE tenants ADD CONSTRAINT tenants_auto_block_minutes_check CHECK (auto_block_minutes BETWEEN 5 AND 10080);
+-- Never blocked automatically (comma-separated IPs/CIDRs): your own offices,
+-- partners, scanners you run on purpose.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS block_allowlist text NOT NULL DEFAULT '';
+
+-- Payment check (src/payments.ts): the customer's payment software asks Legion
+-- before paying. Account numbers are never stored, only a keyed hash (to
+-- recognise the account again) and the last four characters.
+CREATE TABLE IF NOT EXISTS payment_beneficiaries (
+  tenant_id        uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  beneficiary_hash text        NOT NULL CHECK (length(beneficiary_hash) = 64),
+  first_seen       timestamptz NOT NULL DEFAULT now(),
+  last_seen        timestamptz NOT NULL DEFAULT now(),
+  -- A person confirmed this account (by releasing a payment to it).
+  verified_at      timestamptz,
+  verified_by      uuid,
+  PRIMARY KEY (tenant_id, beneficiary_hash)
+);
+CREATE TABLE IF NOT EXISTS payment_checks (
+  tenant_id        uuid          NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  id               text          NOT NULL,
+  created_at       timestamptz   NOT NULL DEFAULT now(),
+  beneficiary_hash text          NOT NULL CHECK (length(beneficiary_hash) = 64),
+  beneficiary_hint text          NOT NULL CHECK (length(beneficiary_hint) <= 8),
+  beneficiary_name text          CHECK (length(beneficiary_name) <= 200),
+  amount           numeric(20,2) NOT NULL CHECK (amount >= 0),
+  currency         text          NOT NULL CHECK (currency ~ '^[A-Z0-9]{2,10}$'),
+  requested_by     text          CHECK (length(requested_by) <= 200),
+  reference        text          CHECK (length(reference) <= 200),
+  decision         text          NOT NULL CHECK (decision IN ('allow', 'hold')),
+  reasons          text[]        NOT NULL DEFAULT '{}',
+  resolution       text          CHECK (resolution IN ('released', 'rejected')),
+  resolved_at      timestamptz,
+  resolved_by      uuid,
+  PRIMARY KEY (tenant_id, id)
+);
+CREATE INDEX IF NOT EXISTS payment_checks_tenant_created_idx ON payment_checks (tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS payment_checks_lookup_idx ON payment_checks (tenant_id, beneficiary_hash, amount, currency) WHERE resolution IS NOT NULL;

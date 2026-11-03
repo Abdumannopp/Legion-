@@ -1,0 +1,23 @@
+<!--
+  Legion automatic response — Wazuh side.
+
+  Copy to the Wazuh manager:  /var/ossec/etc/rules/legion_rules.xml
+  (and add the ossec.conf blocks from integrations/wazuh/ossec-legion-response.xml).
+
+  custom-legion.py ‐‐sync-blocklist writes one JSON line per address Legion wants
+  blocked to /var/ossec/logs/legion-blocklist.log:
+    {"legion":{"action":"block","reason":"...","campaign":"CMP-..."},"srcip":"203.0.113.9"}
+  Wazuh's built-in JSON decoder reads it; this rule matches it, and the
+  <active-response> bound to rule 100950 runs firewall-drop for $(srcip).
+
+  The group "legion_response" tells custom-legion.py not to send these events
+  back to Legion as new alerts.
+-->
+<group name="legion,legion_response,">
+  <rule id="100950" level="10">
+    <decoded_as>json</decoded_as>
+    <field name="legion.action">^block$</field>
+    <description>Legion automatic response: block $(srcip) ($(legion.reason))</description>
+    <options>no_full_log</options>
+  </rule>
+</group>

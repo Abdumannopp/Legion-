@@ -1,0 +1,30 @@
+# Nightly encrypted database backup. Install (RECOVERY.md, step "Set up backups"):
+#
+#   sudo install -d -m 700 -o legion -g legion /var/backups/legion
+#   sudo install -d -m 755 -o legion -g legion /var/lib/legion-backup
+#   sudo install -m 600 -o legion -g legion deploy/backup.env.example /etc/legion/backup.env   # then edit
+#   sudo cp deploy/legion-backup.* deploy/legion-backup-check.* /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now legion-backup.timer legion-backup-check.timer
+[Unit]
+Description=Legion encrypted database backup
+After=postgresql.service network-online.target
+Wants=network-online.target
+# The script alerts on its own failures; this catches the ones it cannot (killed, out of disk).
+OnFailure=legion-backup-check.service
+
+[Service]
+Type=oneshot
+User=legion
+Group=legion
+WorkingDirectory=/opt/legion
+EnvironmentFile=/etc/legion/backup.env
+ExecStart=/opt/legion/ops/backup.sh
+TimeoutStartSec=2h
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/backups/legion /var/lib/legion-backup

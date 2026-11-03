@@ -1,0 +1,2 @@
+{"runId":"e5652040-8305-42c9-a786-c16b6292cb78","gitCommit":"351c591bb5ac6b0b0f591ca6517e5eb40923172b","gitDirty":false,"results":63,"DEFENDED":61,"PARTIAL":2,"NOT DEFENDED":0}
+assessment run: VALID

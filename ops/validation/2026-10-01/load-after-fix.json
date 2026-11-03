@@ -1,0 +1,352 @@
+{
+  "results": [
+    {
+      "section": "setup",
+      "name": "3 API instances up (shared Postgres + Redis)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "workspaces: 20 organisations sign up concurrently",
+      "name": "all 20 workspaces signed up, confirmed, keyed",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "workspaces: 20 organisations sign up concurrently",
+      "name": "every workspace has a live socket",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "burst 1: 3000 sensor events (10% re-sent) across 3 instances, concurrency 64",
+      "name": "burst 1 throughput",
+      "note": "350 requests/s (3300 in 9.4 s)"
+    },
+    {
+      "section": "burst 1: 3000 sensor events (10% re-sent) across 3 instances, concurrency 64",
+      "name": "webhook latency (ms)",
+      "note": {
+        "n": 3300,
+        "p50": 175,
+        "p95": 304,
+        "p99": 378,
+        "max": 918,
+        "codes": {
+          "202": 3300
+        }
+      }
+    },
+    {
+      "section": "burst 1: 3000 sensor events (10% re-sent) across 3 instances, concurrency 64",
+      "name": "no event lost to an error after the sensor's retries",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "burst 1: 3000 sensor events (10% re-sent) across 3 instances, concurrency 64",
+      "name": "no 5xx or connection error on the webhook during burst 1",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "burst 1: 3000 sensor events (10% re-sent) across 3 instances, concurrency 64",
+      "name": "exactly one alert per distinct event, per workspace (duplicates collapsed)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "burst 1: 3000 sensor events (10% re-sent) across 3 instances, concurrency 64",
+      "name": "outbox fully drained after burst 1",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "burst 1: 3000 sensor events (10% re-sent) across 3 instances, concurrency 64",
+      "name": "one email per high/critical alert (1500), none twice",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "burst 1: 3000 sensor events (10% re-sent) across 3 instances, concurrency 64",
+      "name": "every alert reached its own workspace's socket (across instances), and no other workspace's",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "burst 2: mail server failing + one instance SIGKILLed mid-burst",
+      "name": "burst 2: every event accepted despite the killed instance (sensor retries elsewhere)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "burst 2: mail server failing + one instance SIGKILLed mid-burst",
+      "name": "outbox while mail fails",
+      "note": {
+        "pending": 1623,
+        "retrying": 133,
+        "in_flight": 218,
+        "dead": 0,
+        "oldest_pending_age_seconds": 3,
+        "by_kind": {
+          "alert_email": {
+            "pending": 878,
+            "retrying": 133,
+            "in_flight": 122,
+            "dead": 0,
+            "oldest_pending_age_seconds": 3
+          },
+          "realtime_alert": {
+            "pending": 745,
+            "retrying": 0,
+            "in_flight": 96,
+            "dead": 0,
+            "oldest_pending_age_seconds": 3
+          }
+        },
+        "worker": {
+          "running": true,
+          "last_tick_seconds_ago": 1
+        }
+      }
+    },
+    {
+      "section": "burst 2: mail server failing + one instance SIGKILLed mid-burst",
+      "name": "backlog is visible in queue health while mail fails",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "burst 2: mail server failing + one instance SIGKILLed mid-burst",
+      "name": "killed instance restarted",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "burst 2: mail server failing + one instance SIGKILLed mid-burst",
+      "name": "drain time after mail recovers",
+      "note": "119.9 s (includes the 120 s lease on jobs the killed instance held)"
+    },
+    {
+      "section": "burst 2: mail server failing + one instance SIGKILLed mid-burst",
+      "name": "outbox drained after the mail server recovered (no dead letters)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "burst 2: mail server failing + one instance SIGKILLed mid-burst",
+      "name": "burst 2: exactly one alert per event",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "burst 2: mail server failing + one instance SIGKILLed mid-burst",
+      "name": "alert emails received",
+      "note": {
+        "total": 2500,
+        "duplicate_message_ids": 0,
+        "expected": 2500
+      }
+    },
+    {
+      "section": "burst 2: mail server failing + one instance SIGKILLed mid-burst",
+      "name": "every due email delivered after recovery",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "burst 2: mail server failing + one instance SIGKILLed mid-burst",
+      "name": "duplicate deliveries (SIGKILL mid-send) are at most the in-flight sends, and carry the same Message-ID",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "rate limits under concurrency, across instances",
+      "name": "account lockout across instances",
+      "note": {
+        "failures_accepted_before_429": 20,
+        "limit": 20
+      }
+    },
+    {
+      "section": "rate limits under concurrency, across instances",
+      "name": "failed sign-ins for one account are capped globally (Redis), not per instance",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "rate limits under concurrency, across instances",
+      "name": "read /alerts/stats latency (ms)",
+      "note": {
+        "n": 15527,
+        "p50": 8,
+        "p95": 51,
+        "p99": 285,
+        "max": 555,
+        "codes": {
+          "200": 15429,
+          "ERR:UND_ERR_SOCKET": 3,
+          "ERR:ECONNRESET": 2,
+          "ERR:ECONNREFUSED": 93
+        }
+      }
+    },
+    {
+      "section": "rate limits under concurrency, across instances",
+      "name": "read /alerts latency (ms)",
+      "note": {
+        "n": 15528,
+        "p50": 9,
+        "p95": 56,
+        "p99": 281,
+        "max": 510,
+        "codes": {
+          "200": 15429,
+          "ERR:UND_ERR_SOCKET": 3,
+          "ERR:ECONNRESET": 1,
+          "ERR:ECONNREFUSED": 95
+        }
+      }
+    },
+    {
+      "section": "rate limits under concurrency, across instances",
+      "name": "read /overview latency (ms)",
+      "note": {
+        "n": 15526,
+        "p50": 10,
+        "p95": 58,
+        "p99": 293,
+        "max": 560,
+        "codes": {
+          "200": 15428,
+          "ERR:ECONNRESET": 2,
+          "ERR:UND_ERR_SOCKET": 1,
+          "ERR:ECONNREFUSED": 95
+        }
+      }
+    },
+    {
+      "section": "rate limits under concurrency, across instances",
+      "name": "dashboard read non-200s",
+      "note": "read /alerts/stats:ERR:UND_ERR_SOCKET=3 read /alerts/stats:ERR:ECONNRESET=2 read /alerts/stats:ERR:ECONNREFUSED=93 read /alerts:ERR:UND_ERR_SOCKET=3 read /alerts:ERR:ECONNRESET=1 read /alerts:ERR:ECONNREFUSED=95 read /overview:ERR:ECONNRESET=2 read /overview:ERR:UND_ERR_SOCKET=1 read /overview:ERR:ECONNREFUSED=95"
+    },
+    {
+      "section": "rate limits under concurrency, across instances",
+      "name": "dashboard reads: no 5xx under load",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "rate limits under concurrency, across instances",
+      "name": "dashboard reads p95 < 1000 ms during the burst",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "rate limits under concurrency, across instances",
+      "name": "webhook p95 < 1000 ms during burst 1",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "rate limits under concurrency, across instances",
+      "name": "peak Postgres connections",
+      "note": "31 (pool max 10 × 3 instances + background)"
+    },
+    {
+      "section": "rate limits under concurrency, across instances",
+      "name": "Postgres connections stay within the pools' bound",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "section": "rate limits under concurrency, across instances",
+      "name": "read errors only from session expiry / rate limit",
+      "note": true
+    }
+  ],
+  "latency": {
+    "signup": {
+      "n": 20,
+      "p50": 907,
+      "p95": 1247,
+      "p99": 1247,
+      "max": 1247,
+      "codes": {
+        "201": 20
+      }
+    },
+    "login": {
+      "n": 20,
+      "p50": 720,
+      "p95": 1211,
+      "p99": 1211,
+      "max": 1211,
+      "codes": {
+        "200": 20
+      }
+    },
+    "read /alerts/stats": {
+      "n": 15527,
+      "p50": 8,
+      "p95": 51,
+      "p99": 285,
+      "max": 555,
+      "codes": {
+        "200": 15429,
+        "ERR:UND_ERR_SOCKET": 3,
+        "ERR:ECONNRESET": 2,
+        "ERR:ECONNREFUSED": 93
+      }
+    },
+    "read /alerts": {
+      "n": 15528,
+      "p50": 9,
+      "p95": 56,
+      "p99": 281,
+      "max": 510,
+      "codes": {
+        "200": 15429,
+        "ERR:UND_ERR_SOCKET": 3,
+        "ERR:ECONNRESET": 1,
+        "ERR:ECONNREFUSED": 95
+      }
+    },
+    "read /overview": {
+      "n": 15526,
+      "p50": 10,
+      "p95": 58,
+      "p99": 293,
+      "max": 560,
+      "codes": {
+        "200": 15428,
+        "ERR:ECONNRESET": 2,
+        "ERR:UND_ERR_SOCKET": 1,
+        "ERR:ECONNREFUSED": 95
+      }
+    },
+    "webhook": {
+      "n": 3300,
+      "p50": 175,
+      "p95": 304,
+      "p99": 378,
+      "max": 918,
+      "codes": {
+        "202": 3300
+      }
+    },
+    "webhook (burst 2)": {
+      "n": 1182,
+      "p50": 139,
+      "p95": 253,
+      "p99": 290,
+      "max": 328,
+      "codes": {
+        "202": 1000,
+        "ERR:UND_ERR_SOCKET": 15,
+        "ERR:ECONNRESET": 5,
+        "ERR:ECONNREFUSED": 162
+      }
+    }
+  }
+}

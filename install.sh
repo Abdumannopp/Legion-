@@ -48,6 +48,9 @@ existing() {
 JWT_SECRET="$(existing JWT_SECRET)"
 POSTGRES_PASSWORD="$(existing POSTGRES_PASSWORD)"
 WEBHOOK_SECRET="$(existing SECURITY_EVENT_WEBHOOK_SECRET)"
+# "<id>:<64 hex>". Encrypts TOTP seeds and webhook secrets at rest. Losing it
+# makes them unreadable, so it is generated once and never regenerated.
+ENCRYPTION_KEYS="$(existing LEGION_ENCRYPTION_KEYS)"
 
 NEW_INSTALL=false
 if [[ -z "$JWT_SECRET" ]]; then
@@ -58,6 +61,15 @@ if [[ -z "$JWT_SECRET" ]]; then
   say "Generated new secrets"
 else
   ok "Existing secrets in $ENV_FILE kept"
+fi
+
+if [[ -z "$ENCRYPTION_KEYS" ]]; then
+  ENCRYPTION_KEYS="k1:$(random_hex 32)"
+  if [[ "$NEW_INSTALL" != true ]]; then
+    # Installations made before this key existed: add it, keep everything else.
+    printf 'LEGION_ENCRYPTION_KEYS=%s\n' "$ENCRYPTION_KEYS" >> "$ENV_FILE"
+    ok "Added LEGION_ENCRYPTION_KEYS to $ENV_FILE"
+  fi
 fi
 
 # --- Configuration -----------------------------------------------------------
@@ -118,6 +130,7 @@ DEPLOYMENT_MODE=self-hosted
 JWT_SECRET=$JWT_SECRET
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 SECURITY_EVENT_WEBHOOK_SECRET=$WEBHOOK_SECRET
+LEGION_ENCRYPTION_KEYS=$ENCRYPTION_KEYS
 EOF
   chmod 600 "$ENV_FILE"
   ok "Wrote $ENV_FILE (permissions 600)"

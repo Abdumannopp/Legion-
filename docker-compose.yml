@@ -1,15 +1,16 @@
-# Legion — self-hosted deployment.
+# Legion — self-hosted deployment with Docker.
 #
-# Do not run `docker compose up` directly the first time; run ./install.sh,
-# which generates the secrets this file expects. Values with no default here
-# are deliberate: Legion must never start with a guessable secret.
+# Start it with ./install.sh (Linux/macOS) or .\start-docker.ps1 (Windows).
+# Those generate the secrets this file expects and then run docker compose.
+# Values with no default here are deliberate: Legion must never start with a
+# guessable secret.
 
 services:
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-legion}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./install.sh to generate secrets}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./install.sh (or start-docker.ps1) to generate secrets}
       POSTGRES_DB: ${POSTGRES_DB:-legion}
     volumes:
       - legion-pgdata:/var/lib/postgresql/data
@@ -38,13 +39,21 @@ services:
     restart: unless-stopped
 
   backend:
-    build: ./server
+    build:
+      context: .
+      dockerfile: server/Dockerfile
     environment:
       DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-self-hosted}
       DATABASE_URL: postgresql://${POSTGRES_USER:-legion}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-legion}
       REDIS_URL: redis://redis:6379
+      # Reachable from the host through the published port below. Inside the
+      # container 127.0.0.1 would be unreachable from outside.
+      LEGION_BIND_ADDRESS: 0.0.0.0
+      PORT: "8000"
+      # Encrypts TOTP seeds and webhook secrets at rest. install.sh generates it.
+      LEGION_ENCRYPTION_KEYS: ${LEGION_ENCRYPTION_KEYS:?run ./install.sh (or start-docker.ps1) to generate secrets}
       # No default. config.ts refuses to start on the shipped placeholder.
-      JWT_SECRET: ${JWT_SECRET:?run ./install.sh to generate secrets}
+      JWT_SECRET: ${JWT_SECRET:?run ./install.sh (or start-docker.ps1) to generate secrets}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       SECURITY_EVENT_WEBHOOK_SECRET: ${SECURITY_EVENT_WEBHOOK_SECRET:-}
@@ -57,7 +66,7 @@ services:
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      SMTP_FROM: ${SMTP_FROM:-Legion <no-reply@legion.local>}
+      SMTP_FROM: ${SMTP_FROM:-Legion <no-reply@example.com>}
       ALERT_EMAIL_MIN_SEVERITY: ${ALERT_EMAIL_MIN_SEVERITY:-high}
       # A self-hosted install is single-tenant in practice; no demo workspace.
       SEED_DEMO_DATA: "false"
@@ -78,16 +87,24 @@ services:
 
   frontend:
     build:
-      context: ./frontend
+      context: .
+      dockerfile: frontend/Dockerfile
       args:
         # Baked in at build time — NEXT_PUBLIC_* values run in the browser, so
         # changing this needs a rebuild (./install.sh does that for you).
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8000}
         # Your organisation's name and contact address, shown on the privacy
-        # and terms pages. Same build-time rule applies: change them in .env
-        # and re-run ./install.sh so the pages are rebuilt.
+        # and terms pages.
         NEXT_PUBLIC_OPERATOR_NAME: ${NEXT_PUBLIC_OPERATOR_NAME:-}
         NEXT_PUBLIC_SUPPORT_EMAIL: ${NEXT_PUBLIC_SUPPORT_EMAIL:-}
+        NEXT_PUBLIC_DATA_LOCATION: ${NEXT_PUBLIC_DATA_LOCATION:-}
+        NEXT_PUBLIC_PRICE_LABEL: ${NEXT_PUBLIC_PRICE_LABEL:-}
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}
+    environment:
+      # Read at run time too: the content-security policy is built per request.
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8000}
     depends_on:
       backend:
         condition: service_started

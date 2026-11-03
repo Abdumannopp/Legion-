@@ -1,0 +1,22 @@
+commit 351c591bb5ac6b0b0f591ca6517e5eb40923172b dirty=1
+build-agents rc=0 secs=5
+server-check rc=0 secs=6
+server-build rc=0 secs=6
+server-tests rc=0 secs=375
+server-security rc=0 secs=89
+pkg-check rc=0 secs=6
+pkg-tests rc=0 secs=147
+pkg-security rc=0 secs=74
+pkg-assess rc=0 secs=32
+pkg-provenance rc=0 secs=0
+fe-lint rc=0 secs=5
+fe-tests rc=0 secs=2
+fe-build rc=0 secs=27
+e2e-wazuh rc=0 secs=10
+e2e-journeys rc=0 secs=21
+ci-gate rc=0 secs=0
+py-integration rc=0 secs=16
+backup-restore rc=0 secs=2
+audit-root rc=1 secs=1
+audit-pkg rc=0 secs=0
+DONE

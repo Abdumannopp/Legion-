@@ -1,0 +1,17 @@
+
+▶ event loop under concurrent sign-in attempts (one instance)
+  INFO /health latency idle (ms): {"p50":3,"max":8}
+  INFO /health latency during 30 concurrent failed sign-ins (ms): {"p50":6,"max":15}
+  INFO sign-in attempts processed: 593
+  PASS an unrelated request is not stalled by concurrent sign-ins (p50 < 250 ms)
+
+▶ per-account failed sign-in limit across 3 instances (Redis)
+  INFO failed attempts accepted at concurrency 1: 20
+  PASS limit of 20 holds at concurrency 1
+  INFO failed attempts accepted at concurrency 12: 20
+  PASS limit of 20 holds at concurrency 12
+  INFO failed attempts accepted at concurrency 30: 20
+  PASS limit of 20 holds at concurrency 30
+  INFO 'Redis unavailable, counting locally' per instance (Redis was healthy throughout): [0,0,0]
+
+auth under load: 4 passed, 0 failed

@@ -1,0 +1,643 @@
+[
+  {
+    "section": "boot",
+    "name": "the built API boots in production mode with a safe configuration",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "boot",
+    "name": "…and refuses to boot with an unsafe one (COOKIE_SECURE=false)",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "boot",
+    "name": "demo data is never seeded in production, even when asked",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "security headers, CORS, health disclosure",
+    "name": "public /health says only up/down",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "security headers, CORS, health disclosure",
+    "name": "no X-Powered-By",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "security headers, CORS, health disclosure",
+    "name": "X-Content-Type-Options: nosniff",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "security headers, CORS, health disclosure",
+    "name": "framing refused (X-Frame-Options DENY or frame-ancestors 'none')",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "security headers, CORS, health disclosure",
+    "name": "API responses carry a restrictive CSP",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "security headers, CORS, health disclosure",
+    "name": "Referrer-Policy set",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "security headers, CORS, health disclosure",
+    "name": "HSTS sent (FRONTEND_URL is https)",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "security headers, CORS, health disclosure",
+    "name": "platform queue metrics need the metrics token",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "security headers, CORS, health disclosure",
+    "name": "…and work with it",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "security headers, CORS, health disclosure",
+    "name": "CORS: a foreign origin gets no Access-Control-Allow-Origin",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "security headers, CORS, health disclosure",
+    "name": "CORS: the dashboard origin is allowed exactly, with credentials, never *",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "security headers, CORS, health disclosure",
+    "name": "CSRF: a cross-site state-changing request is refused",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "security headers, CORS, health disclosure",
+    "name": "dashboard: CSP with a fresh nonce per response",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "security headers, CORS, health disclosure",
+    "name": "dashboard: scripts need the nonce ('unsafe-inline' only as a CSP2 fallback), never 'unsafe-eval'",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "security headers, CORS, health disclosure",
+    "name": "dashboard: object-src 'none', base-uri and frame-ancestors restricted",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "security headers, CORS, health disclosure",
+    "name": "dashboard: X-Frame-Options DENY, nosniff, no X-Powered-By",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "security headers, CORS, health disclosure",
+    "name": "dashboard CSP",
+    "note": "default-src 'self'; script-src 'self' 'nonce-TKXhjH9EeYIHlREMufGVkA==' 'strict-dynamic' https://cdn.paddle.com https://*.paddle.com; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.paddle.com; font-src 'self' data:; connect-src 'self' http://localhost:8000 ws://localhost:8000 https://cdn.paddle.com https://*.paddle.com; frame-src https://cdn.paddle.com https://*.paddle.com; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
+  },
+  {
+    "section": "security headers, CORS, health disclosure",
+    "name": "malformed JSON → 400 without a stack trace",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sign-up, email confirmation (real SMTP), authentication",
+    "name": "org A: sign-up accepted",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sign-up, email confirmation (real SMTP), authentication",
+    "name": "org A: confirmation email delivered over SMTP",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sign-up, email confirmation (real SMTP), authentication",
+    "name": "org A: cannot sign in before confirming",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sign-up, email confirmation (real SMTP), authentication",
+    "name": "org A: link confirms",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sign-up, email confirmation (real SMTP), authentication",
+    "name": "org A: the link works once",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sign-up, email confirmation (real SMTP), authentication",
+    "name": "org B: sign-up accepted",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sign-up, email confirmation (real SMTP), authentication",
+    "name": "org B: confirmation email delivered over SMTP",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sign-up, email confirmation (real SMTP), authentication",
+    "name": "org B: cannot sign in before confirming",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sign-up, email confirmation (real SMTP), authentication",
+    "name": "org B: link confirms",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sign-up, email confirmation (real SMTP), authentication",
+    "name": "org B: the link works once",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sign-up, email confirmation (real SMTP), authentication",
+    "name": "session cookie: HttpOnly, Secure, SameSite",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sign-up, email confirmation (real SMTP), authentication",
+    "name": "refresh cookie: HttpOnly, Secure, SameSite=Strict, narrow path",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sign-up, email confirmation (real SMTP), authentication",
+    "name": "access token lifetime ≤ 15 minutes",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sign-up, email confirmation (real SMTP), authentication",
+    "name": "access token is bound to issuer/audience",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sign-up, email confirmation (real SMTP), authentication",
+    "name": "wrong password and unknown account are indistinguishable",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sign-up, email confirmation (real SMTP), authentication",
+    "name": "forged token (payload-tampered) refused",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sign-up, email confirmation (real SMTP), authentication",
+    "name": "forged token (alg=none) refused",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sign-up, email confirmation (real SMTP), authentication",
+    "name": "forged token (signed with another key) refused",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "MFA",
+    "name": "MFA setup returns a secret once, not cacheable",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "MFA",
+    "name": "MFA enabled with a valid code; recovery codes issued",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "MFA",
+    "name": "enabling MFA ends the old session",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "MFA",
+    "name": "password alone yields a challenge, not a session",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "MFA",
+    "name": "the challenge token is not a session",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "MFA",
+    "name": "a wrong code is refused",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "MFA",
+    "name": "the code used to enrol cannot be reused to sign in",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "MFA",
+    "name": "the right code completes sign-in",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "MFA",
+    "name": "a code that already worked cannot be replayed",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "MFA",
+    "name": "guessing codes is cut off per account, whatever the address",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "RBAC",
+    "name": "admin invites a viewer (link is not in the response in production)",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "RBAC",
+    "name": "viewer signed in via the emailed invitation",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "RBAC",
+    "name": "viewer cannot create a sensor key",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "RBAC",
+    "name": "viewer cannot invite people",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "RBAC",
+    "name": "viewer cannot read the audit log",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "RBAC",
+    "name": "viewer cannot create an AI agent",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "RBAC",
+    "name": "viewer cannot change workspace settings",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "RBAC",
+    "name": "viewer cannot promote itself to admin",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "webhook forgery and replay",
+    "name": "a correctly signed event is accepted",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "webhook forgery and replay",
+    "name": "forged webhook refused: no signature headers",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "webhook forgery and replay",
+    "name": "forged webhook refused: wrong secret",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "webhook forgery and replay",
+    "name": "forged webhook refused: unknown key id",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "webhook forgery and replay",
+    "name": "forged webhook refused: timestamp 10 minutes old",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "webhook forgery and replay",
+    "name": "forged webhook refused: timestamp 10 minutes ahead",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "webhook forgery and replay",
+    "name": "forged webhook refused: another org's secret with this org's key id",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "webhook forgery and replay",
+    "name": "forged webhook refused: body changed after signing",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "webhook forgery and replay",
+    "name": "a byte-for-byte replay is refused",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "webhook forgery and replay",
+    "name": "an oversized body is refused before parsing",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "webhook forgery and replay",
+    "name": "a tenant id inside the payload cannot steer the event into another org",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "webhook forgery and replay",
+    "name": "repeated failed webhook authentication from one address is throttled",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "webhook forgery and replay",
+    "name": "…while the real sensor (another address) keeps working",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "tenant isolation / IDOR (org A attacking org B)",
+    "name": "org A's alert list has none of org B's alerts",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "tenant isolation / IDOR (org A attacking org B)",
+    "name": "A cannot read B's alert",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "tenant isolation / IDOR (org A attacking org B)",
+    "name": "A cannot change B's alert status",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "tenant isolation / IDOR (org A attacking org B)",
+    "name": "A cannot explain B's alert",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "tenant isolation / IDOR (org A attacking org B)",
+    "name": "A cannot revoke B's sensor key",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "tenant isolation / IDOR (org A attacking org B)",
+    "name": "A cannot rotate B's sensor key",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "tenant isolation / IDOR (org A attacking org B)",
+    "name": "A cannot read B's agent",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "tenant isolation / IDOR (org A attacking org B)",
+    "name": "A cannot change B's agent permissions",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "tenant isolation / IDOR (org A attacking org B)",
+    "name": "A cannot pause B's agent",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "tenant isolation / IDOR (org A attacking org B)",
+    "name": "A cannot kill B's agent",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "tenant isolation / IDOR (org A attacking org B)",
+    "name": "A cannot read B's agent activity",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "tenant isolation / IDOR (org A attacking org B)",
+    "name": "A cannot change B's owner's role",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "tenant isolation / IDOR (org A attacking org B)",
+    "name": "A cannot delete B's owner",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "tenant isolation / IDOR (org A attacking org B)",
+    "name": "A cannot switch into B's workspace",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "tenant isolation / IDOR (org A attacking org B)",
+    "name": "A sees none of B's agent decisions",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "tenant isolation / IDOR (org A attacking org B)",
+    "name": "B's alert is untouched after the attempts",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "tenant isolation / IDOR (org A attacking org B)",
+    "name": "B's agent is untouched after the attempts",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "WebSocket",
+    "name": "cross-site WebSocket hijack refused (foreign Origin)",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "WebSocket",
+    "name": "WebSocket without Origin refused",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "WebSocket",
+    "name": "WebSocket without a session refused",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "WebSocket",
+    "name": "WebSocket with the dashboard Origin and a session opens",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "WebSocket",
+    "name": "B's socket receives B's live alert",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "WebSocket",
+    "name": "…and never A's",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sessions",
+    "name": "refresh rotates the refresh token",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sessions",
+    "name": "after logout, the old refresh token is dead",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sessions",
+    "name": "password change succeeds",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "sessions",
+    "name": "…and every older access token stops working",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "rate limiting",
+    "name": "sign-in attempts per address are limited (429 + Retry-After)",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "rate limiting",
+    "name": "failed sign-ins per ACCOUNT are limited across many addresses",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "rate limiting",
+    "name": "X-Forwarded-For from an untrusted peer does not evade the address limit",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "secret leakage",
+    "name": "no secret, password or key appears in the server log",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "secret leakage",
+    "name": "no secret appears in any non-issuing response",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "secret leakage",
+    "name": "sensor secrets are not stored in plaintext",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "secret leakage",
+    "name": "TOTP seed and password are not stored in plaintext",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "secret leakage",
+    "name": "agent secrets are not stored in plaintext",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "secret leakage",
+    "name": "no email carries a password or secret",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "section": "secret leakage",
+    "name": "no 5xx was logged as an unhandled error during the probe",
+    "pass": true,
+    "detail": ""
+  }
+]
