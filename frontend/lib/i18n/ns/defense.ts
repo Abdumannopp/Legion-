@@ -75,7 +75,7 @@ export const defense = defineMessages({
     },
     payments: {
       title: "Payments on hold",
-      intro: "Your payment software asks Legion before it pays. A payment that looks like fraud waits here until someone confirms it by phone. Setup: TOLOV-TEKSHIRUVI.md.",
+      intro: "Your payment software asks Legion before it pays. A payment that looks like fraud waits here until someone confirms it by phone. Setup: PAYMENT-CHECK.md.",
       empty: "No payment is waiting.",
       to: (amount: string, currency: string, hint: string) => `${amount} ${currency} to account ${hint}`,
       requestedBy: (who: string) => `requested by ${who}`,

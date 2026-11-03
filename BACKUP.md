@@ -1,141 +1,136 @@
-# Legion — Backup va falokatdan tiklash
+# Legion — Backup and disaster recovery
 
-> **Yangilanish:** backup endi **shifrlanadi** (age, ochiq kalit bilan), serverdan tashqariga
-> nusxalanadi, har safar haqiqiy tiklab sinaladi, monitoring va ogohlantirishlarga ega.
-> To'liq, joriy qo'llanma: **[RECOVERY.md](RECOVERY.md)**. Quyidagi matn eski (shifrsiz)
-> tavsif bo'lib, `RECOVERY.md` bilan ziddiyat bo'lsa — `RECOVERY.md` to'g'ri.
+> **Update:** backups are now **encrypted** (age, with a public key), copied off
+> the server, test-restored every time, and monitored with alerts.
+> The full, current guide is **[RECOVERY.md](RECOVERY.md)**. The text below describes
+> the older (unencrypted) procedure; where it disagrees with `RECOVERY.md`, `RECOVERY.md` is right.
 
-> Hech qachon tiklanmagan backup — bu backup emas, bu taxmin.
+> A backup that has never been restored is not a backup, it is a guess.
 
-## Nima himoyalanadi
+## What is protected
 
-Postgres 2.0 dan beri **yagona** haqiqat manbai. Unda mijozning barcha xavfsizlik
-telemetriyasi, hisoblari va audit jurnali bor. Boshqa hech qayerda nusxa yo'q.
-Bazani yo'qotish = mijozni yo'qotish.
+Since 2.0, PostgreSQL is the **single** source of truth. It holds all of the
+customer's security telemetry, accounts and the audit log. There is no copy
+anywhere else. Losing the database means losing the customer.
 
-## Maqsadlar (RPO / RTO)
+## Targets (RPO / RTO)
 
-| Ko'rsatkich | Maqsad | Izoh |
+| Measure | Target | Notes |
 |---|---|---|
-| **RPO** (qancha ma'lumot yo'qolishi mumkin) | ≤ 24 soat | Kunlik dump bilan. PITR yoqilsa — daqiqalar |
-| **RTO** (qancha vaqtda tiklash) | ≤ 1 soat | `-Fc` format + `pg_restore -j` bilan |
+| **RPO** (how much data can be lost) | ≤ 24 hours | With a daily dump. With PITR — minutes |
+| **RTO** (how fast it can be restored) | ≤ 1 hour | With the `-Fc` format and `pg_restore -j` |
 
-Bu maqsadlarni mijozga va'da qilishdan oldin **o'lchang** — mashq vaqtini yozib boring.
+**Measure** these before promising them to a customer — write down how long each drill takes.
 
-## Tavsiya: boshqariladigan Postgres
+## Recommended: managed PostgreSQL
 
-Eng ishonchli yo'l — avtomatik backup'i bor boshqariladigan Postgres (RDS,
-Neon, Supabase, Cloud SQL). Ularda point-in-time recovery bor, ya'ni RPO
-daqiqalarga tushadi.
+The most reliable option is a managed PostgreSQL with automatic backups (RDS,
+Neon, Supabase, Cloud SQL). They offer point-in-time recovery, so RPO drops to
+minutes.
 
-Yoqish kerak bo'lgan narsalar:
+Switch on:
 
-- Avtomatik kunlik backup, kamida 14 kun saqlash
+- Automatic daily backups, kept for at least 14 days
 - Point-in-time recovery (PITR)
-- Backup'larni **boshqa regionga** nusxalash
-- Baza o'chirilishidan himoya (deletion protection)
+- Copying backups **to another region**
+- Deletion protection
 
-**Muhim:** provayder backup olayotgani — uni tiklay olishingiz demak emas.
-Pastdagi mashqni baribir bajaring.
+**Important:** the provider taking backups does not mean you can restore them.
+Do the drill below anyway.
 
-## Skriptlar
+## Scripts
 
 ```bash
-DATABASE_URL=... ./ops/backup.sh                  # dump olish + o'qilishini tekshirish + eskisini tozalash
-DATABASE_URL=... ./ops/verify-backup.sh           # vaqtinchalik bazaga tiklab, ma'lumotni tekshirish
-DATABASE_URL=... ./ops/restore.sh <dump> --yes    # MAVJUD baza ustiga tiklash (buzuvchi)
+DATABASE_URL=... ./ops/backup.sh                  # take a dump + check it is readable + prune old ones
+DATABASE_URL=... ./ops/verify-backup.sh           # restore into a temporary database and check the data
+DATABASE_URL=... ./ops/restore.sh <dump> --yes    # restore OVER the existing database (destructive)
 ```
 
-- `backup.sh` dump'ni tekshiradi (o'qilishi mumkinmi), lekin uni tiklamaydi —
-  bu tezkor, kunlik ish uchun.
-- `verify-backup.sh` dump'ni **haqiqatan vaqtinchalik bazaga tiklaydi** va har
-  jadvalning qatorlar sonini chiqaradi — buni oyiga bir marta ishga
-  tushiring, chunki tiklanmagan backup — bu shunchaki taxmin. Buning uchun
-  baza yarata oladigan (`CREATEDB`) ulanish kerak; `npm run setup` yaratgan
-  rolda ataylab yo'q (pastga qarang), shuning uchun faqat shu skript uchun
-  `DATABASE_ADMIN_URL` (superuser ulanishi) bering.
-- `restore.sh` jonli bazani **o'zgartiradi**: bitta tranzaksiya ichida
-  (`--single-transaction`) ishlaydi — xato bo'lsa **hech narsa** qo'llanmaydi
-  va baza avvalgi holatida qoladi. Har dump yonida `.sha256` fayli bo'ladi;
-  `restore.sh` uni tekshiradi va mos kelmasa rad etadi.
+- `backup.sh` checks the dump can be read, but does not restore it — it is the
+  fast, daily job.
+- `verify-backup.sh` **really restores** the dump into a temporary database and
+  prints the row count of every table — run it once a month, because a backup
+  that was never restored is only a guess. It needs a connection that can create
+  databases (`CREATEDB`); the role `npm run setup` creates deliberately cannot
+  (see below), so give this script alone a `DATABASE_ADMIN_URL` (a superuser connection).
+- `restore.sh` **changes** the live database: it runs in a single transaction
+  (`--single-transaction`) — on any error **nothing** is applied and the
+  database stays as it was. Every dump has a `.sha256` file beside it;
+  `restore.sh` checks it and refuses a dump that does not match.
 
-O'zgaruvchilar: `DATABASE_URL` (majburiy — serveringiz ishlatadigan xuddi
-o'sha qiymat), `DATABASE_ADMIN_URL` (ixtiyoriy, faqat `verify-backup.sh`
-uchun), `BACKUP_DIR` (standart `./backups`), `RETENTION_DAYS` (standart 14).
+Variables: `DATABASE_URL` (required — exactly the value your server uses),
+`DATABASE_ADMIN_URL` (optional, only for `verify-backup.sh`), `BACKUP_DIR`
+(default `./backups`), `RETENTION_DAYS` (default 14).
 
-Sinov: `DATABASE_URL=... bash ops/tests/test-backup-restore.sh` — haqiqiy
-Postgres'da backup → jadvalni o'chirish → tiklash, buzilgan va o'zgartirilgan
-dump'ni rad etish, baza o'chiq bo'lganda backup xatosi.
+Test: `DATABASE_URL=... bash ops/tests/test-backup-restore.sh` — on a real
+PostgreSQL: backup → drop a table → restore, refusing broken and modified
+dumps, and a backup error when the database is down.
 
-### Kunlik backup (cron)
+### Daily backup (cron)
 
 ```cron
 0 3 * * * cd /opt/legion && DATABASE_URL=... BACKUP_DIR=/var/backups/legion ./ops/backup.sh >> /var/log/legion-backup.log 2>&1
 ```
 
-### Oylik tekshiruv (majburiy)
+### Monthly verification (required)
 
 ```cron
 0 4 1 * * cd /opt/legion && DATABASE_URL=... BACKUP_DIR=/var/backups/legion ./ops/verify-backup.sh >> /var/log/legion-verify.log 2>&1
 ```
 
-`verify-backup.sh` ishlab turgan bazaga **tegmaydi** — vaqtinchalik baza
-yaratadi, tiklaydi, tekshiradi va o'chiradi.
+`verify-backup.sh` does **not touch** the running database — it creates a
+temporary database, restores, checks and drops it.
 
-## Backup'ni serverdan tashqariga chiqaring
+## Copy backups off the server
 
-Serverdagi backup server bilan birga yo'qoladi. `backup.sh` dan keyin:
+A backup on the server is lost with the server. After `backup.sh`:
 
 ```bash
 aws s3 cp "$TARGET" "s3://legion-backups/$(date -u +%Y/%m)/" --storage-class STANDARD_IA
 ```
 
-S3'da **versioning** va **object lock** yoqing — ransomware backup'larni ham
-o'chirishga urinadi.
+Turn on **versioning** and **object lock** in S3 — ransomware tries to delete backups too.
 
-## Falokat holatida tiklash
+## Restoring after a disaster
 
 ```bash
-# 1. Yozuvni to'xtating — tiklash paytida yangi yozuv kelmasin
-sudo systemctl stop legion        # yoki API jarayonini boshqa usulda to'xtating
+# 1. Stop writes — nothing new should arrive during the restore
+sudo systemctl stop legion        # or stop the API process another way
 
-# 2. Eng yangi backup'ni toping va TEKSHIRING (tiklashdan oldin!)
+# 2. Find the newest backup and VERIFY it (before restoring!)
 DATABASE_ADMIN_URL=... ./ops/verify-backup.sh /var/backups/legion/legion-20260820T030000Z.dump
 
-# 3. Tiklang
+# 3. Restore
 DATABASE_URL=... ./ops/restore.sh /var/backups/legion/legion-20260820T030000Z.dump --yes
 
-# 4. API ni qaytaring
+# 4. Bring the API back
 sudo systemctl start legion
 
-# 5. Tekshiring
+# 5. Check
 curl -s https://api.legion.example/health
 ```
 
-`restore.sh` `--single-transaction` bilan ishlaydi: xato bo'lsa **hech narsa**
-qo'llanmaydi va baza avvalgi holatida qoladi. Yarim tiklangan baza — eng yomon
-holat, chunki u ishlayotgandek ko'rinadi.
+`restore.sh` runs with `--single-transaction`: on any error **nothing** is
+applied and the database stays as it was. A half-restored database is the worst
+case, because it looks as if it works.
 
-## Sinalgan mashq natijasi
+## Drill result
 
-Bu protsedura sinovdan o'tkazilgan (2026-08-21):
+This procedure was tested (2026-08-21):
 
-| Qadam | Natija |
+| Step | Result |
 |---|---|
-| 40 ta alert + 2 tenant + 2 user yaratildi | ✅ |
-| `backup.sh` — dump olindi va o'qilishi tasdiqlandi | ✅ 20K |
-| `DROP SCHEMA public CASCADE` — **hamma narsa yo'q qilindi** | ✅ |
-| `restore.sh` — backupdan tiklandi | ✅ 43 alert, 2 tenant, 2 user |
-| Login + alert o'qish (serverni qayta ishga tushirmasdan) | ✅ ishladi |
-| `verify-backup.sh` sxema nomuvofiqligini aniqladi | ✅ jadval yo'qligini tutdi |
+| 40 alerts + 2 tenants + 2 users created | ✅ |
+| `backup.sh` — dump taken and confirmed readable | ✅ 20K |
+| `DROP SCHEMA public CASCADE` — **everything destroyed** | ✅ |
+| `restore.sh` — restored from the backup | ✅ 43 alerts, 2 tenants, 2 users |
+| Sign-in + reading alerts (without restarting the server) | ✅ worked |
+| `verify-backup.sh` detected a schema mismatch | ✅ caught a missing table |
 
-Oxirgi qator muhim: skript shunchaki "tiklandi" demaydi, kutilgan jadvallar va
-ma'lumot borligini tekshiradi va nomuvofiqlikda **xato qaytaradi**.
+The last row matters: the script does not just say "restored"; it checks that
+the expected tables and data exist and **returns an error** on a mismatch.
 
-## Nima hali yo'q
+## Not covered here
 
-- **PITR** — kunlik dump'da RPO 24 soat. Boshqariladigan Postgres'da yoqing.
-- **Avtomatik offsite nusxa** — S3 buyrug'i hujjatlashtirilgan, lekin skriptga
-  kiritilmagan (kalitlar sizning muhitingizga bog'liq).
-- **Backup shifrlash** — mijoz xavfsizlik ma'lumoti saqlanadi. S3 SSE yoki
-  `gpg` bilan shifrlang; GDPR bo'yicha bu talab bo'lishi mumkin.
+- **PITR** — with a daily dump, RPO is 24 hours. Enable it on a managed PostgreSQL.
+- Encryption and automatic off-site copies are covered in [RECOVERY.md](RECOVERY.md).

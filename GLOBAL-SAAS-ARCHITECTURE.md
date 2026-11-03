@@ -229,10 +229,9 @@ missing (single-instance only).
 * **Date and time formats.** `locale` (default: as the language writes it —
   unchanged look), `YYYY-MM-DD`, `DD.MM.YYYY`, `DD/MM/YYYY`, `MM/DD/YYYY`;
   `locale`/`24h`/`12h`. Workspace default, personal override.
-* **Localization.** English is the source language; Russian and Uzbek are
-  complete and CI refuses a missing key (frontend TypeScript + check-i18n,
-  server catalogue test). Adding a language = one more column in each
-  catalogue; nothing structural.
+* **Localization.** English only (Russian and Uzbek were removed in 2026-11 to
+  focus on the global market). The `Locale` plumbing is kept: adding a language
+  means widening `Locale` and adding translations; nothing structural.
 * **Currencies.** `SUPPORTED_CURRENCIES` (default USD,EUR), a workspace
   billing currency (locked while a subscription is active), and
   `PADDLE_PRICE_IDS` so the **server** chooses the price for the workspace's

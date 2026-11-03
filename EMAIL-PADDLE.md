@@ -1,96 +1,97 @@
-# Email (SMTP) va Paddle Billing sozlash
+# Setting up email (SMTP) and Paddle Billing
 
-Ikkalasi ham **ixtiyoriy**. Sozlanmasa Legion normal ishlaydi — email jo'natilmaydi,
-billing sahifasi esa "sozlanmagan" deb javob beradi.
+Both are **optional** in self-hosted mode. Without them Legion works normally —
+no emails are sent, and the billing page says "not configured".
+(In SaaS mode email is required — see [SAAS.md](SAAS.md).)
 
 ---
 
 # 1. Email (SMTP)
 
-## Nima uchun kerak
+## Why you need it
 
-| Funksiya | SMTP'siz | SMTP bilan |
+| Feature | Without SMTP | With SMTP |
 |---|---|---|
-| Parolni tiklash | Havola faqat server logida | Foydalanuvchiga xat ketadi |
-| Alert bildirishnomasi | Yo'q | Muhim alertlar emailga ketadi |
-| `/notifications/test` | "skipped" | Haqiqiy test xati |
+| Password reset | The link appears only in the server log | The user gets an email |
+| Alert notifications | None | Important alerts are emailed |
+| `/notifications/test` | "skipped" | A real test email |
 
-## Sozlash
+## Setup
 
-`server/.env` fayliga:
+In `server/.env`:
 
 ```env
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
-SMTP_USER=sizning@gmail.com
-SMTP_PASSWORD=app-parolingiz
+SMTP_USER=you@gmail.com
+SMTP_PASSWORD=your-app-password
 SMTP_SECURE=false
-SMTP_FROM=Legion <sizning@gmail.com>
+SMTP_FROM=Legion <you@gmail.com>
 ALERT_EMAIL_MIN_SEVERITY=high
 ```
 
-| Kalit | Izoh |
+| Key | Notes |
 |---|---|
-| `SMTP_HOST` | **Bo'sh bo'lsa email butunlay o'chiq** |
-| `SMTP_PORT` | `587` (STARTTLS) yoki `465` (SSL) |
-| `SMTP_SECURE` | `465` uchun `true`, `587` uchun `false` |
-| `SMTP_USER` / `SMTP_PASSWORD` | Bo'sh qoldirilsa autentifikatsiyasiz ulanadi |
+| `SMTP_HOST` | **If empty, email is switched off entirely** |
+| `SMTP_PORT` | `587` (STARTTLS) or `465` (SSL) |
+| `SMTP_SECURE` | `true` for `465`, `false` for `587` |
+| `SMTP_USER` / `SMTP_PASSWORD` | If left empty, connects without authentication |
 | `ALERT_EMAIL_MIN_SEVERITY` | `critical` \| `high` \| `medium` \| `low` \| `off` |
 
-### Gmail uchun
+### Gmail
 
-Oddiy parol ishlamaydi. Google hisobingizda 2FA yoqing, so'ng
-**App Password** yarating va uni `SMTP_PASSWORD` ga qo'ying.
+Your normal password does not work. Turn on 2FA in your Google account, then
+create an **App Password** and put it in `SMTP_PASSWORD`.
 
-### Boshqa xizmatlar
+### Other services
 
-| Xizmat | Host | Port |
+| Service | Host | Port |
 |---|---|---|
 | SendGrid | `smtp.sendgrid.net` | 587 |
 | Mailgun | `smtp.mailgun.org` | 587 |
 | Resend | `smtp.resend.com` | 587 |
-| Yandex | `smtp.yandex.ru` | 465 (`SMTP_SECURE=true`) |
+| Amazon SES | `email-smtp.<region>.amazonaws.com` | 587 |
 
-## Alert emaili qayerga ketadi
+## Where alert emails go
 
-Dashboard → **Settings** → notification email. Bo'sh bo'lsa hech narsa yuborilmaydi.
+Dashboard → **Settings** → notification email. If empty, nothing is sent.
 
-Legion'ni qayta ishga tushiring, so'ng **Settings → Send test** tugmasini bosing.
+Restart Legion, then click **Settings → Send test**.
 
-## Tekshirish
+## Checking
 
 ```bash
 curl -X POST http://localhost:8000/notifications/test -b cookie.txt
 ```
 
-| Javob | Ma'nosi |
+| Response | Meaning |
 |---|---|
-| `{"status":"sent to ..."}` | Ishladi |
-| `skipped: SMTP is not configured` | `SMTP_HOST` bo'sh |
-| `Set a notification email address first` | Settings'da manzil yo'q |
-| `SMTP connection failed: ...` | Host/port/parol xato |
+| `{"status":"sent to ..."}` | It worked |
+| `skipped: SMTP is not configured` | `SMTP_HOST` is empty |
+| `Set a notification email address first` | No address in Settings |
+| `SMTP connection failed: ...` | Wrong host, port or password |
 
 ---
 
 # 2. Paddle Billing
 
-## Muhim
+## Important
 
-To'lov **faqat webhook orqali** faollashadi. Webhook sozlanmasa mijoz pul
-to'laydi, lekin obuna faol bo'lmaydi.
+A subscription is activated **only through the webhook**. Without the webhook a
+customer pays, but the subscription never becomes active.
 
-## 2.1 Paddle'da kalitlar olish
+## 2.1 Getting the keys from Paddle
 
 Paddle Dashboard → **Developer Tools**:
 
-| Kerak | Qayerdan |
+| What | Where |
 |---|---|
 | API key (`pdl_...`) | Authentication → API keys |
 | Client token | Authentication → Client-side tokens |
 | Price ID (`pri_...`) | Catalog → Prices |
-| Webhook secret (`pdl_ntfset_...`) | Notifications → yangi destination yaratganda |
+| Webhook secret (`pdl_ntfset_...`) | Notifications → when creating a new destination |
 
-## 2.2 Server sozlamasi
+## 2.2 Server settings
 
 `server/.env`:
 
@@ -100,7 +101,7 @@ PADDLE_WEBHOOK_SECRET=pdl_ntfset_...
 PADDLE_ENVIRONMENT=sandbox
 ```
 
-## 2.3 Frontend sozlamasi
+## 2.3 Frontend settings
 
 `frontend/.env.local`:
 
@@ -110,58 +111,59 @@ NEXT_PUBLIC_PADDLE_ENVIRONMENT=sandbox
 NEXT_PUBLIC_PADDLE_PRICE_ID=pri_...
 ```
 
-`PADDLE_ENVIRONMENT` va `NEXT_PUBLIC_PADDLE_ENVIRONMENT` **bir xil** bo'lishi shart.
-Sandbox kaliti production webhook bilan hech qachon mos kelmaydi.
+`PADDLE_ENVIRONMENT` and `NEXT_PUBLIC_PADDLE_ENVIRONMENT` **must match**.
+A sandbox key never matches a production webhook.
 
-## 2.4 Webhook manzilini ro'yxatdan o'tkazish
+## 2.4 Registering the webhook address
 
 Paddle → Notifications → **New destination**:
 
-- URL: `https://sizning-domeningiz.com/billing/webhook`
-- Quyidagi hodisalarni tanlang:
+- URL: `https://your-domain.com/api/billing/webhook` (behind the nginx setup in
+  [DEPLOY-ONLINE.md](DEPLOY-ONLINE.md); the API itself serves `/billing/webhook`)
+- Select these events:
   - `subscription.created`
   - `subscription.updated`
   - `subscription.activated`
   - `subscription.canceled`
+  - `subscription.past_due`
   - `subscription.paused`
   - `subscription.resumed`
 
-> Paddle internetdan kirish imkoni bo'lgan HTTPS manzilni talab qiladi.
-> Lokal sinov uchun `ngrok http 8000` ishlatib, chiqqan manzilni qo'ying.
+> Paddle requires an HTTPS address reachable from the internet.
+> For local testing, run `ngrok http 8000` and use the address it gives you.
 
-## 2.5 Tenant qanday aniqlanadi
+## 2.5 How the tenant is identified
 
 ```
-Foydalanuvchi "Upgrade" bosadi
-  → Legion checkout_token yaratadi (imzolangan JWT, ichida tenant_id)
-  → Paddle.js uni custom_data ichida checkout'ga uzatadi
-  → Paddle webhookda uni qaytaradi
-  → Legion tokenni tekshirib, obunani to'g'ri tenantga bog'laydi
+The user clicks "Upgrade"
+  → Legion creates a checkout_token (a signed JWT containing the tenant_id)
+  → Paddle.js passes it to the checkout in custom_data
+  → Paddle returns it in the webhook
+  → Legion verifies the token and links the subscription to the right tenant
 ```
 
-Shu sababli brauzer boshqa tenantning obunasini o'g'irlay olmaydi —
-tenant ID brauzerdan emas, imzolangan tokendan olinadi.
+So a browser cannot steal another tenant's subscription — the tenant ID comes
+from the signed token, not from the browser.
 
-## 2.6 Webhook javoblari
+## 2.6 Webhook responses
 
-| Javob | Ma'nosi |
+| Response | Meaning |
 |---|---|
-| `202 processed` | Obuna yangilandi |
-| `202 ignored` | Obunaga aloqasi yo'q hodisa (masalan `transaction.completed`) |
-| `202 skipped, stale event` | Eskiroq hodisa keyin keldi — e'tiborsiz qoldirildi |
-| `202 skipped, no valid checkout_token` | `custom_data` da token yo'q yoki yaroqsiz |
-| `401 Invalid signature` | `PADDLE_WEBHOOK_SECRET` xato |
-| `401 Signature timestamp outside tolerance` | Server soati noto'g'ri (NTP sozlang) |
-| `503 Paddle webhook secret is not configured` | `.env` da sir yo'q |
+| `202 processed` | Subscription updated |
+| `202 ignored` | An event unrelated to subscriptions (e.g. `transaction.completed`) |
+| `202 skipped, stale event` | An older event arrived later — ignored |
+| `202 skipped, no valid checkout_token` | No token in `custom_data`, or it is invalid |
+| `401 Invalid signature` | Wrong `PADDLE_WEBHOOK_SECRET` |
+| `401 Signature timestamp outside tolerance` | The server clock is wrong (set up NTP) |
+| `503 Paddle webhook secret is not configured` | No secret in `.env` |
 
 ---
 
-## Xavfsizlik
+## Security
 
-- Paddle imzosi **xom baytlar** ustidan tekshiriladi. JSON qayta
-  serializatsiya qilinsa imzo hech qachon mos kelmaydi.
-- Taqqoslash `timingSafeEqual` bilan — vaqt bo'yicha hujumdan himoyalangan.
-- 5 daqiqadan eski imzolar rad etiladi (replay hujumiga qarshi).
-- SMTP xatoliklari hech qachon foydalanuvchiga qaytarilmaydi va alert
-  qabul qilishni to'xtatmaydi.
-- Parol tiklash havolasi production'da **hech qachon** logga yozilmaydi.
+- Paddle's signature is verified over the **raw bytes**. If the JSON were
+  re-serialised, the signature would never match.
+- The comparison uses `timingSafeEqual` — protected against timing attacks.
+- Signatures older than 5 minutes are refused (against replay).
+- SMTP errors are never returned to the user and never stop alert ingestion.
+- In production, the password-reset link is **never** written to the log.

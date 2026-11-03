@@ -65,14 +65,20 @@ Full guide for customers: [INSTALL.md](INSTALL.md).
 
 | Task | Guide |
 |---|---|
-| Install and run Legion | [INSTALL.md](INSTALL.md) |
+| Try Legion on your own computer | [TRY-LOCALLY.md](TRY-LOCALLY.md) · Docker: [DOCKER-WINDOWS.md](DOCKER-WINDOWS.md) · Windows: [WINDOWS-NODE.md](WINDOWS-NODE.md) |
+| Install and run Legion (full customer guide) | [INSTALL.md](INSTALL.md) |
+| Put Legion online (VPS + domain + HTTPS + Cloudflare) | [DEPLOY-ONLINE.md](DEPLOY-ONLINE.md) |
+| Run it as a paid SaaS (sign-up, trial, Paddle, email) | [SAAS.md](SAAS.md) · [EMAIL-PADDLE.md](EMAIL-PADDLE.md) |
 | Connect Wazuh (events in, automatic blocking out) | [WAZUH.md](WAZUH.md) |
+| Payment check (stop payment fraud) | [PAYMENT-CHECK.md](PAYMENT-CHECK.md) |
+| The seven most dangerous attack types | [THREATS.md](THREATS.md) |
+| The five agents and their skills | [AGENTS.md](AGENTS.md) |
+| AI providers and AI safety | [AI-PROVIDERS.md](AI-PROVIDERS.md) |
 | Proxies, origins, cookies and headers | [EDGE-SECURITY.md](EDGE-SECURITY.md) |
 | How organisations are kept apart (multi-tenant) | [TENANT-ISOLATION.md](TENANT-ISOLATION.md) |
-| Disaster recovery | [RECOVERY.md](RECOVERY.md) |
+| Backup and disaster recovery | [RECOVERY.md](RECOVERY.md) · [BACKUP.md](BACKUP.md) |
+| Architecture decisions | [ADR.md](ADR.md) |
 | CI and the release security gate | [.github/CI.md](.github/CI.md) |
-
-Some step-by-step guides (backup, SaaS setup, online deployment, payment check) are still written in Uzbek and are being translated.
 
 ---
 

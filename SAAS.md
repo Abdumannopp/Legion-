@@ -1,114 +1,111 @@
-# Legion'ni pullik onlayn xizmat (SaaS) qilish
+# Running Legion as a paid online service (SaaS)
 
-Bu qo'llanma oxirida:
+At the end of this guide:
 
-- `https://legion.sizningdomen.uz` — mahsulot sahifasi, narx, shartlar;
-- har kim o'zi ro'yxatdan o'tadi, emailini tasdiqlaydi va **14 kun bepul** foydalanadi;
-- keyin karta bilan (Visa/Mastercard, dollarda) **oylik obuna** sotib oladi —
-  pulni **Paddle** oladi, soliq va hisob-fakturalarni ham Paddle hal qiladi;
-- to'lamasa — ish maydoni qulflanadi (ma'lumot o'chmaydi), to'lasa — ochiladi.
+- `https://legion.yourdomain.com` has a product page, pricing and terms;
+- anyone can sign up, confirm their email and use Legion **free for 14 days**;
+- then they buy a **monthly subscription** by card (Visa/Mastercard, in dollars) —
+  **Paddle** takes the payment and handles tax and invoices;
+- if they do not pay, the workspace is locked (data is not deleted); when they pay, it reopens.
 
-Kod tomoni tayyor va sinalgan. Quyida **faqat siz qila oladigan** ishlar:
-hisoblar ochish, kalitlarni olish va ularni ikki faylga yozish.
+The code side is ready and tested. Below are **only the things you have to do
+yourself**: open accounts, get keys and write them into two files.
 
-> Qonuniy eslatma: shartlar, maxfiylik va qaytarish siyosati matnlari
-> dasturning haqiqiy ishlashiga mos yozilgan namuna. Men yurist emasman —
-> ishga tushirishdan oldin ularni yuristga ko'rsating. O'zbekistonda o'z
-> daromadingiz bo'yicha soliq masalasini buxgalter bilan aniqlang
-> (Paddle faqat xaridor tomonidagi QQS/sales tax'ni hal qiladi).
+> Legal note: the terms, privacy and refund policy texts are samples written to
+> match how the software actually works. They are not legal advice — have a
+> lawyer review them before going live. Check the tax on your own income with an
+> accountant (Paddle handles only the buyer-side VAT/sales tax).
 
 ---
 
-## 1-qadam. Serverni SaaS rejimida o'rnating
+## Step 1. Install the server in SaaS mode
 
-[DEPLOY-ONLINE.md](DEPLOY-ONLINE.md) dagi 0–7-qadamlarni bajaring, faqat
-5-qadamda `setup` buyrug'iga `--saas` qo'shing:
+Follow steps 0–7 of [DEPLOY-ONLINE.md](DEPLOY-ONLINE.md), but in step 5 add
+`--saas` to the `setup` command:
 
 ```bash
-sudo -u legion npm run setup -- --saas --domain legion.sizningdomen.uz
+sudo -u legion npm run setup -- --saas --domain legion.yourdomain.com
 ```
 
-Bu `server/.env` va `frontend/.env.local` ga kerakli bo'sh maydonlarni
-yozadi. Hozircha **build qilmang** — avval 2–4-qadamlardagi qiymatlarni
-to'ldiring. Server email sozlanmaguncha ataylab ishga tushmaydi (tasdiqlash
-xatini yubora olmaydigan SaaS — ishlamaydigan SaaS).
+This writes the required empty fields into `server/.env` and
+`frontend/.env.local`. **Do not build yet** — first fill in the values from
+steps 2–4. The server deliberately refuses to start until email is configured
+(a SaaS that cannot send confirmation emails is a SaaS that does not work).
 
-Eslatma: SaaS rejimida 8-qadam (setup token) kerak emas — o'z hisobingizni
-ham oddiy mijozdek `/signup` orqali ochasiz.
+Note: in SaaS mode, step 8 (the setup token) is not needed — you open your own
+account through `/signup`, like any customer.
 
 ---
 
-## 2-qadam. Email — Resend
+## Step 2. Email — Resend
 
-Tasdiqlash, parol tiklash, taklif va alert xatlari shu orqali ketadi.
-Resend'ni tanladim: bepul tarifda oyiga 3 000 ta (kuniga 100 ta) xat, SMTP
-bor, xatlarga reklama qo'shmaydi. Mijozlar ko'paysa — pullik tarifga
-o'tasiz, sozlama o'zgarmaydi.
+Confirmation, password-reset, invitation and alert emails go through it.
+Resend's free plan allows 3,000 emails a month (100 a day), offers SMTP and adds
+no advertising to emails. When you grow, move to a paid plan; the settings stay
+the same.
 
-1. <https://resend.com> da ro'yxatdan o'ting.
-2. **Domains → Add domain** → `sizningdomen.uz` (yoki `mail.sizningdomen.uz`).
-3. Resend bir nechta DNS yozuvi (TXT, MX) ko'rsatadi — ularni domeningiz
-   DNS sozlamalariga **aynan shunday** qo'shing. Qo'shimcha ravishda bitta
-   TXT yozuv qo'shing (xatlar spamga tushmasligi uchun):
+1. Sign up at <https://resend.com>.
+2. **Domains → Add domain** → `yourdomain.com` (or `mail.yourdomain.com`).
+3. Resend shows several DNS records (TXT, MX) — add them to your domain's DNS
+   **exactly** as shown. Also add one TXT record (so emails do not land in spam):
 
-   | Turi | Nomi | Qiymati |
+   | Type | Name | Value |
    |---|---|---|
    | TXT | `_dmarc` | `v=DMARC1; p=none;` |
 
-4. Resend'da **Verify** — hammasi yashil bo'lguncha kuting (daqiqalar–soatlar).
-5. **API Keys → Create API key** (Sending access) → kalitni nusxalang (`re_…`).
-6. Serverda `/opt/legion/server/.env`:
+4. Click **Verify** in Resend — wait until everything is green (minutes to hours).
+5. **API Keys → Create API key** (Sending access) → copy the key (`re_…`).
+6. On the server, in `/opt/legion/server/.env`:
 
    ```env
-   SMTP_PASSWORD=re_…sizning_kalitingiz
-   SMTP_FROM=Legion <no-reply@sizningdomen.uz>
+   SMTP_PASSWORD=re_…your_key
+   SMTP_FROM=Legion <no-reply@yourdomain.com>
    ```
 
-   `SMTP_FROM` dagi domen 4-bandda tasdiqlangan domen bo'lishi shart.
-   Qolgan SMTP qatorlari (`smtp.resend.com`, `465`, `resend`) allaqachon yozilgan.
+   The domain in `SMTP_FROM` must be the one verified in step 4.
+   The remaining SMTP lines (`smtp.resend.com`, `465`, `resend`) are already written.
 
 ---
 
-## 3-qadam. Sayt ma'lumotlari
+## Step 3. Site details
 
 `/opt/legion/frontend/.env.local`:
 
 ```env
-NEXT_PUBLIC_OPERATOR_NAME=Ism Familiya        # pasportdagidek, lotincha — tashkilot yo'q, shuning uchun o'z nomingiz
-NEXT_PUBLIC_SUPPORT_EMAIL=support@sizningdomen.uz
-NEXT_PUBLIC_DATA_LOCATION=Germany (Hetzner)   # serveringiz qaysi davlatda — maxfiylik siyosatida yoziladi
-NEXT_PUBLIC_PRICE_LABEL=49 USD                # ixtiyoriy; "$" belgisini ishlatmang
+NEXT_PUBLIC_OPERATOR_NAME=First Last          # your legal name (or company name), as on your ID
+NEXT_PUBLIC_SUPPORT_EMAIL=support@yourdomain.com
+NEXT_PUBLIC_DATA_LOCATION=Germany (Hetzner)   # the country of your server — shown in the privacy policy
+NEXT_PUBLIC_PRICE_LABEL=49 USD                # optional; do not use the "$" sign
 ```
 
-Paddle domen tekshiruvida shartlarda **sotuvchining haqiqiy ismi** bo'lishini
-talab qiladi — shu sabab `NEXT_PUBLIC_OPERATOR_NAME` muhim.
-`support@…` manzilini qabul qila olishingiz kerak (Resend faqat yuboradi;
-qabul uchun domeningizda pochta yoki email forwarding sozlang).
+Paddle's domain review requires the **seller's real name** in the terms — that is
+why `NEXT_PUBLIC_OPERATOR_NAME` matters. You must be able to receive mail at
+`support@…` (Resend only sends; set up a mailbox or email forwarding on your domain).
 
 ---
 
-## 4-qadam. To'lov — Paddle (avval sinov, keyin haqiqiy)
+## Step 4. Payments — Paddle (test first, then live)
 
-Paddle'ning ikkita alohida muhiti bor: **sandbox** (soxta kartalar, pul
-yo'q) va **live** (haqiqiy pul). Avval sandbox'da hammasini sinaysiz.
+Paddle has two separate environments: **sandbox** (fake cards, no money) and
+**live** (real money). Test everything in the sandbox first.
 
 ### 4a. Sandbox
 
-1. <https://sandbox-login.paddle.com/signup> da ro'yxatdan o'ting.
-2. **Catalog → Products → New product**: nomi `Legion`. Ichida
-   **New price**: masalan 49 USD, **recurring, monthly**. Saqlang va narx
-   ID sini nusxalang (`pri_…`).
+1. Sign up at <https://sandbox-login.paddle.com/signup>.
+2. **Catalog → Products → New product**: name `Legion`. Inside it,
+   **New price**: e.g. 49 USD, **recurring, monthly**. Save and copy the price
+   ID (`pri_…`).
 3. **Developer tools → Authentication**:
-   - **API key** yarating → `PADDLE_API_KEY` (server uchun, maxfiy);
-   - **Client-side token** yarating → `NEXT_PUBLIC_PADDLE_CLIENT_TOKEN` (sahifa uchun).
+   - create an **API key** → `PADDLE_API_KEY` (server, secret);
+   - create a **Client-side token** → `NEXT_PUBLIC_PADDLE_CLIENT_TOKEN` (web page).
 4. **Developer tools → Notifications → New destination**:
-   - URL: `https://legion.sizningdomen.uz/api/billing/webhook`
-   - Hodisalar: barcha `subscription.*` (created, updated, activated,
-     canceled, past_due, paused, resumed);
-   - saqlang va **secret key** ni nusxalang → `PADDLE_WEBHOOK_SECRET`.
+   - URL: `https://legion.yourdomain.com/api/billing/webhook`
+   - Events: all `subscription.*` (created, updated, activated, canceled,
+     past_due, paused, resumed);
+   - save and copy the **secret key** → `PADDLE_WEBHOOK_SECRET`.
 5. **Checkout → Checkout settings → Default payment link**:
-   `https://legion.sizningdomen.uz/billing`
-6. Qiymatlarni yozing:
+   `https://legion.yourdomain.com/billing`
+6. Write the values:
 
    `server/.env`:
    ```env
@@ -124,79 +121,78 @@ yo'q) va **live** (haqiqiy pul). Avval sandbox'da hammasini sinaysiz.
    NEXT_PUBLIC_PADDLE_PRICE_ID=pri_…
    ```
 
-7. Qurib, qayta ishga tushiring:
+7. Build and restart:
 
    ```bash
    cd /opt/legion && sudo -u legion npm run build && systemctl restart legion
-   journalctl -u legion -n 20     # "Paddle is in SANDBOX mode" — bu normal
+   journalctl -u legion -n 20     # "Paddle is in SANDBOX mode" — this is normal
    ```
 
-### 4b. Sinov (to'liq aylanish)
+### 4b. Test the whole cycle
 
-1. `https://legion.sizningdomen.uz` → **Start free trial** → ro'yxatdan o'ting.
-2. Emaildagi **Confirm email** tugmasini bosing → kiring. Dashboard ochiladi.
-3. **Billing → Subscribe now** → Paddle oynasi. Sinov kartasi:
-   `4242 4242 4242 4242`, istalgan kelajakdagi sana, istalgan CVC.
-4. Bir necha soniyadan keyin Billing sahifasi **Active** ko'rsatadi.
-5. **Manage subscription** → obunani bekor qiling → davr oxirida ish maydoni
-   qulflanadi, Billing esa ochiq qoladi.
+1. `https://legion.yourdomain.com` → **Start free trial** → sign up.
+2. Click **Confirm email** in the email → sign in. The dashboard opens.
+3. **Billing → Subscribe now** → the Paddle window. Test card:
+   `4242 4242 4242 4242`, any future date, any CVC.
+4. After a few seconds the Billing page shows **Active**.
+5. **Manage subscription** → cancel → at the end of the period the workspace
+   locks, while Billing stays open.
 
-Shu besh qadam ishlasa — hammasi to'g'ri ulangan.
+If these five steps work, everything is connected correctly.
 
-### 4c. Haqiqiy pul (live)
+### 4c. Real money (live)
 
-1. <https://login.paddle.com/signup> da **live** hisob oching (sandbox'dan alohida).
-2. Tekshiruvlarni o'ting:
-   - **Identity verification** — pasport (tashkilot shart emas: Paddle
-     yakka tartibdagi sotuvchilar bilan ham ishlaydi);
-   - **Checkout → Website approval** — `https://legion.sizningdomen.uz`.
-     Paddle saytda mahsulot tavsifi, narx, shartlar, maxfiylik va qaytarish
-     siyosati bo'lishini tekshiradi — bularning hammasi tayyor
+1. Open a **live** account at <https://login.paddle.com/signup> (separate from the sandbox).
+2. Pass the checks:
+   - **Identity verification** — a passport (a company is not required: Paddle
+     also works with individual sellers);
+   - **Checkout → Website approval** — `https://legion.yourdomain.com`.
+     Paddle checks that the site has a product description, price, terms,
+     privacy and refund policy — all of these are ready
      (`/`, `/pricing`, `/terms`, `/privacy`, `/refunds`);
-   - pul olish uchun bank hisobi yoki Payoneer.
-3. Tasdiqlangach, 4a dagi 2–5-bandlarni **live** hisobda qaytadan bajaring
-   (mahsulot, narx, kalitlar, webhook, default payment link — hammasi yangi).
-4. Ikkala faylda `sandbox` → `production` va yangi kalitlarni yozing,
-   qurib qayta ishga tushiring.
-5. O'zingiz haqiqiy karta bilan bir marta sotib olib, keyin **Refund**
-   qilib ko'ring.
+   - a bank account or Payoneer to receive payouts.
+3. Once approved, repeat items 2–5 of 4a in the **live** account
+   (product, price, keys, webhook, default payment link — all new).
+4. In both files change `sandbox` → `production`, write the new keys, then build
+   and restart.
+5. Buy once yourself with a real card, then **Refund** it.
 
 ---
 
-## Qanday ishlaydi (qisqacha)
+## How it works (in short)
 
-| Holat | Mijoz nima ko'radi |
+| State | What the customer sees |
 |---|---|
-| Ro'yxatdan o'tdi, email tasdiqlanmagan | Kira olmaydi; "linkni qayta yuborish" tugmasi bor |
-| Sinov muddati (14 kun) | Hammasi ishlaydi |
-| Sinov tugadi, obuna yo'q | Ish maydoni qulflangan, ma'lumot saqlanadi, Billing ochiq |
-| Obuna faol | Hammasi ishlaydi |
-| To'lov o'tmadi (past due) | Faqat o'qish mumkin, o'zgartirib bo'lmaydi |
-| Obuna bekor qilindi | Davr oxirigacha ishlaydi, keyin qulflanadi |
+| Signed up, email not confirmed | Cannot sign in; there is a "resend link" button |
+| Trial (14 days) | Everything works |
+| Trial ended, no subscription | Workspace locked, data kept, Billing open |
+| Subscription active | Everything works |
+| Payment failed (past due) | Read-only; nothing can be changed |
+| Subscription cancelled | Works until the end of the period, then locks |
 
-- Har bir mijozning ma'lumoti alohida ish maydonida — boshqalar ko'ra olmaydi.
-- To'lov faqat Paddle imzolagan webhook orqali faollashadi; brauzer "men
-  to'ladim" deb aldab o'ta olmaydi.
-- Server o'chib qolsa ham, Paddle soatlab qayta urinadi — to'lov yo'qolmaydi.
+- Each customer's data is in a separate workspace — others cannot see it.
+- A subscription is activated only by a webhook signed by Paddle; a browser
+  cannot fake "I paid".
+- If the server is down, Paddle keeps retrying for hours — no payment is lost.
 
-## Hali qo'lda qilinadigan ishlar
+## Still done by hand
 
-- **Hisobni o'chirish so'rovi** — mijoz yozadi, siz bazadan o'chirasiz
-  (shartlarda "30 kun ichida" deb yozilgan).
-- **Barcha mijozlar ro'yxati** — alohida admin paneli yo'q; Paddle
-  dashboard'ida (to'lovlar) yoki bazada ko'rinadi.
-- **Email limiti** — Resend bepul tarifida kuniga 100 ta xat. Mijozlar
-  ko'paysa, pullik tarifga o'ting.
-- **Backup** — [DEPLOY-ONLINE.md](DEPLOY-ONLINE.md) 10-qadam; endi bu
-  mijozlaringizning ma'lumoti, shuning uchun serverdan tashqariga ham ko'chiring.
+- **Account deletion requests** — the customer writes, you delete from the
+  database (the terms say "within 30 days").
+- **List of all customers** — there is no separate admin panel; see the Paddle
+  dashboard (payments) or the database.
+- **Email limit** — Resend's free plan sends 100 emails a day. Move to a paid
+  plan as you grow.
+- **Backups** — step 10 of [DEPLOY-ONLINE.md](DEPLOY-ONLINE.md); this is now
+  your customers' data, so copy it off the server too.
 
-## Nimadir ishlamasa
+## When something does not work
 
-| Belgi | Sabab |
+| Symptom | Cause |
 |---|---|
-| Server ishga tushmaydi: `SMTP_PASSWORD is empty` | 2-qadam bajarilmagan |
-| Tasdiqlash xati kelmaydi | Resend'da domen tasdiqlanmagan yoki `SMTP_FROM` boshqa domen; Resend → Emails bo'limida xatolik ko'rinadi |
-| Xat spamga tushadi | `_dmarc` TXT yozuvi va Resend'ning barcha DNS yozuvlari qo'shilganini tekshiring |
-| Billing'da "Paddle isn't configured" | `frontend/.env.local` dagi Paddle qiymatlari bo'sh yoki build qilinmagan |
-| To'ladi, lekin "Active" bo'lmadi | Paddle → Notifications → destination → loglarda javobni ko'ring; URL `/api/billing/webhook` va secret to'g'riligini tekshiring. Server logi: `journalctl -u legion \| grep Paddle` |
-| Narx "—" ko'rinadi | `NEXT_PUBLIC_PADDLE_PRICE_ID` yoki client token yo'q; yoki `PRICE_LABEL` da `$` ishlatilgan |
+| The server will not start: `SMTP_PASSWORD is empty` | Step 2 not done |
+| The confirmation email does not arrive | The domain is not verified in Resend, or `SMTP_FROM` uses another domain; errors show in Resend → Emails |
+| Emails land in spam | Check that the `_dmarc` TXT record and all of Resend's DNS records are added |
+| Billing shows "Paddle isn't configured" | The Paddle values in `frontend/.env.local` are empty, or it was not rebuilt |
+| Paid, but it did not become "Active" | Paddle → Notifications → destination → check the response in the logs; check the URL `/api/billing/webhook` and the secret. Server log: `journalctl -u legion \| grep Paddle` |
+| The price shows "—" | `NEXT_PUBLIC_PADDLE_PRICE_ID` or the client token is missing, or `PRICE_LABEL` uses `$` |

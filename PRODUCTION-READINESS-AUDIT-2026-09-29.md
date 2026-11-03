@@ -5,7 +5,7 @@
 `packages/agent-identity/`, `ops/`, `deploy/`, `integrations/`, `.github/`) plus the current state of the
 GitHub repository `abdumannopp/legion-`.
 **Method:** I read the code and runtime configuration directly. Earlier audit documents (`SECURITY-AUDIT-*.md`,
-`AUDIT-2.md`, `HISOBOT-*.md`) were ignored, and nothing is credited because a document says it is done.
+`AUDIT-2.md`, `REPORT-*.md`) were ignored, and nothing is credited because a document says it is done.
 **Code changes:** none. This file is the only addition.
 
 > Paths below are relative to the zip root `legion/` unless prefixed `repo:` (the GitHub repository).

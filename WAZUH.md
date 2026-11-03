@@ -1,7 +1,7 @@
-# Wazuh → Legion integratsiyasi
+# Wazuh → Legion integration
 
-Wazuh menejeri xavfsizlik hodisasini aniqlaganda uni Legion'ga yuboradi.
-Legion uni alertga aylantiradi va WebSocket orqali dashboardga jonli uzatadi.
+When the Wazuh manager detects a security event, it sends it to Legion.
+Legion turns it into an alert and streams it live to the dashboard over WebSocket.
 
 ```
 Wazuh agent → Wazuh manager → custom-legion → POST /security-events/webhook → Legion → dashboard
@@ -9,42 +9,43 @@ Wazuh agent → Wazuh manager → custom-legion → POST /security-events/webhoo
 
 ---
 
-## 1. Legion tomonida webhook kalitini yarating
+## 1. Create a webhook credential in Legion
 
-Har bir tashkilotning **o'z tasodifiy kaliti** bor: `KEY_ID:SECRET`
-(`whk_…:whs_…`). Umumiy sir yo'q. Kalitni Legion administratori yaratadi va
-**sir faqat bir marta ko'rsatiladi**. Server shifrlash kaliti
-(`WEBHOOK_ENCRYPTION_KEY`, `npm run setup` yaratadi) sirlarni bazada shifrlab
-saqlaydi.
+Every organisation has **its own random credential**: `KEY_ID:SECRET`
+(`whk_…:whs_…`). There is no shared secret. A Legion administrator creates the
+credential, and **the secret is shown only once**. The server encryption key
+(`WEBHOOK_ENCRYPTION_KEY`, created by `npm run setup`) encrypts the secrets in
+the database.
 
-Server konsolidan (tenant ID kerak — 2-qadam):
+From the server console (you need the tenant ID — step 2):
 
 ```bash
 npm run webhook:credential -w server -- create --tenant TENANT_ID --label "wazuh-manager-1"
 ```
 
-yoki administrator sifatida API orqali: `POST /security-events/credentials`.
+or, as an administrator, through the API: `POST /security-events/credentials`.
 
-**Muhim:** kalit bo'lmasa, tashkilot nomidan hech narsa qabul qilinmaydi (401).
-Legion'ni qayta ishga tushirish shart emas.
+**Important:** without a credential, nothing is accepted on the organisation's
+behalf (401). Legion does not need a restart.
 
 ---
 
-## 2. Tenant ID ni oling
+## 2. Get the tenant ID
 
 ```bash
-# DATABASE_URL — server/.env dagi qiymat
+# DATABASE_URL — the value in server/.env
 psql "$DATABASE_URL" -c "SELECT id, name FROM tenants;"
 ```
 
-Yoki Settings sahifasidagi "Tashkilot ID". Tenant ID endi faqat kalit
-yaratishda kerak; Wazuh uni **yubormaydi** — tashkilot kalitning o'zidan aniqlanadi.
+Or "Organisation ID" on the Settings page. The tenant ID is needed only to
+create the credential; Wazuh does **not** send it — the organisation is
+identified from the credential itself.
 
 ---
 
-## 3. Skriptlarni Wazuh menejeriga ko'chiring
+## 3. Copy the scripts to the Wazuh manager
 
-Ikkala fayl ham kerak — Wazuh kengaytmasiz nomni chaqiradi, u esa `.py` ni ishga tushiradi.
+Both files are needed — Wazuh calls the name without an extension, which runs the `.py`.
 
 ```bash
 cp integrations/custom-legion     /var/ossec/integrations/
@@ -54,32 +55,32 @@ chmod 750 /var/ossec/integrations/custom-legion /var/ossec/integrations/custom-l
 chown root:wazuh /var/ossec/integrations/custom-legion /var/ossec/integrations/custom-legion.py
 ```
 
-Ruxsatlar noto'g'ri bo'lsa Wazuh skriptni umuman ishga tushirmaydi.
+If the permissions are wrong, Wazuh does not run the script at all.
 
 ---
 
-## 4. `ossec.conf` ga qo'shing
+## 4. Add it to `ossec.conf`
 
-`/var/ossec/etc/ossec.conf` faylida, `<ossec_config>` ichiga:
+In `/var/ossec/etc/ossec.conf`, inside `<ossec_config>`:
 
 ```xml
 <integration>
   <name>custom-legion</name>
-  <hook_url>http://LEGION_MANZILI:8000/security-events/webhook</hook_url>
+  <hook_url>http://LEGION_ADDRESS:8000/security-events/webhook</hook_url>
   <api_key>whk_XXXXXXXXXXXXXXXXXXXXXX:whs_YYYYYYYY…</api_key>
   <level>7</level>
   <alert_format>json</alert_format>
 </integration>
 ```
 
-| Maydon | Izoh |
+| Field | Notes |
 |---|---|
-| `hook_url` | Legion API manzili — ishlab chiqarishda **`https://`**. [DEPLOY-ONLINE.md](DEPLOY-ONLINE.md) bo'yicha o'rnatilgan bo'lsa: `https://DOMENINGIZ/api/security-events/webhook`. Wazuh Legion bilan bir serverda bo'lsa `http://127.0.0.1:8000/security-events/webhook` |
-| `api_key` | 1-qadamda chiqqan `KEY_ID:SECRET`, ikki nuqta bilan ajratilgan |
-| `level` | Shu darajadan yuqori alertlar yuboriladi. `7` — oqilona boshlanish |
-| `alert_format` | **Albatta `json`** bo'lishi kerak |
+| `hook_url` | Legion API address — **`https://`** in production. If installed following [DEPLOY-ONLINE.md](DEPLOY-ONLINE.md): `https://YOUR_DOMAIN/api/security-events/webhook`. If Wazuh runs on the same server as Legion: `http://127.0.0.1:8000/security-events/webhook` |
+| `api_key` | The `KEY_ID:SECRET` from step 1, separated by a colon |
+| `level` | Alerts at this level and above are sent. `7` is a sensible start |
+| `alert_format` | **Must be `json`** |
 
-Wazuh'ni qayta ishga tushiring:
+Restart Wazuh:
 
 ```bash
 systemctl restart wazuh-manager
@@ -87,21 +88,21 @@ systemctl restart wazuh-manager
 
 ---
 
-## 5. Tekshirish
+## 5. Check it works
 
-**Loglar:**
+**Logs:**
 
 ```bash
 tail -f /var/ossec/logs/integrations.log
 ```
 
-Muvaffaqiyatli natija:
+A successful line looks like:
 
 ```
 legion: OK rule=5720 status=202 {"status":"ingested","alert_id":"SEC-123559EACCF4DC48"}
 ```
 
-**Qo'lda sinov** (Wazuh'ni kutmasdan):
+**Manual test** (without waiting for Wazuh):
 
 ```bash
 python3 /var/ossec/integrations/custom-legion.py \
@@ -112,7 +113,7 @@ python3 /var/ossec/integrations/custom-legion.py \
 
 ---
 
-## Daraja (level) → Legion muhimligi
+## Wazuh level → Legion severity
 
 | Wazuh level | Legion severity |
 |---|---|
@@ -123,66 +124,65 @@ python3 /var/ossec/integrations/custom-legion.py \
 
 ---
 
-## Mumkin bo'lgan javoblar
+## Possible responses
 
-| Javob | Ma'nosi | Yechim |
+| Response | Meaning | Fix |
 |---|---|---|
-| `202 ingested` | Alert qabul qilindi | — |
-| `202 skipped, duplicate` | Aynan shu hodisa allaqachon bor | Normal holat |
-| `202 skipped` | `rule.description` bo'sh | `alert_format` `json` ekanini tekshiring |
-| `401 Invalid webhook credentials` | Kalit noto'g'ri, **bekor qilingan** yoki muddati tugagan (ataylab bir xil javob) | `api_key` ni tekshiring; kerak bo'lsa yangi kalit yarating |
-| `401 … too far from this server's clock` | Wazuh serverining soati noto'g'ri | Wazuh serverida NTP'ni yoqing |
-| `401 This request was already received` | Aynan shu so'rov qayta yuborildi (replay) | Skript har urinishda yangi nonce ishlatadi; qo'lda qayta yubormang |
-| `401 … script is out of date` | Eski `custom-legion.py` yoki `TENANT_ID:SECRET` formati | Yangi skriptni o'rnating, 1-qadamdagi kalitni qo'ying |
-| `401 Malformed webhook authentication headers` | Sarlavha formati buzilgan | Rasmiy skriptdan foydalaning |
+| `202 ingested` | Alert accepted | — |
+| `202 skipped, duplicate` | This exact event already exists | Normal |
+| `202 skipped` | `rule.description` is empty | Check that `alert_format` is `json` |
+| `401 Invalid webhook credentials` | The credential is wrong, **revoked** or expired (deliberately the same answer for all three) | Check `api_key`; create a new credential if needed |
+| `401 … too far from this server's clock` | The Wazuh server's clock is wrong | Enable NTP on the Wazuh server |
+| `401 This request was already received` | The same request was sent again (replay) | The script uses a new nonce on every attempt; do not re-send by hand |
+| `401 … script is out of date` | Old `custom-legion.py` or the old `TENANT_ID:SECRET` format | Install the new script and use the credential from step 1 |
+| `401 Malformed webhook authentication headers` | Broken header format | Use the official script |
 
 ---
 
-## Xavfsizlik eslatmasi
+## Security notes
 
-Ishlab chiqarishda (production) Legion'ni **HTTPS** orqasiga qo'ying —
-`deploy/nginx.conf` da namuna bor. Legion API'ni standart holatda faqat
-`127.0.0.1` da tinglaydi (`LEGION_BIND_ADDRESS`), ya'ni boshqa serverdagi
-Wazuh unga faqat HTTPS proxy orqali yeta oladi — bu ataylab qilingan.
+In production, put Legion behind **HTTPS** — there is an example in
+`deploy/nginx.conf`. By default the Legion API listens only on `127.0.0.1`
+(`LEGION_BIND_ADDRESS`), so Wazuh on another server can reach it only through
+the HTTPS proxy — this is deliberate.
 
-Autentifikatsiya: har bir xabar **imzolanadi**, sir tarmoq orqali yuborilmaydi.
-Sarlavhalar: `x-legion-key-id` (ochiq ID — tashkilot shundan aniqlanadi),
-`x-legion-timestamp`, `x-legion-nonce` (har so'rovda yangi tasodifiy qiymat) va
-`x-legion-signature` = `"v2=" + HMAC-SHA256(sir, "v2." + timestamp + "." + nonce
-+ "." + xom_tana)`. Rad etiladi: o'zgartirilgan tana, boshqa xabar/kalit imzosi,
-`WEBHOOK_MAX_SKEW_SECONDS` (5 daqiqa) dan eski/kelajakdagi vaqt, **oldin ko'rilgan
-nonce (replay)**, bekor qilingan yoki muddati tugagan kalit. `x-tenant-id`
-e'tiborga olinmaydi (bo'lsa, kalit egasiga mos bo'lishi shart).
+Authentication: every message is **signed**; the secret never travels over the
+network. Headers: `x-legion-key-id` (public ID — identifies the organisation),
+`x-legion-timestamp`, `x-legion-nonce` (a new random value per request) and
+`x-legion-signature` = `"v2=" + HMAC-SHA256(secret, "v2." + timestamp + "." + nonce
++ "." + raw_body)`. Rejected: a modified body, a signature from another message
+or credential, a timestamp older or newer than `WEBHOOK_MAX_SKEW_SECONDS`
+(5 minutes), **a nonce seen before (replay)**, a revoked or expired credential.
+`x-tenant-id` is ignored (if present, it must match the credential's owner).
 
-## Kalitni almashtirish (rotate) va bekor qilish (revoke)
+## Rotating and revoking a credential
 
 ```bash
-# yangi kalit; eskisi yana 24 soat ishlaydi (overlap)
+# new credential; the old one keeps working for 24 hours (overlap)
 npm run webhook:credential -w server -- rotate --tenant TENANT_ID --key whk_… --overlap-hours 24
-# darhol o'chirish
+# switch off immediately
 npm run webhook:credential -w server -- revoke --tenant TENANT_ID --key whk_…
-# hodisa (incident): tashkilotning barcha kalitlari
+# incident: every credential of the organisation
 npm run webhook:credential -w server -- revoke-all --tenant TENANT_ID
 ```
 
-Tartib: rotate → `ossec.conf` dagi `<api_key>` ni yangilang →
-`systemctl restart wazuh-manager` → eski kalit muddati o'zi tugaydi (yoki revoke).
+Order: rotate → update `<api_key>` in `ossec.conf` →
+`systemctl restart wazuh-manager` → the old credential expires on its own (or revoke it).
 API: `GET/POST /security-events/credentials`, `POST …/:id/rotate`, `DELETE …/:id`.
 
-## Ma'lum cheklovlar
+## Known limitations
 
-1. ~~Sarlavha — doimiy parol~~, ~~bitta global sir~~, ~~replay himoyasi yo'q~~ —
-   **tuzatildi (2026-09-29)**: har kalit tasodifiy va alohida, tenant kalitdan
-   aniqlanadi, nonce Postgres'da eslab qolinadi, rotate/revoke bor.
-2. **Kalit shifrlash kaliti (KEK) hali `.env` da**, secret manager/KMS'da emas
-   (ADR-003). `.env` va DB zaxirasi birga sizsa, kalitlar ochiladi.
-3. **Rate limit yo'q:** noto'g'ri imzoli so'rovlar har biri bitta DB so'rovi
-   (kalit ID bo'yicha) va HMAC hisoblaydi. Nginx/WAF darajasida cheklang.
-4. **Sensor tomonda sir ochiq matnda** (`ossec.conf`, fayl huquqlari bilan
-   himoyalangan). Wazuh serveri buzilsa, faqat **shu tashkilotning** kaliti
-   ketadi — uni revoke qiling.
-5. `http://` orqali yuborilsa, tana ochiq ko'rinadi (imzo uni yashirmaydi).
-   Production'da HTTPS shart.
+1. **The key-encryption key (KEK) is still in `.env`**, not in a secret
+   manager or KMS (see ADR-003 in [ADR.md](ADR.md)). If `.env` and a database
+   backup leak together, the credentials can be decrypted.
+2. **The sensor keeps the secret in plain text** (`ossec.conf`, protected by
+   file permissions). If the Wazuh server is compromised, only **that
+   organisation's** credential is exposed — revoke it.
+3. Over `http://` the body is visible on the network (a signature does not hide
+   it). HTTPS is required in production.
+4. Failed (badly signed) attempts are throttled per client address before the
+   body is read; correctly signed telemetry is never throttled. Add limits at
+   nginx/WAF level too.
 
 ---
 
@@ -208,111 +208,118 @@ For quiet periods, run the drain every minute on the manager:
 - The spool holds at most `LEGION_SPOOL_MAX_FILES` events (50 000); beyond
   that the oldest are dropped and the integration log says so.
 
+### A broken event does not block the queue
+
+If one event itself makes the server fail (HTTP 500), it does not hold up
+everything behind it:
+
+- the sensor skips it and sends the next ones;
+- after `LEGION_POISON_AFTER` failures (default 10) the event is moved to
+  `dead/` (not deleted — you can inspect it);
+- three 500s in a row are treated as a server problem: the sensor stops and
+  tries again later;
+- on connection errors, 401 and 403 the sensor stops immediately (events are kept).
+
+The failure counts are kept in `failures.state` in the spool folder.
+
 ---
 
-## Avtomatik javob: hujumchini Wazuh orqali bloklash
+## Automatic response: blocking the attacker through Wazuh
 
-Avtomatlashtirilgan va AI yordamidagi hujumlar bir necha soniyada o'nlab
-urinish qiladi. Legion bog'liq ogohlantirishlarni **hujum kampaniyalariga**
-birlashtiradi (Dashboard → **Himoya**) va xohlasangiz hujumchi manzilini Wazuh
-menejeringiz orqali **taxminan bir daqiqada** bloklaydi.
+Automated and AI-assisted attacks make dozens of attempts in seconds. Legion
+groups related alerts into **attack campaigns** (Dashboard → **Defense**) and,
+if you choose, blocks the attacker's address through your Wazuh manager in
+**about a minute**.
 
-### Legion nimani "kampaniya" deb biladi
+### What Legion treats as a campaign
 
-| Qoida | Shart | Avtomatik bloklanadimi |
+| Rule | Condition | Auto-blocked |
 |---|---|---|
-| Tez ko'p bosqichli hujum (`rapid_chain`) | bitta manzildan 15 daqiqada ≥ 3 xil MITRE usuli | ha |
-| Ko'p serverlarni aylanib chiqish (`wide_sweep`) | bitta manzildan 10 daqiqada ≥ 5 server | ha |
-| Keskin faollik (`velocity`) | bitta manzildan 5 daqiqada ≥ 30 ogohlantirish | ha |
-| Parol hujumi (`credential_attack`) | bitta manzildan 10 daqiqada ≥ 10 ta muvaffaqiyatsiz kirish yoki ≥ 5 xil hisobga urinish | ha |
-| Hisob buzib kirildi (`account_compromise`) | o'sha manzil ≥ 3 xatodan keyin 30 daqiqa ichida hisobga kirdi | ha (hujumchi manzili) |
-| Ko'p manzil, bitta server (`swarm`) | 10 daqiqada ≥ 10 manzil bitta serverga | **yo'q** (manzillar juda ko'p; bu DDoS — EDGE-SECURITY.md) |
-| AI'ni aldashga urinish (`ai_manipulation`) | log ichida AI'ga buyruq ("ignore previous instructions", yashirin belgilar, model tokenlari…) | **yo'q** (manzil emas, matn) |
+| Fast multi-stage attack (`rapid_chain`) | ≥ 3 different MITRE techniques from one address in 15 minutes | yes |
+| Sweep across many servers (`wide_sweep`) | ≥ 5 servers from one address in 10 minutes | yes |
+| Sudden burst (`velocity`) | ≥ 30 alerts from one address in 5 minutes | yes |
+| Password attack (`credential_attack`) | ≥ 10 failed sign-ins or ≥ 5 different accounts tried from one address in 10 minutes | yes |
+| Account broken into (`account_compromise`) | the same address signed in within 30 minutes after ≥ 3 failures | yes (the attacker's address) |
+| Many addresses, one server (`swarm`) | ≥ 10 addresses against one server in 10 minutes | **no** (too many addresses; this is DDoS — see EDGE-SECURITY.md) |
+| Attempt to manipulate AI (`ai_manipulation`) | instructions to an AI inside a log ("ignore previous instructions", hidden characters, model tokens…) | **no** (it is text, not an address) |
+| Ransomware (`ransomware`) | signs of ransomware, or ≥ 50 file changes on one host in a short time | no (isolate the host) |
+| Mailbox takeover (`mailbox_takeover`) | new forwarding or inbox rules, unusual mailbox access | no |
+| Phishing executed (`phishing_execution`) | an attachment or link opened and then a program run | no |
+| Supply chain (`supply_chain`) | a new package or update followed within 60 minutes by suspicious activity | no |
+| Slow intrusion (`slow_intrusion`) | ≥ 3 attack stages from one source spread over days (up to 7) | no |
 
-Har bir yangi kampaniya — **bitta** ogohlantirish ("Hunter" agenti), har
-urinish uchun alohida emas.
+Each new campaign is **one** alert (the "Hunter" agent), not one per attempt.
+See [THREATS.md](THREATS.md) for what Legion can and cannot do against each
+attack type.
 
-### Xavfsizlik chegaralari (o'chirib bo'lmaydi)
+### Safety limits (cannot be switched off)
 
-- Standart holatda **o'chiq** — faqat aniqlaydi va xabar beradi. Yoqishni
-  administrator Himoya sahifasida qiladi (audit jurnalida yoziladi).
-- Faqat **ommaviy** IP manzillar: ichki (10.x, 192.168.x, 172.16–31.x),
-  CGNAT, loopback, hujjat manzillari hech qachon avtomatik bloklanmaydi.
-- **Istisnolar ro'yxati** (o'z ofisingiz, hamkorlar, skanerlaringiz) — hech
-  qachon avtomatik bloklanmaydi.
-- Soatiga ko'pi bilan **50** avtomatik bloklash, bir vaqtda ko'pi bilan **1000**.
-- Har bir bloklash muddatli (5 daqiqa – 7 kun, standart 1 soat), audit
-  jurnalida yoziladi va Himoya sahifasida bir tugma bilan bekor qilinadi.
+- **Off** by default — Legion only detects and reports. An administrator turns
+  it on in the Defense page (recorded in the audit log).
+- **Public** IP addresses only: private (10.x, 192.168.x, 172.16–31.x), CGNAT,
+  loopback and documentation addresses are never blocked automatically.
+- An **allowlist** (your own office, partners, your scanners) — never blocked
+  automatically.
+- At most **50** automatic blocks per hour, at most **1000** active at once.
+- Every block expires (5 minutes – 7 days, default 1 hour), is written to the
+  audit log, and can be undone with one click on the Defense page.
 
-### Wazuh menejerida bir martalik sozlash
+### One-time setup on the Wazuh manager
 
 ```bash
-# 1. Skript (3-bo'limdagi bilan bir xil) va qoida
+# 1. Script (the same one as in section 3) and the rule
 cp integrations/wazuh/legion_rules.xml /var/ossec/etc/rules/legion_rules.xml
 chown root:wazuh /var/ossec/etc/rules/legion_rules.xml
 
-# 2. Sensor kaliti faylda (ossec.conf'dagi bilan bir xil KEY_ID:SECRET)
+# 2. Sensor credential in a file (the same KEY_ID:SECRET as in ossec.conf)
 echo 'whk_...:whs_...' > /var/ossec/etc/legion.key
 chown root:wazuh /var/ossec/etc/legion.key && chmod 640 /var/ossec/etc/legion.key
 
-# 3. Wazuh o'qiydigan fayl — qayta ishga tushirishdan OLDIN
+# 3. The file Wazuh reads — create it BEFORE restarting
 touch /var/ossec/logs/legion-blocklist.log
 chown wazuh:wazuh /var/ossec/logs/legion-blocklist.log
 ```
 
-4. `integrations/wazuh/ossec-legion-response.xml` dagi uchta blokni
-   (`wodle`, `localfile`, `active-response`) `ossec.conf` ichiga qo'shing,
-   `LEGION_URL` ni o'z `hook_url` ingiz bilan almashtiring.
-5. `/var/ossec/bin/wazuh-analysisd -t` (xato yo'qligini tekshiring), keyin
+4. Add the three blocks from `integrations/wazuh/ossec-legion-response.xml`
+   (`wodle`, `localfile`, `active-response`) to `ossec.conf`, replacing
+   `LEGION_URL` with your own `hook_url`.
+5. Run `/var/ossec/bin/wazuh-analysisd -t` (check there are no errors), then
    `systemctl restart wazuh-manager`.
 
-Tekshirish: `/var/ossec/logs/integrations.log` da har daqiqada
-`BLOCKLIST n active, m sent to active response` qatori chiqadi.
+Check: `/var/ossec/logs/integrations.log` shows a line
+`BLOCKLIST n active, m sent to active response` every minute.
 
-### Qanday ishlaydi
+### How it works
 
-1. Har daqiqada Wazuh `custom-legion.py --sync-blocklist` ni ishga tushiradi;
-   u Legion'dan **imzolangan** so'rov bilan ro'yxatni oladi (faqat shu
-   tashkilotniki).
-2. Yangi manzil uchun `legion-blocklist.log` ga bitta JSON qator yozadi.
-3. Wazuh qoida 100950 shu qatorni ko'radi va `firewall-drop` active
-   response'ni **barcha agentlarda** ishga tushiradi.
-4. Wazuh bloklashni `<timeout>` (600 s) dan keyin o'zi olib tashlaydi.
-   Legion hali bloklashni xohlasa, skript manzilni har 5 daqiqada qayta
-   e'lon qiladi — shuning uchun blok uzilmaydi.
-5. Legion'da blokdan chiqarsangiz, skript e'lon qilishni to'xtatadi va Wazuh
-   uni ko'pi bilan **10 daqiqada** olib tashlaydi.
+1. Every minute Wazuh runs `custom-legion.py --sync-blocklist`; it fetches the
+   list from Legion with a **signed** request (only this organisation's list).
+2. For a new address it writes one JSON line to `legion-blocklist.log`.
+3. Wazuh rule 100950 sees the line and runs the `firewall-drop` active response
+   **on every agent**.
+4. Wazuh removes the block itself after `<timeout>` (600 s). While Legion still
+   wants the block, the script re-announces the address every 5 minutes, so the
+   block does not lapse.
+5. If you unblock in Legion, the script stops announcing it and Wazuh removes
+   it within **10 minutes** at most.
 
-Legion'ning o'z bloklash hodisalari (guruh `legion_response`) Legion'ga yangi
-ogohlantirish bo'lib qaytib kelmaydi — ikki tomonda ham tekshiriladi.
+Legion's own blocking events (group `legion_response`) never come back to
+Legion as new alerts — this is checked on both sides.
 
-### Halol cheklovlar
+### Honest limits
 
-- **Hech bir tizim barcha hujumlarni to'xtatmaydi.** Bu tezlikni oshiradi:
-  odam ogohlantirishni o'qishidan oldin hujumchi to'xtatiladi.
-- Ko'p manzilli hujumni (botnet, DDoS) IP bloklash to'xtatmaydi — buning uchun
-  Cloudflare kabi chekka himoya kerak (EDGE-SECURITY.md).
-- Hujumchi log'dagi manzilni soxtalashtirishi mumkin (masalan, boshqa birovning
-  IP'si yozilgan log qatori). Shuning uchun: faqat ommaviy manzillar, istisnolar
-  ro'yxati, soatlik chegara va muddatli bloklar. O'z muhim manzillaringizni
-  istisnolarga qo'shing.
-- Bloklashni Wazuh agentlari bajaradi (`firewall-drop` → iptables). Agent
-  yo'q yoki iptables bo'lmagan joyda blok ishlamaydi. Bizning avtomatik
-  sinovimizda (`ops/tests/e2e-wazuh-response.mjs`, haqiqiy Wazuh 4.9.2)
-  Wazuh `firewall-drop` ni ishga tushirgani tekshirildi; Docker obrazida
-  iptables yo'qligi sababli yadro qoidasining o'zi tekshirilmadi.
-- Yangi `legion-blocklist.log` fayli: Wazuh kech topgan faylni oxiridan o'qiydi.
-  Yuqoridagi `touch` qadamini o'tkazib yuborsangiz, skript faylni o'zi yaratadi
-  va 2 daqiqa kutadi — birinchi bloklash shuncha kechikadi.
-
-## Buzilgan hodisa navbatni to'xtatmaydi
-
-Sensor Legion javob bera olmaganda hodisalarni `spool/` papkasida saqlaydi va keyin qayta yuboradi.
-Agar bitta hodisaning o'zi serverda xatoga olib kelsa (HTTP 500), u butun navbatni to'sib qo'ymaydi:
-
-- sensor uni o'tkazib yuboradi va keyingilarni yuboradi;
-- bir hodisa `LEGION_POISON_AFTER` marta (standart 10) muvaffaqiyatsiz bo'lsa, `spool/dead/` papkasiga ko'chiriladi (o'chirilmaydi, qo'lda ko'rish mumkin);
-- ketma-ket 3 ta hodisa 500 bersa, bu server muammosi deb hisoblanadi va sensor to'xtab, keyinroq qayta urinadi;
-- ulanish, 401 va 403 xatolarida sensor darrov to'xtaydi (hodisalar saqlanib qoladi).
-
-Urinishlar soni `spool/failures.state` faylida turadi.
+- **No system stops every attack.** This adds speed: the attacker is stopped
+  before a person has read the alert.
+- Blocking IPs does not stop an attack from many addresses (botnet, DDoS) —
+  that needs an edge service such as Cloudflare (EDGE-SECURITY.md).
+- An attacker can forge the address in a log (for example, a log line with
+  someone else's IP). That is why: public addresses only, an allowlist, an
+  hourly limit and expiring blocks. Put your own important addresses on the
+  allowlist.
+- Wazuh agents do the blocking (`firewall-drop` → iptables). Where there is no
+  agent or no iptables, the block does nothing. Our automated test
+  (`ops/tests/e2e-wazuh-response.mjs`, real Wazuh 4.9.2) confirmed that Wazuh
+  runs `firewall-drop`; the kernel rule itself was not verified, because the
+  Docker image has no iptables.
+- A new `legion-blocklist.log`: Wazuh reads a file it discovers late from the
+  end. If you skip the `touch` step above, the script creates the file itself
+  and waits 2 minutes — the first block is delayed by that much.

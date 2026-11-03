@@ -1,29 +1,28 @@
 # Legion — Windows
 
-> **Bu fayl yangilandi (2026-09).** Oldingi versiyasi eskirgan edi: u
-> `admin@legion.demo` / `legion123` demo hisobini va `server/data/legion.json`
-> faylini tilga olardi. Ikkalasi ham Legion 2.0 da olib tashlangan — demo
-> hisob mijoz serverida yaratilmaydi, ma'lumot PostgreSQL'da saqlanadi.
-> Hech qachon hammaga ma'lum parol bilan hisob yaratmang.
+> **Updated (2026-09).** The previous version was out of date: it mentioned a
+> demo account `admin@legion.demo` / `legion123` and a `server/data/legion.json`
+> file. Both were removed in Legion 2.0 — no demo account is created on a
+> customer's server, and data is stored in PostgreSQL.
+> Never create an account with a publicly known password.
 
-Node.js 20.9+ va PostgreSQL 14+ kerak. Docker shart emas.
+You need Node.js 20.9+ and PostgreSQL 14+. Docker is not required.
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\start-legion.ps1
 ```
 
-Skript Node.js va PostgreSQL'ni tekshiradi, paketlarni o'rnatadi, birinchi
-marta `npm run setup` ni ishga tushiradi (sirlar va baza), quradi va Legion'ni
-ishga tushiradi.
+The script checks Node.js and PostgreSQL, installs the packages, runs
+`npm run setup` the first time (secrets and database), builds and starts Legion.
 
-- Dashboard: http://localhost:3000 — birinchi ochganingizda **o'zingizning**
-  administrator hisobingizni yaratasiz; shundan keyin ro'yxatdan o'tish yopiladi.
-- API holati: http://localhost:8000/health — `"database":"up"` bo'lishi kerak.
+- Dashboard: http://localhost:3000 — the first time you open it, you create
+  **your own** administrator account; after that, sign-up closes.
+- API status: http://localhost:8000/health — should show `"database":"up"`.
 
-Batafsil, qadamma-qadam: [SINOV.md](SINOV.md). Mijoz uchun to'liq qo'llanma:
+Step by step: [TRY-LOCALLY.md](TRY-LOCALLY.md). Full guide for customers:
 [INSTALL.md](INSTALL.md).
 
-**Eslatma:** Windows — faqat sinov va baholash uchun. Odamlar tayanadigan
-server uchun Linux ishlating (`npm run setup`, so'ng doimiy ishlashi uchun
-[deploy/legion.service](deploy/legion.service) kabi process supervisor).
+**Note:** Windows is for testing and evaluation only. For a server people rely
+on, use Linux (`npm run setup`, then a process supervisor such as
+[deploy/legion.service](deploy/legion.service) to keep it running).

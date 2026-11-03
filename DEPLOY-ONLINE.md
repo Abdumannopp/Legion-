@@ -1,98 +1,97 @@
-# Legion'ni internetga chiqarish (onlayn)
+# Putting Legion online
 
-Bu qo'llanma oxirida Legion `https://legion.sizningdomen.uz` kabi manzilda,
-HTTPS bilan, server qayta yoqilganda ham o'zi ishga tushadigan holatda
-ishlaydi. Taxminan 30–60 daqiqa ketadi. Buyruqlarni ko'chirib qo'yish
-kifoya.
+At the end of this guide Legion runs at an address such as
+`https://legion.yourdomain.com`, over HTTPS, and starts by itself when the
+server reboots. It takes about 30–60 minutes. Copying the commands is enough.
 
-> **Nega Vercel yoki Netlify emas?** Legion'ga doim ishlab turadigan server,
-> PostgreSQL bazasi va jonli ulanish (WebSocket) kerak. Bunday "serverless"
-> xizmatlar buni bermaydi. Oddiy virtual server (VPS) — to'g'ri yo'l.
+> **Why not Vercel or Netlify?** Legion needs an always-on server, a PostgreSQL
+> database and live connections (WebSocket). "Serverless" services do not offer
+> these. An ordinary virtual server (VPS) is the right choice.
 
 ---
 
-## 0. Nima kerak
+## 0. What you need
 
 | | |
 |---|---|
-| **Server (VPS)** | Ubuntu 24.04, kamida 2 CPU, 4 GB RAM, 40 GB disk. Istalgan provayder: Hetzner, DigitalOcean, Contabo, mahalliy hosting — farqi yo'q. Sotib olgach sizga **IP manzil** va **root paroli** (yoki SSH kalit) beriladi. |
-| **Domen** | Masalan `sizningdomen.uz`. Legion uchun alohida subdomen ishlatamiz: `legion.sizningdomen.uz`. |
-| **Loyiha fayli** | `Legion-….zip` (yoki Git repozitoriy). |
+| **Server (VPS)** | Ubuntu 24.04, at least 2 CPUs, 4 GB RAM, 40 GB disk. Any provider: Hetzner, DigitalOcean, Contabo, a local host — it makes no difference. After buying, you get an **IP address** and a **root password** (or SSH key). |
+| **Domain** | For example `yourdomain.com`. We use a separate subdomain for Legion: `legion.yourdomain.com`. |
+| **Project files** | The `Legion-….zip` (or the Git repository). |
 
-Pastda hamma joyda `legion.sizningdomen.uz` ni **o'z domeningiz** bilan,
-`SERVER_IP` ni serveringiz IP manzili bilan almashtiring.
+Everywhere below, replace `legion.yourdomain.com` with **your own domain** and
+`SERVER_IP` with your server's IP address.
 
 ---
 
-## 1. Domenni serverga yo'naltiring
+## 1. Point the domain at the server
 
-Domen sotib olgan joyingizning DNS sozlamalarida yangi yozuv qo'shing:
+In the DNS settings where you bought the domain, add a record:
 
-| Turi | Nomi | Qiymati |
+| Type | Name | Value |
 |---|---|---|
 | `A` | `legion` | `SERVER_IP` |
 
-Tekshirish (o'z kompyuteringizda): `ping legion.sizningdomen.uz` — javob
-`SERVER_IP` dan kelishi kerak. Ba'zan 5–30 daqiqa kutish kerak bo'ladi.
-**Bu ishlamaguncha 7-qadamdagi HTTPS ham ishlamaydi.**
+Check (on your own computer): `ping legion.yourdomain.com` — the reply should
+come from `SERVER_IP`. Sometimes you need to wait 5–30 minutes.
+**HTTPS in step 7 will not work until this does.**
 
 ---
 
-## 2. Serverga ulaning
+## 2. Connect to the server
 
-Windows'da PowerShell, Mac/Linux'da Terminal:
+PowerShell on Windows, Terminal on Mac/Linux:
 
 ```bash
 ssh root@SERVER_IP
 ```
 
-Qolgan barcha buyruqlar **serverda** bajariladi.
+All remaining commands run **on the server**.
 
 ---
 
-## 3. Kerakli dasturlarni o'rnating
+## 3. Install the required software
 
 ```bash
 apt update && apt upgrade -y
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
 apt install -y nodejs postgresql nginx certbot python3-certbot-nginx unzip git
 
-# Firewall: faqat SSH va veb (80/443) ochiq
+# Firewall: only SSH and web (80/443) open
 ufw allow OpenSSH
 ufw allow 'Nginx Full'
 ufw --force enable
 ```
 
-Tekshirish: `node --version` → `v22…`.
+Check: `node --version` → `v22…`.
 
-PostgreSQL uchun administrator parolini o'rnating (o'ylab toping va
-**yozib qo'ying** — 5-qadamda so'raladi, backup tekshiruvi uchun ham kerak):
+Set the PostgreSQL administrator password (choose one and **write it down** —
+step 5 asks for it, and backup verification needs it too):
 
 ```bash
-sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'BU-YERGA-KUCHLI-PAROL'"
+sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'PUT-A-STRONG-PASSWORD-HERE'"
 ```
 
 ---
 
-## 4. Legion fayllarini joylang
+## 4. Put the Legion files in place
 
-Legion alohida, imtiyozsiz `legion` foydalanuvchisi nomidan ishlaydi.
+Legion runs as a separate, unprivileged `legion` user.
 
-**Zip fayl bo'lsa** — o'z kompyuteringizdan (serverda emas!) yuklang:
-
-```bash
-scp Legion-2026-09-28-dizayn.zip root@SERVER_IP:/opt/
-```
-
-So'ng serverda:
+**From a zip file** — upload it from your own computer (not the server!):
 
 ```bash
-cd /opt && unzip -q Legion-*.zip && rm Legion-*.zip   # /opt/legion papkasi paydo bo'ladi
+scp Legion-*.zip root@SERVER_IP:/opt/
 ```
 
-**Git bo'lsa**: `git clone <repo-manzili> /opt/legion`
+Then on the server:
 
-Keyin (ikkala holatda ham):
+```bash
+cd /opt && unzip -q Legion-*.zip && rm Legion-*.zip   # creates the /opt/legion folder
+```
+
+**From Git**: `git clone <repository-url> /opt/legion`
+
+Then (either way):
 
 ```bash
 adduser --system --group --home /opt/legion --no-create-home legion
@@ -101,185 +100,178 @@ chown -R legion:legion /opt/legion
 
 ---
 
-## 5. Sozlash va qurish
+## 5. Configure and build
 
 ```bash
 cd /opt/legion
 sudo -u legion npm install
-sudo -u legion npm run setup -- --domain legion.sizningdomen.uz
+sudo -u legion npm run setup -- --domain legion.yourdomain.com
 sudo -u legion npm run build
 ```
 
-`npm run setup` PostgreSQL parolini so'raydi — 3-qadamdagi parolni kiriting
-(Host, Port, Superuser name savollariga shunchaki Enter). U bazani, Legion'ning
-alohida (superuser bo'lmagan) rolini va barcha sirlarni yaratadi.
-`--domain` tufayli manzillar darhol `https://…` qilib yoziladi.
+`npm run setup` asks for the PostgreSQL password — enter the one from step 3
+(just press Enter for Host, Port and Superuser name). It creates the database,
+Legion's own (non-superuser) role and all secrets. Thanks to `--domain`, the
+addresses are written as `https://…` straight away.
 
-Tashkilotingiz nomi maxfiylik va shartlar sahifalarida chiqadi —
-`/opt/legion/frontend/.env.local` dagi `NEXT_PUBLIC_OPERATOR_NAME` va
-`NEXT_PUBLIC_SUPPORT_EMAIL` ni to'ldiring, so'ng `sudo -u legion npm run build`
-ni qayta ishga tushiring.
+Your organisation's name appears on the privacy and terms pages — fill in
+`NEXT_PUBLIC_OPERATOR_NAME` and `NEXT_PUBLIC_SUPPORT_EMAIL` in
+`/opt/legion/frontend/.env.local`, then run `sudo -u legion npm run build` again.
 
-> `npm run setup` ni keyin qayta ishga tushirish xavfsiz: siz qo'shgan
-> sozlamalar (SMTP, AI kaliti, domen) o'chmaydi.
+> Running `npm run setup` again later is safe: settings you added (SMTP,
+> AI key, domain) are not removed.
 
 ---
 
-## 6. Doimiy ishlashi uchun (systemd)
+## 6. Keep it running (systemd)
 
 ```bash
 cp /opt/legion/deploy/legion.service /etc/systemd/system/legion.service
 systemctl daemon-reload
 systemctl enable --now legion
-systemctl status legion        # "active (running)" bo'lishi kerak
+systemctl status legion        # should show "active (running)"
 ```
 
-Endi Legion server qayta yoqilganda ham, qulasa ham o'zi ishga tushadi.
+Legion now starts by itself after a reboot or a crash.
 
 ---
 
-## 7. nginx va HTTPS
+## 7. nginx and HTTPS
 
 ```bash
 cp /opt/legion/deploy/nginx.conf /etc/nginx/sites-available/legion
-sed -i 's/legion.example.com/legion.sizningdomen.uz/' /etc/nginx/sites-available/legion
+sed -i 's/legion.example.com/legion.yourdomain.com/' /etc/nginx/sites-available/legion
 ln -s /etc/nginx/sites-available/legion /etc/nginx/sites-enabled/legion
 rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx
 
-certbot --nginx -d legion.sizningdomen.uz
+certbot --nginx -d legion.yourdomain.com
 ```
 
-Certbot email so'raydi va shartlarga rozilik so'raydi. U bepul SSL
-sertifikatini oladi, nginx'ga HTTPS'ni qo'shadi, `http://` ni `https://` ga
-yo'naltiradi va sertifikatni o'zi avtomatik yangilab turadi.
+Certbot asks for an email and agreement to its terms. It gets a free SSL
+certificate, adds HTTPS to nginx, redirects `http://` to `https://`, and renews
+the certificate automatically.
 
 ---
 
-## 8. Birinchi administrator
+## 8. The first administrator
 
-Brauzerda oching: **https://legion.sizningdomen.uz/setup**
+Open in a browser: **https://legion.yourdomain.com/setup**
 
-Bir martalik **setup token** so'raladi. Uni serverda oling:
+It asks for a one-time **setup token**. Get it on the server:
 
 ```bash
 cat /opt/legion/server/.legion-setup-token
 ```
 
-Email, parol va tashkilot nomini kiriting — siz administrator bo'lasiz va
-ro'yxatdan o'tish yopiladi. Qolganlar Settings → Team orqali taklif bilan
-qo'shiladi.
+Enter your email, password and organisation name — you become the administrator
+and sign-up closes. Others join by invitation through Settings → Team.
 
-**Buni darhol qiling:** administrator yaratilmaguncha tokenni bilgan har
-kim sahifani egallashi mumkin (token faqat serverda, shuning uchun xavf past,
-lekin kechiktirmang).
+**Do this straight away:** until an administrator exists, anyone who knows the
+token can take over the page (the token is only on the server, so the risk is
+low, but do not delay).
 
 ---
 
-## 9. Wazuh'ni ulash
+## 9. Connect Wazuh
 
-[WAZUH.md](WAZUH.md) dagi qadamlar, faqat `hook_url` endi:
+Follow [WAZUH.md](WAZUH.md); only the `hook_url` is now:
 
 ```xml
-<hook_url>https://legion.sizningdomen.uz/api/security-events/webhook</hook_url>
+<hook_url>https://legion.yourdomain.com/api/security-events/webhook</hook_url>
 ```
 
-`api_key` uchun `KEY_ID:SECRET` kerak (`whk_…:whs_…`) — har tashkilotning o'z
-tasodifiy kaliti. Uni administrator yaratadi (sir faqat bir marta ko'rsatiladi):
+`api_key` needs a `KEY_ID:SECRET` (`whk_…:whs_…`) — each organisation's own
+random credential. An administrator creates it (the secret is shown only once):
 
 ```bash
 cd /opt/legion && npm run webhook:credential -w server -- create --tenant TENANT_ID --label "wazuh-1"
 ```
 
-Tenant ID: Settings sahifasida. `SECURITY_EVENT_WEBHOOK_SECRET` endi autentifikatsiya
-uchun ishlatilmaydi. `.env` dagi `WEBHOOK_ENCRYPTION_KEY` ni zaxira nusxalarda
-bazadan **alohida** saqlang.
+The tenant ID is on the Settings page. `SECURITY_EVENT_WEBHOOK_SECRET` is no
+longer used for authentication. Keep `WEBHOOK_ENCRYPTION_KEY` from `.env`
+**separately** from database backups.
 
 ---
 
-## 10. Backup (majburiy)
+## 10. Backups (required)
 
 ```bash
 mkdir -p /var/log/legion && chown legion:legion /var/log/legion
 crontab -u legion -e
 ```
 
-Ochilgan faylning oxiriga qo'shing (har kecha soat 03:00):
+Add at the end of the file that opens (every night at 03:00):
 
 ```cron
 0 3 * * * cd /opt/legion && DATABASE_URL="$(sed -n 's/^DATABASE_URL=//p' server/.env)" ./ops/backup.sh >> /var/log/legion/backup.log 2>&1
 ```
 
-Backup'lar `/opt/legion/backups/` ga tushadi. **Ularni serverdan
-tashqariga ham ko'chiring** — server yo'qolsa, uning ichidagi backup ham
-yo'qoladi. Oyiga bir marta backup haqiqatan tiklanishini tekshiring
-([BACKUP.md](BACKUP.md)):
+Backups go to `/opt/legion/backups/`. **Copy them off the server too** — if the
+server is lost, the backups on it are lost with it. Once a month, check that a
+backup really restores ([RECOVERY.md](RECOVERY.md), [BACKUP.md](BACKUP.md)):
 
 ```bash
 cd /opt/legion && DATABASE_URL="$(sed -n 's/^DATABASE_URL=//p' server/.env)" \
-  DATABASE_ADMIN_URL="postgresql://postgres:3-QADAMDAGI-PAROL@localhost/postgres" \
+  DATABASE_ADMIN_URL="postgresql://postgres:PASSWORD-FROM-STEP-3@localhost/postgres" \
   ./ops/verify-backup.sh
 ```
 
 ---
 
-## 11. Yangilash
+## 11. Updating
 
 ```bash
 cd /opt/legion
 sudo -u legion env DATABASE_URL="$(sed -n 's/^DATABASE_URL=//p' server/.env)" ./ops/backup.sh
-# yangi fayllarni joylang (git pull, yoki yangi zip'ni ustidan oching)
+# put the new files in place (git pull, or unzip the new archive over it)
 chown -R legion:legion /opt/legion
 sudo -u legion npm install
 sudo -u legion npm run build
 systemctl restart legion
 ```
 
-Baza sxemasi o'zi yangilanadi, ma'lumot va sirlar saqlanadi.
+The database schema updates itself; data and secrets are kept.
 
 ---
 
-## 12. DDoS hujumdan himoya (Cloudflare, tavsiya etiladi)
+## 12. DDoS protection (Cloudflare, recommended)
 
-Serverning o'zi hamma narsani to'xtata olmaydi: hujumchi kanalingizni (Gbit/s)
-to'ldirib qo'ysa, so'rov Legion'ga yetmasdan ham sayt ochilmay qoladi. Buni
-faqat serverdan **oldinda** turuvchi xizmat (CDN) hal qiladi. Eng oddiy yo'l —
-Cloudflare'ning bepul tarifi. Legion va nginx tomoni esa ana shu xizmatning
-ortida to'g'ri ishlashga tayyorlangan (tayyor skriptlar `ops/` va `deploy/`
-papkalarida).
+The server alone cannot stop everything: if an attacker fills your connection
+(Gbit/s), the site goes down before a request even reaches Legion. Only a
+service **in front of** the server (a CDN) solves that. The simplest option is
+Cloudflare's free plan. Legion and nginx are prepared to work correctly behind
+it (ready-made scripts in `ops/` and `deploy/`).
 
-**Nima uchun bu qadam kerak.** Cloudflare ortida nginx har bir tashrif
-buyuruvchini Cloudflare'ning manzili sifatida ko'radi. Natijada "bir manzildan
-ko'p urinish" cheklovlari hamma uchun **bitta** hisoblagich bo'lib qoladi:
-bitta hujumchi hammani kirishdan to'sib qo'yadi. Haqiqiy manzil
-`CF-Connecting-IP` sarlavhasida keladi, lekin sarlavhaga faqat Cloudflare'dan
-kelganda ishonish mumkin. Quyidagi qadamlar aynan shuni sozlaydi.
+**Why this step matters.** Behind Cloudflare, nginx sees every visitor as a
+Cloudflare address. "Too many attempts from one address" limits then become
+**one** counter for everybody: a single attacker locks everyone out. The real
+address arrives in the `CF-Connecting-IP` header, but that header can be trusted
+only when the request really comes from Cloudflare. The steps below set this up.
 
-### 12.1. Domenni Cloudflare'ga o'tkazing
+### 12.1. Move the domain to Cloudflare
 
-1. cloudflare.com'da bepul hisob oching, domeningizni qo'shing va domen
-   sotib olgan joyingizda nameserver'larni Cloudflare bergan qiymatlarga
-   almashtiring.
-2. DNS bo'limida `legion` yozuvi **proxied** (to'q sariq bulut) bo'lsin.
-3. **SSL/TLS → Overview** da rejim: **Full (strict)**. (Buning uchun serverda
-   haqiqiy sertifikat bo'lishi kerak — 7-qadamdagi `certbot` buni beradi.
-   Sertifikatni **12.4 dan oldin** oling.)
+1. Create a free account at cloudflare.com, add your domain, and change the
+   nameservers where you bought the domain to the ones Cloudflare gives you.
+2. In DNS, make the `legion` record **proxied** (orange cloud).
+3. In **SSL/TLS → Overview** choose **Full (strict)**. (This needs a real
+   certificate on the server — `certbot` in step 7 provides it. Get the
+   certificate **before 12.4**.)
 
-### 12.2. nginx haqiqiy manzilni Cloudflare'dan olsin
+### 12.2. Let nginx take the real address from Cloudflare
 
 ```bash
 cd /opt/legion
 sudo ops/update-cloudflare-ips.sh --reload
 ```
 
-Skript Cloudflare'ning rasmiy manzillar ro'yxatini yuklaydi, tekshiradi
-(noto'g'ri yoki juda keng diapazonni rad etadi — nginx'ni butun internetga
-ishontirib qo'ymaslik uchun), `/etc/nginx/legion-cloudflare.conf` ni yozadi,
-`nginx -t` bilan sinaydi va qayta yuklaydi. Biror narsa noto'g'ri bo'lsa,
-eski fayl joyida qoladi.
+The script downloads Cloudflare's official address list, validates it (refusing
+wrong or overly wide ranges, so nginx never trusts the whole internet), writes
+`/etc/nginx/legion-cloudflare.conf`, tests with `nginx -t` and reloads. If
+anything is wrong, the old file stays in place.
 
-Keyin `/etc/nginx/sites-available/legion` ichida quyidagi qatordan `#` ni
-olib tashlang va nginx'ni qayta yuklang:
+Then, in `/etc/nginx/sites-available/legion`, remove the `#` from this line and
+reload nginx:
 
 ```
     include /etc/nginx/legion-cloudflare.conf;
@@ -289,8 +281,8 @@ olib tashlang va nginx'ni qayta yuklang:
 nginx -t && systemctl reload nginx
 ```
 
-Cloudflare manzillari o'zgarib turadi, shuning uchun ro'yxatni haftada bir
-yangilab turadigan taymerni yoqing:
+Cloudflare's addresses change over time, so enable the timer that refreshes the
+list weekly:
 
 ```bash
 cp /opt/legion/deploy/legion-cloudflare-ips.service /etc/systemd/system/
@@ -299,222 +291,213 @@ systemctl daemon-reload
 systemctl enable --now legion-cloudflare-ips.timer
 ```
 
-> Legion'ga (`server/.env`) hech narsa qo'shish shart emas: u faqat shu
-> serverdagi nginx'ga ishonadi va mijoz manzilini nginx qo'ygan sarlavhadan
-> oladi. `TRUSTED_PROXIES` ni o'zgartirmang.
+> Nothing needs to be added to Legion (`server/.env`): it trusts only the nginx
+> on this server and takes the client address from the header nginx sets.
+> Do not change `TRUSTED_PROXIES`.
 
-### 12.3. Tekshirib ko'ring
+### 12.3. Check it
 
-Brauzerda saytni oching va kiring. Keyin hammasini bitta skript tekshiradi
-(hech narsani o'zgartirmaydi, faqat o'qiydi):
+Open the site in a browser and sign in. Then one script checks everything (it
+changes nothing, it only reads):
 
 ```bash
-# serverning o'zida — nginx, taymer, firewall, loglarda haqiqiy IP ko'rinishi:
-sudo /opt/legion/ops/check-cloudflare-setup.sh --domain legion.sizningdomen.uz --local
+# on the server itself — nginx, the timer, the firewall, real IPs in the logs:
+sudo /opt/legion/ops/check-cloudflare-setup.sh --domain legion.yourdomain.com --local
 
-# BOSHQA kompyuterdan (masalan, o'zingiznikidan) — DNS, HTTPS, Wazuh webhook'i,
-# server IP orqali to'g'ridan-to'g'ri kirib bo'lmasligi:
-ops/check-cloudflare-setup.sh --domain legion.sizningdomen.uz --server-ip SERVER_IP
+# from ANOTHER computer (e.g. your own) — DNS, HTTPS, the Wazuh webhook,
+# and that the server cannot be reached directly by its IP:
+ops/check-cloudflare-setup.sh --domain legion.yourdomain.com --server-ip SERVER_IP
 ```
 
-Har bir qator `OK`, `WARN` yoki `FAIL` bo'ladi; `FAIL` qatorida nima qilish
-kerakligi yozilgan. Hammasi `OK` bo'lsa — sozlama to'g'ri. Natijani menga
-(yoki texnik yordamchingizga) yuborsangiz, nima noto'g'riligini aytib beradi.
-(12.4 ni bajarmaguningizcha `--server-ip` tekshiruvi `FAIL` beradi — bu kutilgan.)
+Each line is `OK`, `WARN` or `FAIL`; a `FAIL` line says what to do. All `OK`
+means the setup is right. Send the output to your technical support if
+something is unclear. (Until you do 12.4, the `--server-ip` check reports
+`FAIL` — that is expected.)
 
-### 12.4. Serverni to'g'ridan-to'g'ri hujumdan yoping (origin lockdown)
+### 12.4. Close the server to direct attacks (origin lockdown)
 
-Hujumchi Cloudflare'ni chetlab, server IP manziliga to'g'ridan-to'g'ri
-yuborishi mumkin. Buni oldini olish uchun 80/443 portlarni faqat
-Cloudflare'ga oching:
+An attacker can bypass Cloudflare and send traffic straight to the server's IP.
+To prevent that, open ports 80/443 to Cloudflare only:
 
 ```bash
-sudo ops/update-cloudflare-ips.sh --ufw            # avval faqat ko'rsatadi (hech narsa o'zgarmaydi)
-sudo ops/update-cloudflare-ips.sh --ufw --apply    # qoidalarni qo'shadi
+sudo ops/update-cloudflare-ips.sh --ufw            # shows the plan first (changes nothing)
+sudo ops/update-cloudflare-ips.sh --ufw --apply    # adds the rules
 ufw status numbered
-ufw delete allow 'Nginx Full'                      # hammaga ochiq qoidani olib tashlang
+ufw delete allow 'Nginx Full'                      # remove the open-to-everyone rule
 ```
 
-SSH qoidasiga tegilmaydi. Tekshiruv: `curl -m 5 http://SERVER_IP/` **javob
-bermasligi** kerak, `https://legion.sizningdomen.uz` esa ishlashi kerak.
+The SSH rule is untouched. Check: `curl -m 5 http://SERVER_IP/` must **not
+answer**, while `https://legion.yourdomain.com` must work.
 
-Diqqat: shundan keyin Wazuh menejeri Legion'ga **IP orqali emas, domen orqali**
-(`https://legion.sizningdomen.uz/api/security-events/webhook`) yuborishi
-kerak, aks holda to'siqqa uchraydi. Yangi Cloudflare diapazoni paydo bo'lsa,
-taymer nginx ro'yxatini yangilaydi, lekin `ufw` qoidalarini **qo'lda**
-qayta ishga tushirishingiz kerak (`--ufw --apply` — ortiqcha qoidalar
-qo'shilmaydi, faqat yetishmaganlari).
+Note: after this, the Wazuh manager must send to Legion **by domain, not by IP**
+(`https://legion.yourdomain.com/api/security-events/webhook`), otherwise it hits
+the block. When Cloudflare adds a new range, the timer updates the nginx list,
+but you must re-run the `ufw` rules **by hand** (`--ufw --apply` — it adds only
+the missing rules, no duplicates).
 
-### 12.5. Cloudflare panelidagi qoidalar
+### 12.5. Rules in the Cloudflare dashboard
 
-(Menyu nomlari vaqt o'tishi bilan o'zgarishi mumkin; bepul tarifda qoidalar
-soni cheklangan.)
+(Menu names change over time; the free plan limits the number of rules.)
 
-- **Security → WAF → Rate limiting rules**: `/api/auth/` yo'li uchun
-  bir manzildan daqiqasiga ~30 so'rov, oshsa — blok. (Legion va nginx o'z
-  cheklovlariga ega; Cloudflare'dagisi so'rovni serverga umuman yetkazmaydi.)
-- **Security → Settings**: *Bot Fight Mode* ni yoqish mumkin. Hujum paytida
-  vaqtincha **"I'm Under Attack"** rejimini yoqing.
-- **Wazuh webhook'i.** Cloudflare brauzer bo'lmagan mijozlarni (Wazuh
-  skripti) bot deb tekshiruvga yo'naltirishi mumkin. `check-cloudflare-setup.sh`
-  buni aniqlaydi ("Cloudflare blocks the webhook"). Shunda
-  `/api/security-events/webhook` yo'li uchun *Security → WAF → Custom rules*:
-  **URI Path equals `/api/security-events/webhook` → Skip** (Bot Fight /
-  Rate limiting) qoidasini qo'shing. Bu qoida Cloudflare hisobida
-  **sinab ko'rilmagan** (panelning joriy ko'rinishiga bog'liq) — shuning
-  uchun qo'shgandan keyin skriptni qayta ishga tushiring.
-  To'siq paytida hodisalar **yo'qolmaydi**: Wazuh skripti Cloudflare to'sig'ini
-  taniydi, hodisani o'z navbatida (spool) saqlaydi, logga
-  (`/var/ossec/logs/integrations.log`) aniq sababni yozadi va to'siq
-  olingach avtomatik qayta yuboradi. Webhook baribir o'z imzosi bilan
-  himoyalangan: noto'g'ri imzoli so'rovlar rad etiladi va cheklanadi.
-- WebSocket (jonli ogohlantirishlar) Cloudflare'ning barcha tariflarida ishlaydi.
+- **Security → WAF → Rate limiting rules**: for the `/api/auth/` path, about 30
+  requests per minute from one address, block above that. (Legion and nginx
+  have their own limits; Cloudflare's stops the request before it reaches the server.)
+- **Security → Settings**: you can enable *Bot Fight Mode*. During an attack,
+  temporarily turn on **"I'm Under Attack"** mode.
+- **The Wazuh webhook.** Cloudflare may send non-browser clients (the Wazuh
+  script) to a bot challenge. `check-cloudflare-setup.sh` detects this
+  ("Cloudflare blocks the webhook"). Then add a rule in *Security → WAF → Custom
+  rules*: **URI Path equals `/api/security-events/webhook` → Skip** (Bot Fight /
+  Rate limiting). This rule has **not been tested** on a Cloudflare account
+  (it depends on the dashboard's current layout) — re-run the script after adding it.
+  While blocked, events are **not lost**: the Wazuh script recognises the
+  Cloudflare block, keeps the event in its spool, writes the exact reason to the
+  log (`/var/ossec/logs/integrations.log`) and re-sends automatically once the
+  block is lifted. The webhook is still protected by its own signature: badly
+  signed requests are refused and throttled.
+- WebSocket (live alerts) works on every Cloudflare plan.
 
-### 12.6. Quvvat oshirish (agar hujum katta bo'lsa)
+### 12.6. Scaling up (if the attack is large)
 
-Legion bir nechta nusxada ishlashi mumkin: umumiy PostgreSQL va Redis
-(`server/.env` da `REDIS_URL`; tafsilot — [GLOBAL-SAAS-ARCHITECTURE.md](GLOBAL-SAAS-ARCHITECTURE.md))
-va nginx'dagi `upstream legion_api` ga yana bir `server` qatori.
-Sozlanadigan qiymatlar (`server/.env`):
+Legion can run as several instances: a shared PostgreSQL and Redis
+(`REDIS_URL` in `server/.env`; details in [GLOBAL-SAAS-ARCHITECTURE.md](GLOBAL-SAAS-ARCHITECTURE.md))
+and one more `server` line in nginx's `upstream legion_api`.
+Tunable values (`server/.env`):
 
-| O'zgaruvchi | Ma'nosi |
+| Variable | Meaning |
 |---|---|
-| `PASSWORD_HASH_WORKERS` | parol tekshiruvchi oqimlar soni (standart: avtomatik; o'lchovda 1–3 oqim o'rtasida sezilarli farq chiqmadi) |
-| `HTTP_FIRST_REQUEST_TIMEOUT_SECONDS` | birinchi so'rovni yubormagan ulanishni yopish (standart 15 s, `0` — o'chirish) |
-| `PASSWORD_HASH_MAX_PRIORITY` | tanish qurilmalar uchun zaxira navbat hajmi (12.8; standart — oddiy navbat bilan teng) |
+| `PASSWORD_HASH_WORKERS` | number of password-checking threads (default: automatic; measurements showed no significant difference between 1 and 3) |
+| `HTTP_FIRST_REQUEST_TIMEOUT_SECONDS` | close a connection that has not sent its first request (default 15 s, `0` disables) |
+| `PASSWORD_HASH_MAX_PRIORITY` | size of the reserved queue for known devices (12.8; default — equal to the normal queue) |
 
-### 12.7. Kirish formalariga Turnstile (CAPTCHA) — ixtiyoriy
+### 12.7. Turnstile (CAPTCHA) on sign-in forms — optional
 
-Turnstile — Cloudflare'ning bepul "siz odammisiz?" tekshiruvi. Odatda odam
-hech narsa bosmaydi (tekshiruv o'zi o'tadi), botlar esa o'ta olmaydi. Yoqilsa,
-**kirish, ro'yxatdan o'tish, birinchi sozlash va parolni tiklash** so'rovlari
-tekshiruvsiz qabul qilinmaydi — parol tekshirilishidan (eng qimmat amal) va
-email yuborilishidan **oldin**.
+Turnstile is Cloudflare's free "are you human?" check. Usually a person clicks
+nothing (the check passes by itself), while bots cannot pass. When enabled,
+**sign-in, sign-up, first setup and password reset** requests are not accepted
+without it — checked **before** the password is verified (the most expensive
+operation) and before any email is sent.
 
-1. Cloudflare panelida: **Turnstile → Add widget**. Domen:
-   `legion.sizningdomen.uz`, rejim: **Managed**. Ikki kalit beriladi:
-   **Site key** (ochiq) va **Secret key** (maxfiy).
-2. Serverda ikkala faylga qo'shing:
+1. In the Cloudflare dashboard: **Turnstile → Add widget**. Domain:
+   `legion.yourdomain.com`, mode: **Managed**. You get two keys:
+   a **Site key** (public) and a **Secret key** (private).
+2. On the server, add them to both files:
 
    ```bash
-   # server/.env  (maxfiy kalit — hech kimga ko'rsatmang)
-   TURNSTILE_SECRET_KEY=0x4AAAA...sizning-secret-key
+   # server/.env  (secret key — show it to no one)
+   TURNSTILE_SECRET_KEY=0x4AAAA...your-secret-key
 
-   # frontend/.env.local  (ochiq kalit)
-   NEXT_PUBLIC_TURNSTILE_SITE_KEY=0x4AAAA...sizning-site-key
+   # frontend/.env.local  (public key)
+   NEXT_PUBLIC_TURNSTILE_SITE_KEY=0x4AAAA...your-site-key
    ```
-3. Dashboard'ni qayta quring va qayta ishga tushiring (ochiq kalit qurish
-   paytida sahifaga yoziladi):
+3. Rebuild and restart the dashboard (the public key is written into the page
+   at build time):
 
    ```bash
    cd /opt/legion && sudo -u legion npm run build && systemctl restart legion
    ```
-4. Tekshiring: kirish sahifasida tekshiruv oynachasi chiqadi; u o'tmaguncha
-   "Kirish" tugmasi bosilmaydi.
+4. Check: the sign-in page shows the check box; the "Sign in" button stays
+   disabled until it passes.
 
-Bilish kerak:
-- Ikkala kalit **birga** kerak. Faqat serverda bo'lsa — hamma kirish
-  `captcha_required` bilan rad etiladi; faqat dashboard'da bo'lsa — tekshiruv
-  ko'rinadi, lekin server uni talab qilmaydi.
-- Cloudflare tekshiruv xizmatiga ulanib bo'lmasa, kirish vaqtincha `503`
-  qaytaradi (**yopiq holatda ishdan chiqadi** — hujum paytida eshikni ochib
-  qo'ymaslik uchun). Qolgan API ishlayveradi.
-- Yoqilgandan keyin `/auth/login` ga skript/terminal orqali parol bilan kirib
-  bo'lmaydi (bu maqsad). Wazuh sensori va AI agentlar kalit bilan ishlaydi —
-  ularga ta'sir qilmaydi.
-- Brauzerdagi reklama/kontent bloklovchi tekshiruvni to'sib qo'ysa, sahifa
-  buni aniq yozadi.
-- Legion tomoni brauzerda sinab ko'rilgan (`ops/tests/e2e-turnstile.mjs`),
-  lekin Cloudflare'ning haqiqiy xizmati bilan emas (sinov muhitidan unga
-  ulanib bo'lmadi) — yoqqaningizdan keyin o'zingiz bir marta kirib ko'ring.
+Good to know:
+- Both keys are needed **together**. Only on the server — every sign-in is
+  refused with `captcha_required`; only in the dashboard — the check appears,
+  but the server does not require it.
+- If Cloudflare's verification service cannot be reached, sign-in returns `503`
+  for a while (**it fails closed** — so the door is not left open during an
+  attack). The rest of the API keeps working.
+- Once enabled, you cannot sign in to `/auth/login` with a password from a
+  script or terminal (that is the point). The Wazuh sensor and AI agents use
+  keys — they are not affected.
+- If a browser ad/content blocker blocks the check, the page says so clearly.
+- Legion's side was tested in a browser (`ops/tests/e2e-turnstile.mjs`), but
+  not against Cloudflare's real service (the test environment could not reach
+  it) — sign in once yourself after enabling it.
 
-### 12.8. Tanish qurilmalar hujum paytida ham kira oladi (avtomatik)
+### 12.8. Known devices can sign in even during an attack (automatic)
 
-Hujum paytida parol tekshiruvchi navbat to'lib qolsa, yangi kirishlar `503`
-oladi. Lekin shu brauzerdan avval **to'liq** kirgan (parol + 2FA) odam uchun
-Legion alohida, hujum to'ldira olmaydigan navbat ajratadi. Hech narsa sozlash
-shart emas: muvaffaqiyatli kirishdan keyin brauzerga 90 kunlik imzolangan
-cookie (`legion_device`) beriladi.
+If the password-checking queue fills during an attack, new sign-ins get `503`.
+But for a person who has previously signed in **fully** (password + 2FA) from
+the same browser, Legion keeps a separate queue the attack cannot fill. Nothing
+to configure: after a successful sign-in, the browser receives a signed 90-day
+cookie (`legion_device`).
 
-- Cookie faqat **o'zi nomlangan akkaunt** uchun ishlaydi va parolni
-  almashtirmaydi — parol baribir to'liq tekshiriladi.
-- O'g'irlangan cookie faqat shu akkauntga kirishni tezlashtiradi, daqiqasiga
-  10 martadan ko'p emas.
-- O'lchov (bir mashinada): sign-in hujumi paytida yangi brauzerdan 15
-  urinishdan 12 tasi `503` oldi, tanish brauzerdan 5/5 muvaffaqiyatli kirdi.
+- The cookie works only for **the account it names** and does not replace the
+  password — the password is still fully checked.
+- A stolen cookie only speeds up sign-in to that one account, at most 10 times
+  per minute.
+- Measured (on one machine): during a sign-in attack, 12 of 15 attempts from a
+  new browser got `503`; a known browser signed in 5/5 times.
 
-### 12.9. O'z serveringizda o'lchash
+### 12.9. Measuring on your own server
 
-Yuqoridagi raqamlar sinov mashinasida olingan. Sizning serveringiz qancha
-ko'tarishini bilish uchun xuddi shu testni **o'z serveringizda** ishga
-tushiring. U alohida vaqtinchalik baza va alohida Legion nusxasini ochadi —
-ishlab turgan Legion'ga va ma'lumotlarga tegmaydi, lekin ~5 daqiqa davomida
-**butun CPU'ni band qiladi**. Shuning uchun uni foydalanuvchilar yo'q paytda
-(yoki ishga tushirishdan oldin) bajaring.
+The numbers above came from a test machine. To find out what your server can
+handle, run the same test **on your own server**. It starts a separate temporary
+database and a separate Legion instance — it does not touch the running Legion
+or its data, but it **keeps the whole CPU busy** for about 5 minutes. Run it
+when there are no users (or before going live).
 
 ```bash
 cd /opt/legion
-sudo -u legion npm run build              # agar oxirgi yangilanishdan keyin qurilmagan bo'lsa
-sudo E2E_ADMIN_DATABASE_URL="postgresql://postgres:POSTGRES-PAROLI@127.0.0.1:5432/postgres" \
+sudo -u legion npm run build              # if not built since the last update
+sudo E2E_ADMIN_DATABASE_URL="postgresql://postgres:POSTGRES-PASSWORD@127.0.0.1:5432/postgres" \
   node ops/tests/ddos-resilience.mjs --json /root/legion-dos.json 2>&1 | tee /root/legion-dos.txt
 ```
 
-(`POSTGRES-PAROLI` — 3-qadamda o'rnatgan administrator paroli.) Oxirida
-`N passed, 0 failed` chiqsa — tizim hujum ostida kutilganidek ishlaydi.
-Natijada qarash kerak bo'lgan qatorlar:
+(`POSTGRES-PASSWORD` is the administrator password from step 3.) If it ends with
+`N passed, 0 failed`, the system behaves as expected under attack.
+Lines to look at in the result:
 
 - `responses: {... "per_second": …, "api_cpu_percent_of_one_core": …}` —
-  bitta Legion nusxasi soniyasiga qancha keraksiz so'rovni ko'tardi;
-- `legitimate traffic by phase` — hujum paytida oddiy foydalanuvchi va
-  sensor qanchalik sekinlashdi (`p95`, millisekund);
-- `sign-in from a known device` — tanish qurilmadan kirish.
+  how many useless requests per second one Legion instance absorbed;
+- `legitimate traffic by phase` — how much ordinary users and the sensor slowed
+  down during the attack (`p95`, milliseconds);
+- `sign-in from a known device` — signing in from a known device.
 
-Bu test **faqat shu serverning o'zida** ishlaydi (hujum `127.0.0.1` ga
-qaratilgan). Uni hech qachon boshqa birovning serveriga qarshi ishlatmang.
-`/root/legion-dos.txt` ni texnik yordamchingizga yuborsangiz, kerakli
-quvvatni (CPU, nusxalar soni) hisoblashda yordam beradi.
+This test runs **only against this server itself** (the attack targets
+`127.0.0.1`). Never use it against anyone else's server. Send
+`/root/legion-dos.txt` to your technical support to help size the capacity
+(CPU, number of instances).
 
-### 12.10. Halol cheklovlar
+### 12.10. Honest limits
 
-- **Katta (hajmiy) hujum** — kanalni to'ldiruvchi L3/L4 hujum — faqat
-  Cloudflare kabi tarmoq oldidan to'xtatiladi. Ularsiz, hosting provayderning
-  o'z himoyasiga tayanasiz.
-- Minglab har xil manzildan kelgan **sekin, "odamga o'xshash"** so'rovlar
-  (L7 botnet) manzil bo'yicha cheklovlarni chetlab o'tadi. Legion buni
-  yumshatadi (hisoblagich xotirasi cheklangan, tizim ishdan chiqmaydi,
-  sensor hodisalari yo'qolmaydi, o'qish ishlaydi), lekin **yangi**
-  brauzerdan parol bilan kirish — eng qimmat amal — hujum davomida band
-  bo'lib `503` qaytarishi mumkin. Tanish qurilmalar (12.8) kira oladi;
-  Turnstile (12.7), Cloudflare qoidalari va Bot Fight Mode qolgan holat uchun.
-- O'lchovlar bir mashinada olingan (`ops/tests/ddos-resilience.mjs`);
-  ular tizimning **xatti-harakatini** ko'rsatadi, sizning serveringiz
-  quvvatini emas. Natijalar: [PRODUCTION-VALIDATION-2026-10-01.md](PRODUCTION-VALIDATION-2026-10-01.md).
-- Cloudflare hisobining o'zi (DNS proxy, WAF qoidalari, Turnstile'ning
-  haqiqiy xizmati) bu yerda sinab ko'rilmagan — hisob kerak. Shuning uchun
-  12.3 dagi tekshiruv skripti bor: u sizning haqiqiy sozlamangizni tekshiradi.
+- **A large (volumetric) attack** — an L3/L4 attack that fills the connection —
+  can only be stopped in front of the network, by a service like Cloudflare.
+  Without one, you rely on your hosting provider's own protection.
+- **Slow, "human-like"** requests from thousands of different addresses (an L7
+  botnet) get around per-address limits. Legion softens this (counter memory is
+  bounded, the system stays up, sensor events are not lost, reading works), but
+  password sign-in from a **new** browser — the most expensive operation — can
+  return `503` while the attack lasts. Known devices (12.8) can sign in;
+  Turnstile (12.7), Cloudflare rules and Bot Fight Mode cover the rest.
+- The measurements were taken on one machine (`ops/tests/ddos-resilience.mjs`);
+  they show the system's **behaviour**, not your server's capacity. Results:
+  [PRODUCTION-VALIDATION-2026-10-01.md](PRODUCTION-VALIDATION-2026-10-01.md).
+- The Cloudflare account itself (DNS proxy, WAF rules, the real Turnstile
+  service) was not tested here — that needs an account. That is why the check
+  script in 12.3 exists: it checks your real setup.
 
 ---
 
-## Nimadir ishlamasa
+## When something does not work
 
-| Belgi | Sabab va yechim |
+| Symptom | Cause and fix |
 |---|---|
-| `502 Bad Gateway` | Legion ishlamayapti: `systemctl status legion`, loglar: `journalctl -u legion -n 50` |
-| Certbot xato beradi | DNS hali serverga yo'naltirilmagan (1-qadam) yoki 80-port yopiq (`ufw status`) |
-| Kira olmayapman, parol to'g'ri | Sayt `http://` orqali ochilgan — `https://` dan kiring |
-| Sahifa ochiladi, lekin ma'lumot yo'q | `frontend/.env.local` dagi `NEXT_PUBLIC_API_URL` `https://DOMEN/api` emas — tuzating va `npm run build` |
-| Server ishga tushmaydi, `JWT_SECRET` haqida | `server/.env` yo'q — `sudo -u legion npm run setup -- --domain …` |
-| Holat | `curl https://legion.sizningdomen.uz/api/health` → `"database":"up"` |
+| `502 Bad Gateway` | Legion is not running: `systemctl status legion`, logs: `journalctl -u legion -n 50` |
+| Certbot fails | DNS does not point at the server yet (step 1) or port 80 is closed (`ufw status`) |
+| Correct password but cannot sign in | The site was opened over `http://` — use `https://` |
+| The page opens but shows no data | `NEXT_PUBLIC_API_URL` in `frontend/.env.local` is not `https://DOMAIN/api` — fix it and run `npm run build` |
+| The server will not start, mentions `JWT_SECRET` | `server/.env` is missing — `sudo -u legion npm run setup -- --domain …` |
+| Status | `curl https://legion.yourdomain.com/api/health` → `"database":"up"` |
 
 ---
 
-## Bitta qaror: kim uchun?
+## One decision: who is it for?
 
-Standart holatda Legion **bitta tashkilot** uchun (`DEPLOYMENT_MODE=self-hosted`):
-birinchi administratordan keyin ro'yxatdan o'tish yopiladi. Bu — har bir
-mijozga o'z serverida alohida Legion o'rnatish modeli.
+By default Legion serves **one organisation** (`DEPLOYMENT_MODE=self-hosted`):
+sign-up closes after the first administrator. This is the model of installing a
+separate Legion on each customer's own server.
 
-Agar bitta saytda **ko'p mijoz o'zi ro'yxatdan o'tib**, obuna sotib oladigan
-xizmat (SaaS) qilmoqchi bo'lsangiz: 5-qadamda `npm run setup -- --saas --domain …`
-ni ishlating va [SAAS.md](SAAS.md) dagi qadamlarni bajaring (email — Resend,
-to'lov — Paddle).
+If you want a service (SaaS) where **many customers sign up themselves** on one
+site and buy a subscription: use `npm run setup -- --saas --domain …` in step 5
+and follow [SAAS.md](SAAS.md) (email — Resend, payments — Paddle).

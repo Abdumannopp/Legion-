@@ -14,7 +14,7 @@
  *  - nothing here is configured the way a real installation should be.
  *
  * Real installations use a PostgreSQL you installed yourself — `npm run setup`
- * — or Docker. See SINOV.md.
+ * — or Docker. See TRY-LOCALLY.md.
  */
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -149,7 +149,7 @@ const SCRIPTS_BLOCKED_HINT = [
   `    ${c.cyan("npm run try")}`,
   "",
   "  Prefer not to? Install PostgreSQL yourself and use",
-  `    ${c.cyan("npm run setup")}   ${c.dim("(see SINOV.md)")}`,
+  `    ${c.cyan("npm run setup")}   ${c.dim("(see TRY-LOCALLY.md)")}`,
 ].join("\n");
 
 let EmbeddedPostgres;
@@ -164,13 +164,13 @@ try {
     "",
     "  If it is still missing afterwards, your platform may not have a",
     "  prebuilt PostgreSQL. Use `npm run setup` with an installed",
-    "  PostgreSQL instead — see SINOV.md.",
+    "  PostgreSQL instead — see TRY-LOCALLY.md.",
   ].join("\n"));
 }
 
 console.log(c.cyan("\nLegion — test mode\n"));
 console.log(c.yellow("  Bundled database, for trying Legion out only."));
-console.log(c.dim("  Real installs: npm run setup (see SINOV.md)\n"));
+console.log(c.dim("  Real installs: npm run setup (see TRY-LOCALLY.md)\n"));
 
 const major = Number(process.versions.node.split(".")[0]);
 if (major < 20) die(`Node.js 20 or newer is required (found ${process.versions.node}).`);

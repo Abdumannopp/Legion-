@@ -1,51 +1,51 @@
-# Legion Dashboard
+# Legion dashboard
 
-Legion loyihasining Alert Triage boshqaruv paneli — Next.js + Tailwind CSS asosida,
-FastAPI backend'ga ulangan.
+The Legion web app: the public website (product, pricing, legal pages) and the
+dashboard (alerts, incidents, assets, Defense, AI agents, Legion team, settings,
+billing). Built with Next.js, React and Tailwind CSS; it talks to the Express
+API in `../server`.
 
-## Ishga tushirish
+## Running it
 
-**1. Avval backend'ni ishga tushiring** (`legion-backend` papkasida, uning o'z
-README'siga qarang). Backend odatda `http://localhost:8000` manzilida ishlaydi.
+From the repository root, `npm run dev` starts the API and the dashboard together.
+To run only the dashboard:
 
-**2. Shu papkada:**
-
-```
+```bash
 npm install
-cp .env.local.example .env.local
+cp .env.local.example .env.local   # NEXT_PUBLIC_API_URL and the optional Paddle/Turnstile keys
 npm run dev
 ```
 
-3. Brauzerda `http://localhost:3000` manzilini oching — login sahifasiga
-   yo'naltiriladi
-4. Kirish uchun: `admin@legion.demo` / `legion123` (agar backend `python -m app.seed`
-   bilan to'ldirilgan bo'lsa)
+Open http://localhost:3000. On a fresh installation, create the first
+administrator at `/setup` (self-hosted) or `/signup` (SaaS). There is no demo
+account.
 
-## Internetga chiqarish (deploy)
+Legion needs an always-on server, PostgreSQL and WebSocket connections, so it is
+deployed on a VPS rather than a serverless host — see
+[DEPLOY-ONLINE.md](../DEPLOY-ONLINE.md).
 
-Eng oson yo'l — [vercel.com](https://vercel.com):
+## Checks
 
-1. Ushbu papkani GitHub'ga yuklang (repo yarating)
-2. Vercel'da "New Project" bosing va o'sha repo'ni tanlang
-3. Environment Variables bo'limida `NEXT_PUBLIC_API_URL`ni backend'ingiz haqiqiy
-   manziliga o'rnating (masalan, Railway yoki Render'da joylashtirilgan backend URL'i)
-4. "Deploy" tugmasini bosing
+```bash
+npm run lint    # TypeScript + check that no interface text is hard-coded in components
+npm test        # unit tests (vitest)
+```
 
-## Fayl tuzilishi
+## Layout
 
-- `app/page.tsx` — asosiy sahifa (dashboard)
-- `app/login/page.tsx` — kirish sahifasi
-- `components/LegionDashboard.tsx` — dashboard'ning barcha mantig'i va dizayni
-- `lib/api.ts` — backend bilan gaplashadigan barcha funksiyalar (login, alertlar,
-  Oracle tushuntirishi)
-- `app/layout.tsx` — sahifa sarlavhasi va umumiy o'rash (wrapper)
+| Path | What |
+|---|---|
+| `app/` | Pages (App Router): `page.tsx` dashboard, `incidents/`, `incident/`, `assets/`, `defense/`, `agents/`, `team/`, `connect/`, `settings/`, `billing/`, auth pages, public pages |
+| `components/` | Shared components (sidebar, site header, agent skills, …) |
+| `lib/api.ts` | Every call to the API |
+| `lib/i18n/` | Interface text, one file per screen in `ns/` ([README](lib/i18n/README.md)) |
+| `content/legal/` | Terms, privacy and refund policy text |
+| `scripts/check-i18n.mjs` | The hard-coded-text check run by `npm run lint` |
 
-## Qanday ishlaydi
+## How it works
 
-- Token brauzerning `localStorage`'ida saqlanadi
-- Har bir sahifa ochilganda token borligini tekshiradi; yo'q bo'lsa `/login`ga
-  yo'naltiradi
-- Alert ustiga bosilganda kengayadi — u yerda "Ask Oracle to explain" tugmasi
-  bor, bu backend'dagi AI agentni chaqiradi va javobni saqlaydi
-- "Investigate" / "Resolve" tugmalari real vaqtda backend'dagi holatni yangilaydi
-
+- The session is an HttpOnly cookie set by the API; the dashboard never stores a
+  token in `localStorage`.
+- Live alerts arrive over WebSocket.
+- Every request is sent with credentials to `NEXT_PUBLIC_API_URL`; errors are
+  shown with what happened, why, and what to do.
