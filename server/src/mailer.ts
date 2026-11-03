@@ -94,19 +94,8 @@ const para = (text: string) => `<p style="margin:0 0 18px">${text}</p>`;
 const small = (text: string) => `<p style="margin:0;color:#857CA8;font-size:12px">${escape(text)}</p>`;
 const strong = (text: string) => `<strong style="color:#F6F4FB">${escape(text)}</strong>`;
 
-/** Russian noun forms after a number: 1 час, 2 часа, 5 часов. */
-function ru(n: number, one: string, few: string, many: string): string {
-  const m10 = n % 10;
-  const m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return `${n} ${one}`;
-  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return `${n} ${few}`;
-  return `${n} ${many}`;
-}
-
 const ROLE: Record<Locale, Record<string, string>> = {
   en: { admin: "admin", analyst: "analyst", viewer: "viewer" },
-  ru: { admin: "администратор", analyst: "аналитик", viewer: "наблюдатель" },
-  uz: { admin: "administrator", analyst: "tahlilchi", viewer: "kuzatuvchi" },
 };
 
 export function passwordResetEmail(resetUrl: string, locale: Locale = "en") {
@@ -119,24 +108,6 @@ export function passwordResetEmail(resetUrl: string, locale: Locale = "en") {
       validHtml: "The link below is valid for one hour.",
       button: "Choose a new password",
       ignore: "If you didn't request this, ignore this email — your password stays unchanged.",
-    },
-    ru: {
-      subject: "Сброс пароля Legion",
-      title: "Сброс пароля",
-      intro: "Для вашей учётной записи Legion запрошен сброс пароля.",
-      valid: "Откройте ссылку, чтобы задать новый пароль (действует 1 час):",
-      validHtml: "Ссылка ниже действует один час.",
-      button: "Задать новый пароль",
-      ignore: "Если вы этого не запрашивали, просто проигнорируйте письмо — пароль не изменится.",
-    },
-    uz: {
-      subject: "Legion parolini tiklash",
-      title: "Parolni tiklash",
-      intro: "Legion hisobingiz uchun parolni tiklash so'raldi.",
-      valid: "Yangi parol o'rnatish uchun havolani oching (1 soat amal qiladi):",
-      validHtml: "Quyidagi havola bir soat amal qiladi.",
-      button: "Yangi parol o'rnatish",
-      ignore: "Agar buni siz so'ramagan bo'lsangiz, xatga e'tibor bermang — parolingiz o'zgarmaydi.",
     },
   }[locale];
   return {
@@ -157,24 +128,6 @@ export function verifyEmailEmail(verifyUrl: string, hours: number, locale: Local
       button: "Confirm email",
       ignore: "If you didn't sign up for Legion, ignore this email — no account is activated without this step.",
     },
-    ru: {
-      subject: "Подтвердите адрес эл. почты для Legion",
-      title: "Подтвердите адрес эл. почты",
-      welcome: "Добро пожаловать в Legion.",
-      body: `Подтвердите адрес, чтобы завершить создание учётной записи. Ссылка действует ${ru(hours, "час", "часа", "часов")}.`,
-      textBody: `Подтвердите адрес, чтобы завершить создание учётной записи (ссылка действует ${ru(hours, "час", "часа", "часов")}):`,
-      button: "Подтвердить адрес",
-      ignore: "Если вы не регистрировались в Legion, проигнорируйте это письмо — без подтверждения учётная запись не активируется.",
-    },
-    uz: {
-      subject: "Legion uchun emailingizni tasdiqlang",
-      title: "Email manzilingizni tasdiqlang",
-      welcome: "Legion'ga xush kelibsiz.",
-      body: `Hisob yaratishni yakunlash uchun emailingizni tasdiqlang. Havola ${hours} soat amal qiladi.`,
-      textBody: `Hisob yaratishni yakunlash uchun emailingizni tasdiqlang (havola ${hours} soat amal qiladi):`,
-      button: "Emailni tasdiqlash",
-      ignore: "Agar Legion'da ro'yxatdan o'tmagan bo'lsangiz, xatga e'tibor bermang — bu qadamsiz hech qanday hisob faollashmaydi.",
-    },
   }[locale];
   return {
     subject: t.subject,
@@ -194,7 +147,7 @@ export function inviteEmail(params: {
   const { inviteUrl, tenantName, invitedBy, expiresDays } = params;
   const locale = params.locale ?? "en";
   const role = ROLE[locale][params.role] ?? params.role;
-  const days = locale === "ru" ? ru(expiresDays, "день", "дня", "дней") : locale === "uz" ? `${expiresDays} kun` : `${expiresDays} days`;
+  const days = `${expiresDays} ${expiresDays === 1 ? "day" : "days"}`;
   const t = {
     en: {
       subject: `${invitedBy} invited you to ${tenantName} on Legion`,
@@ -206,26 +159,6 @@ export function inviteEmail(params: {
       valid: `This link is valid for ${days}. If you weren't expecting it, ignore this email — no account is created until you set a password.`,
       ignore: "If you weren't expecting this invitation you can ignore this email — no account is created until you set a password.",
     },
-    ru: {
-      subject: `${invitedBy} приглашает вас в «${tenantName}» в Legion`,
-      title: `Приглашение в «${tenantName}»`,
-      text: `${invitedBy} приглашает вас присоединиться к «${tenantName}» в Legion. Роль: ${role}.`,
-      html: `${escape(invitedBy)} приглашает вас присоединиться к ${strong(tenantName)} в Legion. Роль: ${strong(role)}.`,
-      set: `Задайте пароль, чтобы начать работу (ссылка действует ${days}):`,
-      button: "Задать пароль",
-      valid: `Ссылка действует ${days}. Если вы не ждали этого письма, просто проигнорируйте его — учётная запись не создаётся, пока вы не зададите пароль.`,
-      ignore: "Если вы не ждали приглашения, проигнорируйте это письмо — учётная запись не создаётся, пока вы не зададите пароль.",
-    },
-    uz: {
-      subject: `${invitedBy} sizni Legion'dagi "${tenantName}" ga taklif qildi`,
-      title: `"${tenantName}" ga taklif`,
-      text: `${invitedBy} sizni Legion'dagi "${tenantName}" ga qo'shilishga taklif qildi. Rolingiz: ${role}.`,
-      html: `${escape(invitedBy)} sizni Legion'dagi ${strong(tenantName)} ga qo'shilishga taklif qildi. Rolingiz: ${strong(role)}.`,
-      set: `Parol o'rnating va ishni boshlang (havola ${days} amal qiladi):`,
-      button: "Parol o'rnatish",
-      valid: `Havola ${days} amal qiladi. Agar bu taklifni kutmagan bo'lsangiz, xatga e'tibor bermang — parol o'rnatmaguningizcha hisob yaratilmaydi.`,
-      ignore: "Agar bu taklifni kutmagan bo'lsangiz, xatga e'tibor bermang — parol o'rnatmaguningizcha hisob yaratilmaydi.",
-    },
   }[locale];
   return {
     subject: t.subject,
@@ -236,8 +169,6 @@ export function inviteEmail(params: {
 
 const ALERT_LABELS: Record<Locale, { alert: string; severity: string; confidence: string; sourceIp: string; target: string; view: string; open: string; sev: Record<string, string> }> = {
   en: { alert: "Alert", severity: "Severity", confidence: "Confidence", sourceIp: "Source IP", target: "Target", view: "View in Legion", open: "Open in Legion", sev: { critical: "CRITICAL", high: "HIGH", medium: "MEDIUM", low: "LOW" } },
-  ru: { alert: "Оповещение", severity: "Критичность", confidence: "Уверенность", sourceIp: "IP-адрес источника", target: "Цель", view: "Открыть в Legion", open: "Открыть в Legion", sev: { critical: "КРИТИЧЕСКИЙ", high: "ВЫСОКИЙ", medium: "СРЕДНИЙ", low: "НИЗКИЙ" } },
-  uz: { alert: "Ogohlantirish", severity: "Jiddiylik darajasi", confidence: "Ishonchlilik", sourceIp: "Manba IP manzili", target: "Nishon", view: "Legion'da ko'rish", open: "Legion'da ochish", sev: { critical: "KRITIK", high: "YUQORI", medium: "O'RTA", low: "PAST" } },
 };
 
 /** Alert notification. The title and summary come from the monitored system
@@ -303,22 +234,6 @@ export function notificationConfirmEmail(params: { url: string; tenantName: stri
       button: "Confirm this address",
       ignore: "If you don't know this organisation or didn't expect this, ignore this email. Nothing will be sent to you.",
     },
-    ru: {
-      subject: "Подтвердите получение оповещений Legion на этот адрес",
-      title: "Подтвердите оповещения",
-      body: `${params.requestedBy} попросил(а) Legion отправлять на этот адрес оповещения безопасности организации «${params.tenantName}».`,
-      action: `Если вы ждёте эти оповещения, подтвердите в течение ${ru(params.hours, "часа", "часов", "часов")}:`,
-      button: "Подтвердить адрес",
-      ignore: "Если вы не знаете эту организацию или не ожидали этого письма, просто проигнорируйте его. Ничего отправлено не будет.",
-    },
-    uz: {
-      subject: "Legion xavfsizlik ogohlantirishlarini shu manzilga yuborishni tasdiqlang",
-      title: "Ogohlantirishlarni tasdiqlang",
-      body: `${params.requestedBy} Legion'dan "${params.tenantName}" tashkilotining xavfsizlik ogohlantirishlarini shu manzilga yuborishni so'radi.`,
-      action: `Agar bu ogohlantirishlarni kutayotgan bo'lsangiz, ${params.hours} soat ichida tasdiqlang:`,
-      button: "Manzilni tasdiqlash",
-      ignore: "Agar bu tashkilotni tanimasangiz yoki buni kutmagan bo'lsangiz, xatga e'tibor bermang. Sizga hech narsa yuborilmaydi.",
-    },
   }[locale];
   return {
     subject: t.subject,
@@ -331,8 +246,6 @@ export function notificationConfirmEmail(params: { url: string; tenantName: stri
 export function testNotificationEmail(locale: Locale = "en") {
   const t = {
     en: { subject: "Legion test notification", body: "This is a test notification from Legion. If you received it, alert emails are working.", open: "Open Legion" },
-    ru: { subject: "Тестовое уведомление Legion", body: "Это тестовое уведомление от Legion. Если вы его получили, оповещения по эл. почте работают.", open: "Открыть Legion" },
-    uz: { subject: "Legion sinov bildirishnomasi", body: "Bu Legion'dan sinov bildirishnomasi. Agar uni olgan bo'lsangiz, ogohlantirish xatlari ishlayapti.", open: "Legion'ni ochish" },
   }[locale];
   return { subject: t.subject, text: `${t.body}\n\n${t.open}: ${config.frontendUrl}` };
 }
@@ -355,25 +268,9 @@ export function securityNoticeEmail(kind: SecurityNoticeKind, params: { when: st
       recovery_codes_regenerated: "New two-factor recovery codes were generated for your Legion account. The previous codes no longer work.",
       new_device_login: "Your Legion account was signed in to from a device or browser it has not been used from before.",
     },
-    ru: {
-      password_changed: "Пароль вашей учётной записи Legion был изменён.",
-      mfa_enabled: "Для вашей учётной записи Legion включена двухфакторная аутентификация. Все остальные сеансы завершены.",
-      mfa_disabled: "Для вашей учётной записи Legion ОТКЛЮЧЕНА двухфакторная аутентификация. Все остальные сеансы завершены.",
-      recovery_codes_regenerated: "Для вашей учётной записи Legion созданы новые коды восстановления. Прежние коды больше не действуют.",
-      new_device_login: "В вашу учётную запись Legion выполнен вход с устройства или браузера, которые раньше не использовались.",
-    },
-    uz: {
-      password_changed: "Legion hisobingiz paroli o'zgartirildi.",
-      mfa_enabled: "Legion hisobingiz uchun ikki bosqichli autentifikatsiya yoqildi. Boshqa barcha seanslar yakunlandi.",
-      mfa_disabled: "Legion hisobingiz uchun ikki bosqichli autentifikatsiya O'CHIRILDI. Boshqa barcha seanslar yakunlandi.",
-      recovery_codes_regenerated: "Legion hisobingiz uchun yangi tiklash kodlari yaratildi. Oldingi kodlar endi ishlamaydi.",
-      new_device_login: "Legion hisobingizga ilgari ishlatilmagan qurilma yoki brauzerdan kirildi.",
-    },
   };
   const t = {
     en: { subject: "Security notice for your Legion account", title: "Security notice", when: "When", details: "Details", notYou: "If this was you, no action is needed. If it was not, reset your password from the sign-in page right away and tell your Legion administrator." },
-    ru: { subject: "Уведомление безопасности учётной записи Legion", title: "Уведомление безопасности", when: "Когда", details: "Подробности", notYou: "Если это были вы, ничего делать не нужно. Если нет — немедленно сбросьте пароль на странице входа и сообщите администратору Legion." },
-    uz: { subject: "Legion hisobingiz uchun xavfsizlik bildirishnomasi", title: "Xavfsizlik bildirishnomasi", when: "Qachon", details: "Tafsilotlar", notYou: "Agar bu siz bo'lsangiz, hech narsa qilish shart emas. Aks holda darhol kirish sahifasidan parolingizni tiklang va Legion administratoriga xabar bering." },
   }[locale];
   const lines = [what[locale][kind], `${t.when}: ${params.when}`, ...(params.detail ? [`${t.details}: ${params.detail}`] : [])];
   return {

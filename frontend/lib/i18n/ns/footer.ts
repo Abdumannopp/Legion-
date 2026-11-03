@@ -7,16 +7,4 @@ export const footer = defineMessages({
     support: "Support",
     language: "Language",
   },
-  ru: {
-    privacy: "Политика конфиденциальности",
-    terms: "Условия использования",
-    support: "Поддержка",
-    language: "Язык",
-  },
-  uz: {
-    privacy: "Maxfiylik siyosati",
-    terms: "Foydalanish shartlari",
-    support: "Yordam",
-    language: "Til",
-  },
 });

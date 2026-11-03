@@ -1656,7 +1656,7 @@ app.patch("/notifications/settings", requireRole("admin"), async (req: AuthedReq
   const requested = body.notification_email?.toLowerCase() ?? null;
   let confirmationSent = false;
 
-  if (body.notification_locale) await store.setNotificationLocale(tenantId, body.notification_locale);
+  if (body.notification_locale) await store.setNotificationLocale(tenantId, "en");
   if (requested === null) {
     // Stopping email needs no confirmation.
     await store.setNotificationEmail(tenantId, null);

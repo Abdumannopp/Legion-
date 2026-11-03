@@ -43,7 +43,7 @@ import {
 } from "@/lib/api";
 import { palette } from "@/lib/theme";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
-import { LOCALES, type Locale } from "@/lib/i18n/core";
+import { type Locale } from "@/lib/i18n/core";
 import { formatDateTime } from "@/lib/i18n/format";
 
 type Tab = "profile" | "notifications" | "team" | "audit";
@@ -452,25 +452,6 @@ export default function SettingsPage() {
                           placeholder={t.settings.notifications.emailPlaceholder}
                           className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-sm text-ink placeholder:text-ink-disabled outline-none focus:border-brand-hover"
                         />
-                      </div>
-
-                      <div>
-                        <label htmlFor="notif-locale" className="text-ink-faint text-xs uppercase tracking-wide">
-                          {t.settings.notifications.languageLabel}
-                        </label>
-                        <p className="text-ink-faint text-[11px] mt-1 mb-2">
-                          {t.settings.notifications.languageHint}
-                        </p>
-                        <select
-                          id="notif-locale"
-                          value={notifLocale}
-                          onChange={(e) => setNotifLocale(e.target.value as Locale)}
-                          className="bg-panel border border-line rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-brand-hover"
-                        >
-                          {LOCALES.map(({ code, label }) => (
-                            <option key={code} value={code}>{label}</option>
-                          ))}
-                        </select>
                       </div>
 
                       {notifSettings?.pending_notification_email && !notifMessage && (

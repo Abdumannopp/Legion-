@@ -97,8 +97,6 @@ function build(locale: Locale): Translations {
 
 export const translations: Record<Locale, Translations> = {
   en: build("en"),
-  ru: build("ru"),
-  uz: build("uz"),
 };
 
 export type { Messages };

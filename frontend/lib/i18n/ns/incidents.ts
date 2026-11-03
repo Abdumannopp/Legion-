@@ -17,39 +17,4 @@ export const incidents = defineMessages({
     },
     empty: "No incidents match this view.",
   },
-  ru: {
-    title: "Инциденты",
-    summary: (total: number, open: number, investigating: number) =>
-      `${plural("ru", total, {
-        one: `${total} инцидент`,
-        few: `${total} инцидента`,
-        many: `${total} инцидентов`,
-        other: `${total} инцидента`,
-      })} · открыто: ${open} · расследуется: ${investigating}`,
-    searchPlaceholder: "Поиск инцидентов по названию",
-    allSeverities: "Любая критичность",
-    column: {
-      incident: "Инцидент",
-      severity: "Критичность",
-      status: "Статус",
-      detectedBy: "Источник",
-      when: "Когда",
-    },
-    empty: "Нет инцидентов, подходящих под фильтр.",
-  },
-  uz: {
-    title: "Hodisalar",
-    summary: (total: number, open: number, investigating: number) =>
-      `${total} ta hodisa · ${open} ta ochiq · ${investigating} ta tekshirilmoqda`,
-    searchPlaceholder: "Hodisalarni nomi bo'yicha qidirish",
-    allSeverities: "Barcha darajalar",
-    column: {
-      incident: "Hodisa",
-      severity: "Jiddiylik",
-      status: "Holat",
-      detectedBy: "Manba",
-      when: "Qachon",
-    },
-    empty: "Bu filtrga mos hodisalar yo'q.",
-  },
 });

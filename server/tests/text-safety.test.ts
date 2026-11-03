@@ -118,10 +118,10 @@ describe("the whole API refuses a NUL character with a 400 before any route runs
     expect(r.status).toBe(400);
   });
 
-  it("answers in the person's language", async () => {
+  it("answers in English whatever Accept-Language says", async () => {
     const r = await request(app).post("/auth/forgot-password").set("Accept-Language", "uz").send({ email: NUL });
     expect(r.status).toBe(400);
-    expect(r.body.detail).not.toBe("Invalid request");
+    expect(r.body.detail).toBe("Invalid request");
   });
 
   it("ordinary requests, and the sensor routes (raw bodies), are unaffected", async () => {

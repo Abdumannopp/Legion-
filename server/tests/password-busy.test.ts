@@ -57,8 +57,6 @@ describe("a sign-in flood", () => {
       expect(r.headers["retry-after"]).toBe("2");
       expect(r.body.code).toBe("auth_busy");
     }
-    const ru = results[5];
-    if (ru.status === 503) expect(ru.body.detail).toMatch(/Повторите/);
   });
 
   it("once the flood has passed, the right password signs in", async () => {

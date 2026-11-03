@@ -62,13 +62,6 @@ describe("every important error says what happened, why, and what to do next", (
     expect(describeError(new ApiError("x", 400), en).retryable).toBe(false);
   });
 
-  it("explains in every language", () => {
-    for (const locale of ["ru", "uz"] as const) {
-      const x = describeError(new ApiError("x", 403), translations[locale]);
-      expect(x.title).toBe(translations[locale].errors.forbidden.title);
-      expect(x.title).not.toBe(en.errors.forbidden.title);
-    }
-  });
 });
 
 describe("money in the viewer's language", () => {
@@ -79,11 +72,6 @@ describe("money in the viewer's language", () => {
     expect(formatMoney(2900, "JPY", "en")).toBe("¥2,900");
   });
 
-  it("follows the language's conventions", () => {
-    const ru = formatMoney(2900, "USD", "ru");
-    expect(ru).toMatch(/29,00/);
-    expect(ru).toMatch(/\$/);
-  });
 
   it("falls back to number and code for an unknown currency", () => {
     expect(formatMoney(2900, "ZZ", "en")).toBe("29 ZZ");

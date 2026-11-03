@@ -385,16 +385,6 @@ async function main() {
   await sees(page, "what to do", "Check that you're in the right workspace");
   await shot(page, "error-explained");
 
-  console.log("▶ 14. the same screens in another language and time zone");
-  await context.addCookies([{ name: "legion-locale", value: "ru", url: WEB }]);
-  await page.evaluate(() => { try { localStorage.setItem("legion-locale", "ru"); } catch { /* ignore */ } });
-  await page.goto(`${WEB}/`);
-  await sees(page, "dashboard in Russian", "Что заблокировал Legion");
-  await page.goto(`${WEB}/agents/${agentId}`);
-  await page.getByRole("tab", { name: "Что делал" }).click();
-  await sees(page, "block explained in Russian", "Агент пытался получить данные другого рабочего пространства.");
-  await shot(page, "agent-ru");
-
   check("no uncaught errors in the browser", pageErrors.length === 0, pageErrors.join(" | "));
 }
 

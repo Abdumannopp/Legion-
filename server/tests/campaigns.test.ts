@@ -474,10 +474,10 @@ describe("threat coverage: what Legion sees of the seven attack types", () => {
 });
 
 describe("the dashboard names every campaign rule", () => {
-  it("each rule the server can raise has a label on the Defense page, in all three languages", () => {
+  it("each rule the server can raise has a label on the Defense page", () => {
     const text = readFileSync(new URL("../../frontend/lib/i18n/ns/defense.ts", import.meta.url), "utf8");
     const ruleBlocks = text.split("rule: {").slice(1).map((b) => b.slice(0, b.indexOf("} as Record")));
-    expect(ruleBlocks).toHaveLength(3); // en, ru, uz
+    expect(ruleBlocks).toHaveLength(1);
     for (const block of ruleBlocks) for (const r of CAMPAIGN_RULES) expect(block, r).toContain(`${r}: "`);
   });
 });

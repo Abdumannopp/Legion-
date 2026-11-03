@@ -113,9 +113,9 @@ describe("Turnstile on sign-in", () => {
     expect(seen).toHaveLength(0);
   });
 
-  it("the refusal speaks the visitor's language", async () => {
+  it("the refusal is in English whatever Accept-Language says", async () => {
     const r = await login({ username: "person@example.com", password: "password123" }, { "accept-language": "uz" });
-    expect(r.body.detail).toMatch(/Xavfsizlik tekshiruvidan/);
+    expect(r.body.detail).toMatch(/security check/i);
   });
 });
 

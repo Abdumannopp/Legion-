@@ -31,7 +31,7 @@ describe("plain-language rule explanations", () => {
   it("has an explanation for every group in every language", () => {
     const groups = ["otherWorkspace", "secret", "injection", "toolDefinition", "destination", "database", "command",
       "files", "notPermitted", "needsApproval", "unusual", "notActive", "agentToAgent", "unknownTool", "policy"] as const;
-    for (const locale of ["en", "ru", "uz"] as const) {
+    for (const locale of ["en"] as const) {
       for (const g of groups) {
         expect(translations[locale].agents.rules[g].what.length).toBeGreaterThan(10);
         expect(translations[locale].agents.rules[g].next.length).toBeGreaterThan(10);
@@ -51,7 +51,7 @@ describe("permission names", () => {
     // The package's list is the source of truth; a new permission without a
     // plain-language name would show as a raw id.
     const { PERMISSION_TIERS } = await import("../../packages/agent-identity/src/permissions");
-    for (const locale of ["en", "ru", "uz"] as const) {
+    for (const locale of ["en"] as const) {
       for (const id of Object.keys(PERMISSION_TIERS)) {
         expect(translations[locale].agents.permissions[id], `${locale} ${id}`).toBeTruthy();
       }

@@ -9,10 +9,12 @@ export default function LanguageSwitcher({
   short = false,
 }: {
   compact?: boolean;
-  /** Show "RU" instead of "Русский" — for phone-width headers. */
+  /** Show a short code instead of the language name — for phone-width headers. */
   short?: boolean;
 }) {
   const { locale, setLocale, t } = useLanguage();
+  // English only: nothing to choose, so no switcher.
+  if (LOCALES.length < 2) return null;
 
   return (
     <div

@@ -52,8 +52,7 @@ export async function openCheckout(priceId: string, checkoutToken: string, email
   }
 
   paddle.Checkout.open({
-    // Paddle's checkout has Russian but no Uzbek; Uzbek falls back to English.
-    settings: { locale: locale === "ru" ? "ru" : "en" },
+    settings: { locale: "en" },
     items: [{ priceId, quantity: 1 }],
     customData: { checkout_token: checkoutToken },
     customer: email ? { email } : undefined,

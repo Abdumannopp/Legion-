@@ -160,9 +160,9 @@ describe("controls", () => {
     await release(adminA, "../../etc").expect(404);
   });
 
-  it("answers in the person's language", async () => {
+  it("answers in English whatever Accept-Language says", async () => {
     const r = await request(app).post("/security/payments/PAY-0000000000000000/release").set("Authorization", bearer(adminA)).set("Accept-Language", "uz").expect(404);
-    expect(r.body.detail).toBe("Bunday to'xtatilgan to'lov yo'q");
+    expect(r.body.detail).toBe("No such payment on hold");
   });
 });
 
@@ -194,9 +194,9 @@ describe("one organisation cannot flood the payment check", () => {
 });
 
 describe("the dashboard explains every reason", () => {
-  it("each hold reason has words on the Defense page, in all three languages", () => {
+  it("each hold reason has words on the Defense page, in English", () => {
     const text = readFileSync(new URL("../../frontend/lib/i18n/ns/defense.ts", import.meta.url), "utf8");
-    for (const r of HOLD_REASONS) expect(text.split(`        ${r}: "`).length - 1, r).toBe(3);
+    for (const r of HOLD_REASONS) expect(text.split(`        ${r}: "`).length - 1, r).toBe(1);
   });
 });
 

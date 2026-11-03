@@ -35,9 +35,7 @@ function partsOf(d: Date): { y: number; m: number; day: number; h: number; min: 
 
 // Browsers ship little or no Uzbek date data (Chrome prints "2026 M09 28"),
 // so Uzbek dates are written out here in the standard form: 2026-yil 28-sentabr.
-const UZ_MONTHS = ["yanvar", "fevral", "mart", "aprel", "may", "iyun", "iyul", "avgust", "sentabr", "oktabr", "noyabr", "dekabr"];
 const pad = (n: number) => String(n).padStart(2, "0");
-const uzDate = (d: Date) => { const p = partsOf(d); return `${p.y}-yil ${p.day}-${UZ_MONTHS[p.m - 1]}`; };
 
 function fixedDate(d: Date): string | null {
   const p = partsOf(d);
@@ -58,12 +56,11 @@ function fixedTime(d: Date, locale: Locale): string {
 }
 const hour12 = (): boolean | undefined => (display.timeFormat === "12h" ? true : display.timeFormat === "24h" ? false : undefined);
 
-/** "Sep 28, 2026" / "28 сент. 2026 г." / "2026-yil 28-sentabr" — or the chosen fixed format. */
+/** "Sep 28, 2026" — or the chosen fixed format. */
 export function formatDate(value: DateInput, locale: Locale): string {
   const d = toDate(value);
   const fixed = fixedDate(d);
   if (fixed) return fixed;
-  if (locale === "uz") return uzDate(d);
   return d.toLocaleDateString(INTL_TAG[locale], { dateStyle: "medium", timeZone: display.timeZone });
 }
 
@@ -71,13 +68,13 @@ export function formatDate(value: DateInput, locale: Locale): string {
 export function formatDateTime(value: DateInput, locale: Locale): string {
   const d = toDate(value);
   const fixed = fixedDate(d);
-  if (fixed || locale === "uz") return `${fixed ?? uzDate(d)}, ${formatTime(d, locale)}`;
+  if (fixed) return `${fixed}, ${formatTime(d, locale)}`;
   return d.toLocaleString(INTL_TAG[locale], { dateStyle: "medium", timeStyle: "short", timeZone: display.timeZone, hour12: hour12() });
 }
 
 export function formatTime(value: DateInput, locale: Locale): string {
   const d = toDate(value);
-  if (locale === "uz" || display.timeFormat !== "locale") return fixedTime(d, locale);
+  if (display.timeFormat !== "locale") return fixedTime(d, locale);
   return d.toLocaleTimeString(INTL_TAG[locale], { timeStyle: "short", timeZone: display.timeZone });
 }
 
