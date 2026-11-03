@@ -1,0 +1,41 @@
+<!--
+  Legion automatic response — add these three blocks inside <ossec_config> in
+  /var/ossec/etc/ossec.conf on the Wazuh manager, then restart it:
+    systemctl restart wazuh-manager
+
+  Replace LEGION_URL with the same address as the <hook_url> of your
+  custom-legion integration (ending in /security-events/webhook), and put the
+  sensor credential (KEY_ID:SECRET) in /var/ossec/etc/legion.key:
+    echo 'whk_...:whs_...' > /var/ossec/etc/legion.key
+    chown root:wazuh /var/ossec/etc/legion.key && chmod 640 /var/ossec/etc/legion.key
+  and create the file Wazuh reads, BEFORE the restart (Wazuh reads a file it
+  finds later only from its end):
+    touch /var/ossec/logs/legion-blocklist.log
+    chown wazuh:wazuh /var/ossec/logs/legion-blocklist.log
+-->
+
+<!-- 1. Every minute, fetch Legion's blocklist (custom-legion.py ‐‐sync-blocklist). -->
+<wodle name="command">
+  <disabled>no</disabled>
+  <tag>legion-blocklist</tag>
+  <command>/var/ossec/framework/python/bin/python3 /var/ossec/integrations/custom-legion.py --sync-blocklist @/var/ossec/etc/legion.key LEGION_URL</command>
+  <interval>1m</interval>
+  <run_on_start>yes</run_on_start>
+  <timeout>50</timeout>
+  <ignore_output>yes</ignore_output>
+</wodle>
+
+<!-- 2. Read what it writes. -->
+<localfile>
+  <log_format>json</log_format>
+  <location>/var/ossec/logs/legion-blocklist.log</location>
+</localfile>
+
+<!-- 3. Block the address on every agent; lifted after <timeout> seconds unless
+        Legion still lists it (the script re-announces it every 5 minutes). -->
+<active-response>
+  <command>firewall-drop</command>
+  <location>all</location>
+  <rules_id>100950</rules_id>
+  <timeout>600</timeout>
+</active-response>

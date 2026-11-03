@@ -90,9 +90,11 @@ export class FakeSmtp {
       buf += chunk.toString("utf8");
       for (;;) {
         if (inData) {
-          const end = buf.indexOf("\r\n.\r\n");
-          if (end === -1) { data += buf; buf = ""; return; }
-          data += buf.slice(0, end); buf = buf.slice(end + 5); inData = false;
+          // The end marker can arrive split across two chunks: search everything received.
+          data += buf; buf = "";
+          const end = data.indexOf("\r\n.\r\n");
+          if (end === -1) return;
+          buf = data.slice(end + 5); data = data.slice(0, end); inData = false;
           const id = /^Message-ID:\s*(\S+)/im.exec(data)?.[1] ?? "(none)";
           this.accepted.push(id); data = "";
           s.write("250 2.0.0 queued\r\n");

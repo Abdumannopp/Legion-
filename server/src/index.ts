@@ -27,6 +27,8 @@ import { databaseRoleDecision } from "./db/provision.js";
 import { SETUP_LOCK_KEY, consumeSetupToken, ensureSetupToken, removeSetupTokenFile, setupBanner } from "./setup-token.js";
 import { WEBHOOK_REJECTION_DETAIL, isKeyId } from "./webhook-auth.js";
 import { webhookFailureGate } from "./webhook-guard.js";
+import { listCampaigns } from "./campaigns.js";
+import * as blocklist from "./blocklist.js";
 import * as webhookCredentials from "./webhook-credentials.js";
 import { hashOneTimeToken, newOneTimeToken } from "./auth-tokens.js";
 import { describeReport, migrateSecretsAtRest } from "./secrets-migration.js";
@@ -65,11 +67,13 @@ app.use(originGuard(/^\/(security-events\/webhook|billing\/webhook)$/));
 // kept as raw bytes and only parsed AFTER the signature over those bytes checks
 // out, so an unauthenticated sender never gets its JSON parsed at all.
 export const WEBHOOK_PATH = "/security-events/webhook";
+// The Wazuh manager's pull of its blocklist: signed like the webhook, so raw too.
+export const BLOCKLIST_PATH = "/security-events/blocklist";
 const jsonBody = express.json({
   limit: "256kb",
   verify: (req, _res, buf) => { (req as Request & { rawBody?: Buffer }).rawBody = buf; },
 });
-app.use((req, res, next) => (req.path === WEBHOOK_PATH ? next() : jsonBody(req, res, next)));
+app.use((req, res, next) => (req.path === WEBHOOK_PATH || req.path === BLOCKLIST_PATH ? next() : jsonBody(req, res, next)));
 app.use(express.urlencoded({ extended: false, limit: "32kb" }));
 app.use(cookieParser());
 // Error messages and confirmations in the reader's language (Accept-Language).
@@ -2033,6 +2037,93 @@ app.post(WEBHOOK_PATH,
   const id = report.ingested[0] ?? report.duplicates[0]!;
   if (!report.ingested.length) return res.status(202).json({ status: "skipped", reason: "duplicate", alert_id: id });
   return res.status(202).json({ status: "ingested", alert_id: id });
+  });
+
+// --- Attack campaigns and automatic response ---------------------------------
+// Campaigns are correlated attacks (campaigns.ts); the blocklist is what this
+// workspace's Wazuh manager enforces (blocklist.ts, custom-legion.py
+// --sync-blocklist). Anyone in the workspace can see them; only administrators
+// change them, and every change is audited.
+
+app.get("/security/campaigns", auth, async (req: AuthedRequest, res) => {
+  res.json({ campaigns: await listCampaigns(req.user!.tenant_id) });
+});
+
+app.get("/security/blocks", auth, async (req: AuthedRequest, res) => {
+  res.json({ blocks: await blocklist.listBlocks(req.user!.tenant_id, { activeOnly: req.query.active === "true" }) });
+});
+
+app.post("/security/blocks", requireRole("admin"), async (req: AuthedRequest, res) => {
+  const body = parse(z.object({
+    ip: z.string().min(2).max(45),
+    minutes: z.number().int().min(5).max(10_080).optional(),
+    reason: z.string().max(500).optional(),
+  }), req.body, res); if (!body) return;
+  const settings = await blocklist.getSettings(req.user!.tenant_id);
+  try {
+    const { block, created } = await blocklist.addBlock(req.user!.tenant_id, body.ip, {
+      minutes: body.minutes ?? settings.minutes, reason: body.reason?.trim() || `Blocked by ${req.user!.email}`, userId: req.user!.id,
+    });
+    await log(req, "security.block", "ip", block.ip, `${body.minutes ?? settings.minutes} min`);
+    res.status(created ? 201 : 200).json({ block });
+  } catch (error) {
+    if (error instanceof blocklist.BlockError) return res.status(400).json({ detail: error.message });
+    throw error;
+  }
+});
+
+app.delete("/security/blocks/:ip", requireRole("admin"), async (req: AuthedRequest, res) => {
+  try {
+    const block = await blocklist.revokeBlock(req.user!.tenant_id, String(req.params.ip), req.user!.id);
+    if (!block) return res.status(404).json({ detail: "That address is not blocked" });
+    await log(req, "security.unblock", "ip", block.ip);
+    res.json({ block });
+  } catch (error) {
+    if (error instanceof blocklist.BlockError) return res.status(400).json({ detail: error.message });
+    throw error;
+  }
+});
+
+app.get("/security/auto-response", auth, async (req: AuthedRequest, res) => {
+  res.json(await blocklist.getSettings(req.user!.tenant_id));
+});
+
+app.patch("/security/auto-response", requireRole("admin"), async (req: AuthedRequest, res) => {
+  const body = parse(z.object({
+    mode: z.enum(["off", "auto"]).optional(),
+    minutes: z.number().int().min(5).max(10_080).optional(),
+    allowlist: z.string().max(10_000).optional(),
+  }), req.body, res); if (!body) return;
+  const settings = await blocklist.updateSettings(req.user!.tenant_id, body);
+  await log(req, "security.auto_response_changed", "tenant", req.user!.tenant_id,
+    `mode=${settings.mode} minutes=${settings.minutes} allowlist=${settings.allowlist ? settings.allowlist.split(",").length : 0}`);
+  res.json(settings);
+});
+
+/**
+ * The Wazuh manager asks for its blocklist. Signed exactly like the webhook
+ * (same credential, timestamp, nonce, raw body), and the signed body must say
+ * what it is for, so a signed request made for one purpose cannot be replayed
+ * for another.
+ */
+app.post(BLOCKLIST_PATH,
+  webhookFailureGate,
+  express.raw({ type: "application/json", limit: "4kb" }),
+  async (req, res) => {
+  const rawBody = Buffer.isBuffer(req.body) ? req.body : undefined;
+  const authResult = await webhookCredentials.authenticateWebhook({
+    header: (name) => req.header(name), rawBody, claimedTenantId: req.header("x-tenant-id"),
+  });
+  if (!authResult.ok) {
+    console.warn(`Legion: rejected blocklist request (${authResult.cause}) key=${authResult.keyId ? authResult.keyId.slice(0, 8) : "-"} ip=${req.ip || "unknown"}`);
+    return res.status(401).json({ detail: WEBHOOK_REJECTION_DETAIL[authResult.reason] });
+  }
+  let body: { action?: unknown } = {};
+  try { body = JSON.parse(rawBody!.toString("utf8")) ?? {}; } catch { /* checked below */ }
+  if (body.action !== "sync-blocklist") return res.status(400).json({ detail: "Invalid request" });
+  const entries = await blocklist.activeEntries(authResult.tenantId);
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ generated_at: new Date().toISOString(), entries });
   });
 
 // --- Integrations ------------------------------------------------------------

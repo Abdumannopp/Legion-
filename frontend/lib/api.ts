@@ -914,3 +914,60 @@ export function getApprovals(status: ApprovalRequest["status"] = "pending"): Pro
 export function answerApproval(id: string, answer: "approve" | "deny", reason?: string): Promise<{ approval: ApprovalRequest }> {
   return request(`/firewall/approvals/${encodeURIComponent(id)}/${answer}`, { method: "POST", body: JSON.stringify(reason ? { reason } : {}) });
 }
+
+// --- Defense: attack campaigns and automatic response ------------------------
+
+export interface AttackCampaign {
+  id: string;
+  rule: "rapid_chain" | "wide_sweep" | "swarm" | "velocity" | "ai_manipulation";
+  subject: string;
+  status: "active" | "closed";
+  first_seen: string;
+  last_seen: string;
+  alert_count: number;
+  sources: string[];
+  targets: string[];
+  techniques: string[];
+  alert_id: string | null;
+}
+
+export interface IpBlock {
+  id: string;
+  ip: string;
+  reason: string;
+  campaign_id: string | null;
+  created_at: string;
+  expires_at: string;
+  revoked_at: string | null;
+  automatic: boolean;
+  active: boolean;
+}
+
+export interface AutoResponseSettings { mode: "off" | "auto"; minutes: number; allowlist: string }
+
+export async function getCampaigns(): Promise<AttackCampaign[]> {
+  return (await request<{ campaigns: AttackCampaign[] }>("/security/campaigns")).campaigns;
+}
+
+export async function getBlocks(activeOnly = true): Promise<IpBlock[]> {
+  return (await request<{ blocks: IpBlock[] }>(`/security/blocks${activeOnly ? "?active=true" : ""}`)).blocks;
+}
+
+export async function blockAddress(ip: string, reason?: string, minutes?: number): Promise<IpBlock> {
+  return (await request<{ block: IpBlock }>("/security/blocks", {
+    method: "POST", body: JSON.stringify({ ip: ip.trim(), ...(reason?.trim() ? { reason: reason.trim() } : {}), ...(minutes ? { minutes } : {}) }),
+  })).block;
+}
+
+export async function unblockAddress(ip: string): Promise<void> {
+  await request(`/security/blocks/${encodeURIComponent(ip)}`, { method: "DELETE" });
+}
+
+export function getAutoResponse(): Promise<AutoResponseSettings> {
+  return request<AutoResponseSettings>("/security/auto-response");
+}
+
+export function updateAutoResponse(patch: Partial<AutoResponseSettings>): Promise<AutoResponseSettings> {
+  return request<AutoResponseSettings>("/security/auto-response", { method: "PATCH", body: JSON.stringify(patch) });
+}
+

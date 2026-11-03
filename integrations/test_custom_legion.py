@@ -395,5 +395,126 @@ class SpoolTests(unittest.TestCase):
         load_module(self.log, self.spool_dir, LEGION_SPOOL_MAX_FILES=50000)
 
 
+
+class BlocklistTests(unittest.TestCase):
+    """--sync-blocklist: Legion's list becomes Wazuh active-response lines."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.log = os.path.join(self.dir.name, "integrations.log")
+        self.out = os.path.join(self.dir.name, "legion-blocklist.log")
+        self.state = os.path.join(self.dir.name, "state.json")
+        self.mod = load_module(self.log, LEGION_BLOCKLIST_LOG=self.out, LEGION_BLOCKLIST_STATE=self.state,
+                               LEGION_BLOCK_REFRESH_SECONDS=300)
+        open(self.out, "a").close()  # the setup step creates it; see the fresh-file test
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def sync(self, entries, status=200, api_key=API_KEY):
+        reply = json.dumps({"entries": entries}).encode()
+        server = Server([(status, {"Content-Type": "application/json"}, reply)])
+        try:
+            url = server.url  # .../security-events/webhook; the script derives /blocklist
+            code = self.mod.main(["custom-legion", "--sync-blocklist", api_key, url])
+        finally:
+            server.close()
+        return code, server.requests
+
+    def lines(self):
+        if not os.path.exists(self.out):
+            return []
+        with open(self.out) as f:
+            return [json.loads(line) for line in f if line.strip()]
+
+    def test_asks_signed_for_its_list_and_writes_one_line_per_address(self):
+        code, requests = self.sync([
+            {"ip": "45.155.205.12", "reason": "Automatic: campaign CMP-1 (rapid chain)", "campaign_id": "CMP-1"},
+            {"ip": "2a00:1450:4001:80b::200e", "reason": "manual", "campaign_id": None},
+        ])
+        self.assertEqual(code, 0)
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(json.loads(requests[0]["body"]), {"action": "sync-blocklist"})
+        headers = requests[0]["headers"]
+        self.assertEqual(headers["x-legion-key-id"], KEY_ID)
+        self.assertTrue(headers["x-legion-signature"].startswith("v2="))
+        lines = self.lines()
+        self.assertEqual([l["srcip"] for l in lines], ["45.155.205.12", "2a00:1450:4001:80b::200e"])
+        self.assertEqual(lines[0]["legion"], {"action": "block", "reason": "Automatic: campaign CMP-1 (rapid chain)", "campaign": "CMP-1"})
+        self.assertNotIn(SECRET, open(self.log).read())
+
+    def test_a_brand_new_log_file_is_created_and_left_alone_until_wazuh_has_found_it(self):
+        # Wazuh looks for a missing file about once a minute and reads it from its
+        # end: a line written into a file it has not found yet would be lost.
+        os.remove(self.out)
+        entry = [{"ip": "45.155.205.12", "reason": "r"}]
+        self.assertEqual(self.sync(entry)[0], 0)
+        self.assertTrue(os.path.exists(self.out))
+        self.assertEqual(self.lines(), [])
+        self.sync(entry)                       # a minute later: still within the grace period
+        self.assertEqual(self.lines(), [])
+        with open(self.state) as f:
+            state = json.load(f)
+        self.assertEqual(set(state), {"45.155.205.12", "_log_created"})
+        state["_log_created"] -= 121
+        with open(self.state, "w") as f:
+            json.dump(state, f)
+        self.sync(entry)
+        self.assertEqual([l["srcip"] for l in self.lines()], ["45.155.205.12"])
+        with open(self.state) as f:
+            self.assertEqual(set(json.load(f)), {"45.155.205.12"})   # the marker is gone
+
+    def test_an_address_is_announced_again_only_when_due(self):
+        entry = [{"ip": "45.155.205.12", "reason": "r"}]
+        self.sync(entry)
+        self.sync(entry)
+        self.assertEqual(len(self.lines()), 1)  # not due yet
+        with open(self.state) as f:
+            state = json.load(f)
+        state["45.155.205.12"] -= 301
+        with open(self.state, "w") as f:
+            json.dump(state, f)
+        self.sync(entry)
+        self.assertEqual(len(self.lines()), 2)  # refreshed before Wazuh's timeout lifts it
+
+    def test_an_address_legion_stops_listing_is_forgotten(self):
+        self.sync([{"ip": "45.155.205.12", "reason": "r"}])
+        self.sync([])
+        with open(self.state) as f:
+            self.assertEqual(json.load(f), {})
+
+    def test_anything_that_is_not_an_address_is_ignored(self):
+        self.sync([{"ip": "45.155.205.12; rm -rf /", "reason": "x"}, {"ip": "", "reason": "x"}, "junk",
+                   {"ip": "8.8.8.8", "reason": "line\nbreak\u0000and control"}])
+        lines = self.lines()
+        self.assertEqual([l["srcip"] for l in lines], ["8.8.8.8"])
+        self.assertEqual(lines[0]["legion"]["reason"], "linebreakand control")
+
+    def test_legion_unreachable_or_refusing_writes_nothing(self):
+        code, _ = self.sync([{"ip": "8.8.8.8"}], status=401)
+        self.assertEqual(code, 1)
+        self.assertEqual(self.lines(), [])
+        self.assertIn("existing blocks stay until their Wazuh timeout", open(self.log).read())
+
+    def test_the_credential_can_come_from_a_file(self):
+        key_file = os.path.join(self.dir.name, "legion.key")
+        with open(key_file, "w") as f:
+            f.write(API_KEY + "\n")
+        code, requests = self.sync([{"ip": "8.8.8.8", "reason": "r"}], api_key="@" + key_file)
+        self.assertEqual(code, 0)
+        self.assertEqual(requests[0]["headers"]["x-legion-key-id"], KEY_ID)
+
+    def test_legions_own_block_events_are_not_sent_back(self):
+        alert_file = os.path.join(self.dir.name, "alert.json")
+        with open(alert_file, "w") as f:
+            json.dump({"id": "1.2", "rule": {"id": "100950", "groups": ["legion", "legion_response"], "description": "block"}}, f)
+        server = Server([])
+        try:
+            code = self.mod.main(["custom-legion", alert_file, API_KEY, server.url])
+        finally:
+            server.close()
+        self.assertEqual(code, 0)
+        self.assertEqual(server.requests, [])
+
 if __name__ == "__main__":
     unittest.main()

@@ -40,6 +40,11 @@ export const wazuhAdapter: PushAdapter = {
     const event: any = b.event || b;
     const description = String(event?.rule?.description || "");
     if (!description) return { skipped: true, reason: "no rule description" };
+    // Legion's own automatic response, as Wazuh records it (rule group
+    // "legion_response", integrations/wazuh/legion_rules.xml). Ingesting it
+    // would make every block look like more activity from the blocked address.
+    const groups: unknown[] = Array.isArray(event?.rule?.groups) ? event.rule.groups : [];
+    if (groups.some((g) => String(g) === "legion_response")) return { skipped: true, reason: "Legion's own response" };
     const level = Number(event.rule?.level || 0);
     // Whatever the sensor sends is bounded and shaped before it is stored: these
     // fields feed prompts and analyst-facing suggestions, and are attacker-

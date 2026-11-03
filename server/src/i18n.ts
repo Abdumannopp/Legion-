@@ -271,6 +271,22 @@ export const CATALOG: Record<string, Translation> = {
     ru: "Не найдено",
     uz: "Topilmadi",
   },
+  "That address is not blocked": {
+    ru: "Этот адрес не заблокирован",
+    uz: "Bu manzil bloklanmagan",
+  },
+  "Not an IP address": {
+    ru: "Это не IP-адрес",
+    uz: "Bu IP manzil emas",
+  },
+  "A block lasts between 5 minutes and 7 days": {
+    ru: "Блокировка длится от 5 минут до 7 дней",
+    uz: "Bloklash muddati 5 daqiqadan 7 kungacha",
+  },
+  "At most 200 allowlist entries": {
+    ru: "В списке исключений не более 200 записей",
+    uz: "Istisnolar ro'yxatida ko'pi bilan 200 ta yozuv bo'ladi",
+  },
   "Webhook credential not found": {
     ru: "Учётные данные вебхука не найдены",
     uz: "Webhook kalitlari topilmadi",
@@ -513,6 +529,21 @@ const PATTERNS: Array<{ re: RegExp; ru: (m: RegExpMatchArray) => string; uz: (m:
     re: /^Paddle API returned (\d+)$/,
     ru: (m) => `Paddle API вернул ошибку ${m[1]}`,
     uz: (m) => `Paddle API ${m[1]} xatosini qaytardi`,
+  },
+  {
+    re: /^At most (\d+) addresses can be blocked at once$/,
+    ru: (m) => `Одновременно можно заблокировать не более ${m[1]} адресов`,
+    uz: (m) => `Bir vaqtda ko'pi bilan ${m[1]} ta manzil bloklanadi`,
+  },
+  {
+    re: /^Not an IP address or range: (.*)$/s,
+    ru: (m) => `Это не IP-адрес и не диапазон: ${m[1]}`,
+    uz: (m) => `Bu IP manzil yoki diapazon emas: ${m[1]}`,
+  },
+  {
+    re: /^Range too wide or invalid: (.*)$/s,
+    ru: (m) => `Диапазон слишком широкий или неверный: ${m[1]}`,
+    uz: (m) => `Diapazon juda keng yoki noto'g'ri: ${m[1]}`,
   },
   {
     re: /^Test email sent to (.+)$/,

@@ -207,3 +207,98 @@ For quiet periods, run the drain every minute on the manager:
   `custom-legion.py --drain <new KEY_ID:SECRET> <hook_url> --from <old key id>`
 - The spool holds at most `LEGION_SPOOL_MAX_FILES` events (50 000); beyond
   that the oldest are dropped and the integration log says so.
+
+---
+
+## Avtomatik javob: hujumchini Wazuh orqali bloklash
+
+Avtomatlashtirilgan va AI yordamidagi hujumlar bir necha soniyada o'nlab
+urinish qiladi. Legion bog'liq ogohlantirishlarni **hujum kampaniyalariga**
+birlashtiradi (Dashboard → **Himoya**) va xohlasangiz hujumchi manzilini Wazuh
+menejeringiz orqali **taxminan bir daqiqada** bloklaydi.
+
+### Legion nimani "kampaniya" deb biladi
+
+| Qoida | Shart | Avtomatik bloklanadimi |
+|---|---|---|
+| Tez ko'p bosqichli hujum (`rapid_chain`) | bitta manzildan 15 daqiqada ≥ 3 xil MITRE usuli | ha |
+| Ko'p serverlarni aylanib chiqish (`wide_sweep`) | bitta manzildan 10 daqiqada ≥ 5 server | ha |
+| Keskin faollik (`velocity`) | bitta manzildan 5 daqiqada ≥ 30 ogohlantirish | ha |
+| Ko'p manzil, bitta server (`swarm`) | 10 daqiqada ≥ 10 manzil bitta serverga | **yo'q** (manzillar juda ko'p; bu DDoS — EDGE-SECURITY.md) |
+| AI'ni aldashga urinish (`ai_manipulation`) | log ichida AI'ga buyruq ("ignore previous instructions", yashirin belgilar, model tokenlari…) | **yo'q** (manzil emas, matn) |
+
+Har bir yangi kampaniya — **bitta** ogohlantirish ("Hunter" agenti), har
+urinish uchun alohida emas.
+
+### Xavfsizlik chegaralari (o'chirib bo'lmaydi)
+
+- Standart holatda **o'chiq** — faqat aniqlaydi va xabar beradi. Yoqishni
+  administrator Himoya sahifasida qiladi (audit jurnalida yoziladi).
+- Faqat **ommaviy** IP manzillar: ichki (10.x, 192.168.x, 172.16–31.x),
+  CGNAT, loopback, hujjat manzillari hech qachon avtomatik bloklanmaydi.
+- **Istisnolar ro'yxati** (o'z ofisingiz, hamkorlar, skanerlaringiz) — hech
+  qachon avtomatik bloklanmaydi.
+- Soatiga ko'pi bilan **50** avtomatik bloklash, bir vaqtda ko'pi bilan **1000**.
+- Har bir bloklash muddatli (5 daqiqa – 7 kun, standart 1 soat), audit
+  jurnalida yoziladi va Himoya sahifasida bir tugma bilan bekor qilinadi.
+
+### Wazuh menejerida bir martalik sozlash
+
+```bash
+# 1. Skript (3-bo'limdagi bilan bir xil) va qoida
+cp integrations/wazuh/legion_rules.xml /var/ossec/etc/rules/legion_rules.xml
+chown root:wazuh /var/ossec/etc/rules/legion_rules.xml
+
+# 2. Sensor kaliti faylda (ossec.conf'dagi bilan bir xil KEY_ID:SECRET)
+echo 'whk_...:whs_...' > /var/ossec/etc/legion.key
+chown root:wazuh /var/ossec/etc/legion.key && chmod 640 /var/ossec/etc/legion.key
+
+# 3. Wazuh o'qiydigan fayl — qayta ishga tushirishdan OLDIN
+touch /var/ossec/logs/legion-blocklist.log
+chown wazuh:wazuh /var/ossec/logs/legion-blocklist.log
+```
+
+4. `integrations/wazuh/ossec-legion-response.xml` dagi uchta blokni
+   (`wodle`, `localfile`, `active-response`) `ossec.conf` ichiga qo'shing,
+   `LEGION_URL` ni o'z `hook_url` ingiz bilan almashtiring.
+5. `/var/ossec/bin/wazuh-analysisd -t` (xato yo'qligini tekshiring), keyin
+   `systemctl restart wazuh-manager`.
+
+Tekshirish: `/var/ossec/logs/integrations.log` da har daqiqada
+`BLOCKLIST n active, m sent to active response` qatori chiqadi.
+
+### Qanday ishlaydi
+
+1. Har daqiqada Wazuh `custom-legion.py --sync-blocklist` ni ishga tushiradi;
+   u Legion'dan **imzolangan** so'rov bilan ro'yxatni oladi (faqat shu
+   tashkilotniki).
+2. Yangi manzil uchun `legion-blocklist.log` ga bitta JSON qator yozadi.
+3. Wazuh qoida 100950 shu qatorni ko'radi va `firewall-drop` active
+   response'ni **barcha agentlarda** ishga tushiradi.
+4. Wazuh bloklashni `<timeout>` (600 s) dan keyin o'zi olib tashlaydi.
+   Legion hali bloklashni xohlasa, skript manzilni har 5 daqiqada qayta
+   e'lon qiladi — shuning uchun blok uzilmaydi.
+5. Legion'da blokdan chiqarsangiz, skript e'lon qilishni to'xtatadi va Wazuh
+   uni ko'pi bilan **10 daqiqada** olib tashlaydi.
+
+Legion'ning o'z bloklash hodisalari (guruh `legion_response`) Legion'ga yangi
+ogohlantirish bo'lib qaytib kelmaydi — ikki tomonda ham tekshiriladi.
+
+### Halol cheklovlar
+
+- **Hech bir tizim barcha hujumlarni to'xtatmaydi.** Bu tezlikni oshiradi:
+  odam ogohlantirishni o'qishidan oldin hujumchi to'xtatiladi.
+- Ko'p manzilli hujumni (botnet, DDoS) IP bloklash to'xtatmaydi — buning uchun
+  Cloudflare kabi chekka himoya kerak (EDGE-SECURITY.md).
+- Hujumchi log'dagi manzilni soxtalashtirishi mumkin (masalan, boshqa birovning
+  IP'si yozilgan log qatori). Shuning uchun: faqat ommaviy manzillar, istisnolar
+  ro'yxati, soatlik chegara va muddatli bloklar. O'z muhim manzillaringizni
+  istisnolarga qo'shing.
+- Bloklashni Wazuh agentlari bajaradi (`firewall-drop` → iptables). Agent
+  yo'q yoki iptables bo'lmagan joyda blok ishlamaydi. Bizning avtomatik
+  sinovimizda (`ops/tests/e2e-wazuh-response.mjs`, haqiqiy Wazuh 4.9.2)
+  Wazuh `firewall-drop` ni ishga tushirgani tekshirildi; Docker obrazida
+  iptables yo'qligi sababli yadro qoidasining o'zi tekshirilmadi.
+- Yangi `legion-blocklist.log` fayli: Wazuh kech topgan faylni oxiridan o'qiydi.
+  Yuqoridagi `touch` qadamini o'tkazib yuborsangiz, skript faylni o'zi yaratadi
+  va 2 daqiqa kutadi — birinchi bloklash shuncha kechikadi.

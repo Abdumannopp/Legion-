@@ -57,6 +57,9 @@ describe("every message the API writes has a Russian and an Uzbek translation", 
       ["Could not send: 550 rejected", "Не удалось отправить: 550 rejected"],
       ["Could not reach Paddle: timeout", "Нет связи с Paddle: timeout"],
       ["Test email sent to soc@acme.example", "Тестовое письмо отправлено на soc@acme.example"],
+      ["At most 1000 addresses can be blocked at once", "Одновременно можно заблокировать не более 1000 адресов"],
+      ["Not an IP address or range: 10.0.0.300", "Это не IP-адрес и не диапазон: 10.0.0.300"],
+      ["Range too wide or invalid: 0.0.0.0/0", "Диапазон слишком широкий или неверный: 0.0.0.0/0"],
     ]) {
       expect(translate(text!, "ru")).toBe(ru);
       expect(translate(text!, "uz")).not.toBe(text);

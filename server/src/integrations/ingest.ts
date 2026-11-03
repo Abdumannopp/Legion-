@@ -11,6 +11,8 @@ import { createHmac } from "node:crypto";
 import { clip } from "../ai-safety.js";
 import { config } from "../config.js";
 import * as outbox from "../outbox.js";
+import { correlate } from "../campaigns.js";
+import { respondToCampaigns } from "../blocklist.js";
 import type { Alert } from "../types.js";
 import type { Finding } from "./types.js";
 
@@ -19,12 +21,13 @@ export function findingAlertId(tenantId: string, source: string, externalId: str
   return `SEC-${createHmac("sha256", config.webhookSecret || "legion-webhook-event-id").update(`${tenantId}:${source}:${externalId}`).digest("hex").slice(0, 16).toUpperCase()}`;
 }
 
-export interface IngestReport { ingested: string[]; duplicates: string[] }
+export interface IngestReport { ingested: string[]; duplicates: string[]; campaigns?: string[] }
 
 export async function ingestFindings(
   tenantId: string, source: string, findings: Finding[], opts: { realtime?: (alert: Alert) => unknown } = {},
 ): Promise<IngestReport> {
   const report: IngestReport = { ingested: [], duplicates: [] };
+  const stored: Alert[] = [];
   for (const f of findings) {
     const id = findingAlertId(tenantId, source, f.externalId);
     const alert = await outbox.insertAlertAndNotify({
@@ -37,6 +40,21 @@ export async function ingestFindings(
       occurred_at: f.occurredAt,
     }, { asset: f.asset ?? null, realtime: opts.realtime });
     (alert ? report.ingested : report.duplicates).push(id);
+    if (alert) stored.push(alert);
+  }
+  // Campaign detection and the automatic response run AFTER the alerts are
+  // committed, and never undo or fail ingestion: a sensor must not retry (and
+  // spool) an event that was stored because correlation had a problem.
+  if (stored.length) {
+    try {
+      const campaigns = await correlate(tenantId, stored, { realtime: opts.realtime });
+      if (campaigns.length) {
+        report.campaigns = campaigns.map((c) => c.id);
+        await respondToCampaigns(tenantId, campaigns);
+      }
+    } catch (error) {
+      console.error("Legion: campaign correlation failed:", error instanceof Error ? error.message : "unknown error");
+    }
   }
   return report;
 }

@@ -39,6 +39,7 @@ import { errors } from "./ns/errors";
 import { agents } from "./ns/agents";
 import { overview } from "./ns/overview";
 import { connect } from "./ns/connect";
+import { defense } from "./ns/defense";
 
 export { LOCALES, DEFAULT_LOCALE, isLocale } from "./core";
 export type { Locale } from "./core";
@@ -78,6 +79,7 @@ const namespaces = {
   agents,
   overview,
   connect,
+  defense,
 };
 
 type Namespaces = typeof namespaces;

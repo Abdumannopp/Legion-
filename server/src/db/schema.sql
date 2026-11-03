@@ -573,3 +573,67 @@ CREATE TABLE IF NOT EXISTS integration_connections (
 );
 CREATE INDEX IF NOT EXISTS integration_connections_tenant_idx ON integration_connections (tenant_id, created_at);
 CREATE INDEX IF NOT EXISTS integration_connections_due_idx ON integration_connections (next_poll_at) WHERE status = 'active';
+
+-- Attack campaigns and automatic response (campaigns.ts, blocklist.ts) -------
+-- Automated and AI-driven attacks show themselves in their SHAPE more than in
+-- any single event: one address working through several techniques in minutes,
+-- sweeping many hosts, or many addresses converging on one host at once. A
+-- campaign is the correlation of those alerts; it gets its own alert, and can
+-- feed the blocklist the Wazuh manager enforces (active response).
+CREATE INDEX IF NOT EXISTS alerts_tenant_source_ip_idx ON alerts (tenant_id, source_ip, created_at DESC)
+  WHERE source_ip IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS attack_campaigns (
+  tenant_id    uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  id           text        NOT NULL,
+  rule         text        NOT NULL CHECK (rule IN ('rapid_chain', 'wide_sweep', 'swarm', 'velocity', 'ai_manipulation')),
+  -- What the campaign is about: the attacking address, or the attacked host.
+  subject      text        NOT NULL CHECK (length(subject) BETWEEN 1 AND 255),
+  status       text        NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed')),
+  first_seen   timestamptz NOT NULL DEFAULT now(),
+  last_seen    timestamptz NOT NULL DEFAULT now(),
+  alert_count  integer     NOT NULL DEFAULT 0,
+  sources      text[]      NOT NULL DEFAULT '{}',
+  targets      text[]      NOT NULL DEFAULT '{}',
+  techniques   text[]      NOT NULL DEFAULT '{}',
+  -- The alert that announced it (source 'legion-correlation').
+  alert_id     text,
+  PRIMARY KEY (tenant_id, id)
+);
+-- At most one ACTIVE campaign per rule and subject: concurrent instances
+-- detecting the same thing converge on one row.
+CREATE UNIQUE INDEX IF NOT EXISTS attack_campaigns_active_uniq
+  ON attack_campaigns (tenant_id, rule, subject) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS attack_campaigns_tenant_seen_idx ON attack_campaigns (tenant_id, last_seen DESC);
+
+-- Addresses the workspace's Wazuh manager should block (custom-legion.py
+-- --sync-blocklist turns each new entry into a Wazuh active response). An entry
+-- is active while revoked_at is null and expires_at is in the future.
+CREATE TABLE IF NOT EXISTS ip_blocks (
+  tenant_id    uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  id           uuid        NOT NULL,
+  ip           text        NOT NULL CHECK (length(ip) BETWEEN 2 AND 45),
+  reason       text        NOT NULL CHECK (length(reason) BETWEEN 1 AND 500),
+  campaign_id  text,
+  created_by   uuid,       -- null: Legion decided automatically
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  expires_at   timestamptz NOT NULL,
+  revoked_at   timestamptz,
+  revoked_by   uuid,
+  PRIMARY KEY (tenant_id, id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ip_blocks_active_uniq ON ip_blocks (tenant_id, ip) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS ip_blocks_tenant_created_idx ON ip_blocks (tenant_id, created_at DESC);
+
+-- Per-workspace automatic response. 'off' (default): campaigns are detected
+-- and reported, and an administrator blocks by hand. 'auto': a campaign from a
+-- public address blocks it for auto_block_minutes, within the safety limits.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS auto_block_mode text NOT NULL DEFAULT 'off';
+ALTER TABLE tenants DROP CONSTRAINT IF EXISTS tenants_auto_block_mode_check;
+ALTER TABLE tenants ADD CONSTRAINT tenants_auto_block_mode_check CHECK (auto_block_mode IN ('off', 'auto'));
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS auto_block_minutes integer NOT NULL DEFAULT 60;
+ALTER TABLE tenants DROP CONSTRAINT IF EXISTS tenants_auto_block_minutes_check;
+ALTER TABLE tenants ADD CONSTRAINT tenants_auto_block_minutes_check CHECK (auto_block_minutes BETWEEN 5 AND 10080);
+-- Never blocked automatically (comma-separated IPs/CIDRs): your own offices,
+-- partners, scanners you run on purpose.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS block_allowlist text NOT NULL DEFAULT '';

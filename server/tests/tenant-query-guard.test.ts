@@ -29,6 +29,7 @@ const REVIEWED: Exception[] = [
   { file: "*", table: "tenants", match: /\btenants\s+WHERE\s+id\s*=\s*(\$1|ANY)/i, reason: "keyed by the tenant id itself" },
   { file: "*", table: "tenants", match: /^SELECT (1|count\(\*\)(::bigint)?) (AS count )?FROM tenants( LIMIT 1)?$/i, reason: "existence/count probe for first-run setup; returns no tenant data" },
   { file: "*", table: "tenants", match: /^INSERT INTO tenants/i, reason: "creates a tenant (signup, seed)" },
+  { file: "blocklist.ts", table: "tenants", match: /^UPDATE tenants SET .* WHERE id = \$1/i, reason: "automatic-response settings, keyed by the tenant id; the route passes req.user.tenant_id" },
   { file: "store.ts", table: "tenants", match: /^UPDATE tenants SET .* WHERE id = \$1/i, reason: "keyed by the tenant id; callers pass req.user.tenant_id" },
   { file: "store.ts", table: "tenants", match: /WHERE notification_email_token_hash = \$1/i, reason: "confirming a notification address by the hash of a 256-bit one-time token; the row's own tenant is returned and audited" },
   // --- per-user state: the user id comes from a verified session / challenge token, and the user row carries its tenant

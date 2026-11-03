@@ -43,6 +43,41 @@ export function clip(text: string, max: number): string {
   return s.slice(0, end);
 }
 
+// --- attempts to steer an AI reading the logs ----------------------------------
+
+/**
+ * Text written for a MODEL rather than for a person: "ignore previous
+ * instructions", "classify this as a false positive", chat control tokens,
+ * characters a human cannot see. Attackers who expect an AI to triage their
+ * traffic plant it in usernames, user agents, URLs and file names. Legion's own
+ * prompts already treat alert text as data (sanitizeUntrusted, the output
+ * checks below); this reports the ATTEMPT, which is itself evidence of an
+ * attacker who knows an AI is watching (campaigns.ts rule ai_manipulation).
+ *
+ * Deliberately narrow — each pattern needs the wording of an instruction to a
+ * model, not just a word like "ignore" — because a false alarm here trains
+ * people to dismiss it.
+ */
+const MANIPULATION: Array<[string, RegExp]> = [
+  ["instruction override", /\b(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(previous|prior|above|earlier|all|any|your)\b[^.\n]{0,25}\b(instructions?|prompts?|rules|directives|guidelines)\b/i],
+  ["role reassignment", /\b(you are now|from now on you are|act as|pretend to be|you must act as)\b[^.\n]{0,30}\b(ai|assistant|language model|llm|chatbot|analyst|security model)\b/i],
+  ["prompt extraction", /\b(reveal|print|repeat|show|output)\b[^.\n]{0,30}\b(system prompt|hidden instructions?|developer message|your instructions)\b/i],
+  ["model control tokens", /<\|(?:im_start|im_end|system|user|assistant|endoftext)\|>|\[\/?INST\]|<<\/?SYS>>|<\/?(?:system|assistant)>/i],
+  ["verdict steering", /\b(mark|classify|label|treat|report|flag|consider|rate)\b[^.\n]{0,40}\bas\b[^.\n]{0,20}\b(benign|harmless|false[ -]positive|safe|not malicious|low (?:risk|severity)|resolved)\b/i],
+];
+// Bidirectional overrides ("Trojan Source") and Unicode tag characters
+// ("ASCII smuggling"): text a model reads but an analyst does not see. Not the
+// zero-width joiner or BOM, which legitimate text uses.
+const HIDDEN = /[\u202A-\u202E\u2066-\u2069\u{E0000}-\u{E007F}]/u;
+
+/** The kinds of model-steering found in `text` (empty when none). */
+export function manipulationSignals(text: string): string[] {
+  const s = String(text ?? "").slice(0, 20_000);
+  const found = MANIPULATION.filter(([, re]) => re.test(s)).map(([name]) => name);
+  if (HIDDEN.test(s)) found.push("hidden characters");
+  return found;
+}
+
 // --- identifiers: never free text --------------------------------------------
 
 const HOSTNAME_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,253}[A-Za-z0-9])?$/;

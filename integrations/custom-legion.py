@@ -46,6 +46,7 @@ An event Legion refuses (401/403 or another 4xx) is kept in <key id>/dead/.
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -69,6 +70,22 @@ USER_AGENT = "Legion-Wazuh-Integration/2 (+custom-legion.py)"
 MAX_PAYLOAD_BYTES = int(os.environ.get("LEGION_MAX_PAYLOAD_BYTES", str(900 * 1024)))
 TRIMMED_LOG_CHARS = 64 * 1024
 LOG_FILE = os.environ.get("LEGION_INTEGRATION_LOG", "/var/ossec/logs/integrations.log")
+
+# --sync-blocklist: Legion's automatic response, enforced by Wazuh itself.
+# Each address to block becomes one JSON line in BLOCKLIST_LOG; Wazuh reads that
+# file (<localfile>), rule 100950 (integrations/wazuh/legion_rules.xml) matches
+# it and its active response runs firewall-drop on every agent, undone after the
+# <timeout> configured there. While Legion still lists an address, it is
+# re-announced every BLOCK_REFRESH_SECONDS so the block does not lapse; once
+# Legion stops listing it (expired, or an administrator unblocked it), Wazuh's
+# timeout lifts it. Keep BLOCK_REFRESH_SECONDS below that timeout.
+BLOCKLIST_LOG = os.environ.get("LEGION_BLOCKLIST_LOG", "/var/ossec/logs/legion-blocklist.log")
+BLOCKLIST_STATE = os.environ.get("LEGION_BLOCKLIST_STATE", "/var/ossec/tmp/legion-blocklist-state.json")
+BLOCK_REFRESH_SECONDS = int(os.environ.get("LEGION_BLOCK_REFRESH_SECONDS", "300"))
+LOG_GRACE_SECONDS = int(os.environ.get("LEGION_BLOCKLIST_LOG_GRACE_SECONDS", "120"))
+LOG_CREATED_KEY = "_log_created"
+# Our own block events must not travel back to Legion as new alerts.
+OWN_RESPONSE_GROUP = "legion_response"
 
 
 def log(message):
@@ -101,7 +118,139 @@ def parse_api_key(api_key):
     return key_id, secret
 
 
+def read_api_key(value):
+    """A credential given directly, or as @/path/to/file (keeps it out of
+    ossec.conf and the process list)."""
+    if value.startswith("@"):
+        try:
+            with open(value[1:], "r") as handle:
+                return handle.read().strip()
+        except OSError as exc:
+            log(f"ERROR could not read the credential file: {exc.strerror}")
+            return ""
+    return value
+
+
+def blocklist_url(hook_url):
+    if not hook_url.rstrip("/").endswith("/webhook"):
+        return None
+    return hook_url.rstrip("/")[: -len("/webhook")] + "/blocklist"
+
+
+def clean_text(value, limit=200):
+    text = "".join(ch for ch in str(value or "") if ch.isprintable())
+    return text[:limit]
+
+
+def sync_blocklist(hook_url, key_id, secret):
+    """Fetches the workspace's blocklist and hands new (or due) addresses to
+    Wazuh's active response. Returns 0 on success."""
+    url = blocklist_url(hook_url)
+    if not url:
+        log("ERROR --sync-blocklist needs the webhook URL (ending in /security-events/webhook)")
+        return 1
+    body = json.dumps({"action": "sync-blocklist"}).encode("utf-8")
+    timestamp = str(int(time.time()))
+    nonce = secrets.token_urlsafe(16)
+    request = urllib.request.Request(url, data=body, method="POST", headers={
+        "Content-Type": "application/json",
+        "User-Agent": USER_AGENT,
+        "x-legion-key-id": key_id,
+        "x-legion-timestamp": timestamp,
+        "x-legion-nonce": nonce,
+        "x-legion-signature": sign(secret, timestamp, nonce, body),
+    })
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+            data = json.loads(response.read(2 * 1024 * 1024).decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        log(f"ERROR blocklist: Legion answered {exc.code}; existing blocks stay until their Wazuh timeout")
+        return 1
+    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        log(f"ERROR blocklist: could not reach Legion ({type(exc).__name__}); existing blocks stay until their Wazuh timeout")
+        return 1
+
+    entries = data.get("entries") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        log("ERROR blocklist: unexpected answer from Legion")
+        return 1
+    try:
+        with open(BLOCKLIST_STATE, "r") as handle:
+            state = json.load(handle)
+        if not isinstance(state, dict):
+            state = {}
+    except (OSError, ValueError):
+        state = {}
+
+    # Wazuh's logcollector looks for a missing file about once a minute and
+    # starts reading it at its END, so a line written into a file Wazuh has not
+    # found yet is lost. When the file is new, create it and wait LOG_GRACE_SECONDS
+    # before writing into it (the setup step `touch`es it, so this rarely waits).
+    now = time.time()
+    created = state.pop(LOG_CREATED_KEY, None)
+    if not os.path.exists(BLOCKLIST_LOG):
+        try:
+            with open(BLOCKLIST_LOG, "a"):
+                pass
+        except OSError as exc:
+            log(f"ERROR blocklist: could not create {BLOCKLIST_LOG}: {exc.strerror}")
+            return 1
+        created = now
+    waiting = isinstance(created, (int, float)) and now - created < LOG_GRACE_SECONDS
+
+    active = {}
+    lines = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            ip = str(ipaddress.ip_address(str(entry.get("ip", "")).strip()))
+        except ValueError:
+            continue
+        last = float(state.get(ip, 0)) if isinstance(state.get(ip, 0), (int, float)) else 0.0
+        active[ip] = last
+        if not waiting and now - last >= BLOCK_REFRESH_SECONDS:
+            lines.append(json.dumps({
+                "legion": {
+                    "action": "block",
+                    "reason": clean_text(entry.get("reason")),
+                    "campaign": clean_text(entry.get("campaign_id") or "", 40),
+                },
+                "srcip": ip,
+            }, separators=(",", ":")))
+            active[ip] = now
+
+    if lines:
+        try:
+            with open(BLOCKLIST_LOG, "a") as handle:
+                handle.write("\n".join(lines) + "\n")
+        except OSError as exc:
+            log(f"ERROR blocklist: could not write {BLOCKLIST_LOG}: {exc.strerror}")
+            return 1
+    # Only addresses Legion still lists are remembered; one it drops is no longer
+    # re-announced, so Wazuh lifts it at its timeout.
+    if waiting:
+        active[LOG_CREATED_KEY] = created
+    tmp = f"{BLOCKLIST_STATE}.{os.getpid()}.tmp"
+    try:
+        with open(tmp, "w") as handle:
+            json.dump(active, handle)
+        os.replace(tmp, BLOCKLIST_STATE)
+    except OSError as exc:
+        log(f"ERROR blocklist: could not save state: {exc.strerror}")
+    log(f"BLOCKLIST {len(active) - (1 if waiting else 0)} active, {len(lines)} sent to active response"
+        + (" (waiting for Wazuh to find the new log file)" if waiting else ""))
+    return 0
+
+
 def main(argv):
+    # Blocklist mode, for Wazuh's command wodle (every minute):
+    #   custom-legion.py --sync-blocklist <api_key or @file> <hook_url>
+    if len(argv) == 4 and argv[1] == "--sync-blocklist":
+        creds = parse_api_key(read_api_key(argv[2]))
+        if not creds:
+            return 1
+        return sync_blocklist(argv[3], creds[0], creds[1])
     # Drain mode, for a timer:  custom-legion.py --drain <api_key> <hook_url>
     # After a credential rotation, an operator may re-send what the OLD
     # credential could not deliver:  ... --drain <new api_key> <hook_url> --from <old key id>
@@ -146,6 +295,9 @@ def main(argv):
     # Legion reads req.body.event, so wrap the Wazuh alert as-is. Its field
     # names (rule.description, rule.level, rule.mitre.id, full_log,
     # data.srcip, agent.name, id, timestamp) already match what the webhook expects.
+    groups = alert.get("rule", {}).get("groups") or []
+    if isinstance(groups, list) and OWN_RESPONSE_GROUP in groups:
+        return 0  # Legion's own block, as Wazuh recorded it: nothing to report
     payload = build_payload(alert)
     rule_id = str(alert.get("rule", {}).get("id", "?"))
 

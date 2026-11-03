@@ -117,3 +117,12 @@ API: `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`,
 Dashboard (`frontend/next.config.mjs`): CSP limited to itself, the API/WS origins
 from `NEXT_PUBLIC_API_URL` and Paddle; HSTS when that URL is https.
 The dashboard CSP keeps `'unsafe-inline'` for scripts (Next.js bootstrap); nonces would need per-request rendering.
+
+## Attacks on the networks Legion watches
+
+The sections above protect Legion itself. For the customer's own servers,
+Legion links related alerts into attack campaigns and can block a single
+attacking address through the customer's Wazuh manager (`firewall-drop`,
+expiring, audited, off by default). Many-address attacks (botnets, DDoS) are
+reported but not blocked by IP; that remains the job of an edge service like
+Cloudflare. Setup, limits and evidence: WAZUH.md, “Avtomatik javob”.
