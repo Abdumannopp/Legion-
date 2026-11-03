@@ -29,7 +29,15 @@ import type { Campaign, CampaignRule } from "./campaigns.js";
 import { queryAll, queryOne } from "./db/pool.js";
 import * as store from "./store.js";
 
-export const AUTO_RULES: ReadonlySet<CampaignRule> = new Set(["rapid_chain", "wide_sweep", "velocity"]);
+export const AUTO_RULES: ReadonlySet<CampaignRule> = new Set(["rapid_chain", "wide_sweep", "velocity", "credential_attack", "account_compromise"]);
+
+/** The one attacking address a campaign is about, if it is about one. */
+export function attackerOf(c: Pick<Campaign, "rule" | "subject" | "sources">): string | null {
+  if (!AUTO_RULES.has(c.rule)) return null;
+  // account_compromise is about the account; the address that broke in is its only source.
+  if (c.rule === "account_compromise") return c.sources.length === 1 ? c.sources[0]! : null;
+  return c.subject;
+}
 export const AUTO_PER_HOUR = 50;
 export const MAX_ACTIVE = 1000;
 
@@ -221,7 +229,7 @@ export async function respondToCampaigns(tenantId: string, campaigns: Campaign[]
   const settings = await getSettings(tenantId);
   const decisions: AutoDecision[] = [];
   for (const c of campaigns) {
-    const ip = AUTO_RULES.has(c.rule) ? c.subject : null;
+    const ip = attackerOf(c);
     if (settings.mode !== "auto") { decisions.push({ campaign: c.id, ip, action: "skipped", why: "off" }); continue; }
     if (!ip) { decisions.push({ campaign: c.id, ip: null, action: "skipped", why: "rule" }); continue; }
     if (!isPublicAddress(ip)) { decisions.push({ campaign: c.id, ip, action: "skipped", why: "not_public" }); continue; }

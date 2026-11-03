@@ -271,6 +271,10 @@ export const CATALOG: Record<string, Translation> = {
     ru: "Не найдено",
     uz: "Topilmadi",
   },
+  "No such payment on hold": {
+    ru: "Такого задержанного платежа нет",
+    uz: "Bunday to'xtatilgan to'lov yo'q",
+  },
   "That address is not blocked": {
     ru: "Этот адрес не заблокирован",
     uz: "Bu manzil bloklanmagan",

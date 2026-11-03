@@ -29,6 +29,7 @@ import { WEBHOOK_REJECTION_DETAIL, isKeyId } from "./webhook-auth.js";
 import { webhookFailureGate } from "./webhook-guard.js";
 import { listCampaigns, threatCoverage } from "./campaigns.js";
 import * as blocklist from "./blocklist.js";
+import * as payments from "./payments.js";
 import * as webhookCredentials from "./webhook-credentials.js";
 import { hashOneTimeToken, newOneTimeToken } from "./auth-tokens.js";
 import { describeReport, migrateSecretsAtRest } from "./secrets-migration.js";
@@ -73,7 +74,7 @@ const jsonBody = express.json({
   limit: "256kb",
   verify: (req, _res, buf) => { (req as Request & { rawBody?: Buffer }).rawBody = buf; },
 });
-app.use((req, res, next) => (req.path === WEBHOOK_PATH || req.path === BLOCKLIST_PATH ? next() : jsonBody(req, res, next)));
+app.use((req, res, next) => (req.path === WEBHOOK_PATH || req.path === BLOCKLIST_PATH || req.path === payments.PAYMENT_CHECK_PATH ? next() : jsonBody(req, res, next)));
 app.use(express.urlencoded({ extended: false, limit: "32kb" }));
 app.use(cookieParser());
 // Error messages and confirmations in the reader's language (Accept-Language).
@@ -2129,6 +2130,48 @@ app.post(BLOCKLIST_PATH,
   res.setHeader("Cache-Control", "no-store");
   res.json({ generated_at: new Date().toISOString(), entries });
   });
+
+// Payment check (src/payments.ts): the customer's payment software asks before
+// paying. Signed with the same sensor credential as the webhook, and bound to
+// its purpose by the body, like the blocklist.
+app.post(payments.PAYMENT_CHECK_PATH,
+  webhookFailureGate,
+  express.raw({ type: "application/json", limit: "8kb" }),
+  async (req, res) => {
+  const rawBody = Buffer.isBuffer(req.body) ? req.body : undefined;
+  const authResult = await webhookCredentials.authenticateWebhook({
+    header: (name) => req.header(name), rawBody, claimedTenantId: req.header("x-tenant-id"),
+  });
+  if (!authResult.ok) {
+    console.warn(`Legion: rejected payment check (${authResult.cause}) key=${authResult.keyId ? authResult.keyId.slice(0, 8) : "-"} ip=${req.ip || "unknown"}`);
+    return res.status(401).json({ detail: WEBHOOK_REJECTION_DETAIL[authResult.reason] });
+  }
+  let body: unknown = null;
+  try { body = JSON.parse(rawBody!.toString("utf8")); } catch { /* checked below */ }
+  const parsed = payments.paymentCheckSchema.safeParse(body);
+  if (!parsed.success) return res.status(400).json({ detail: "Invalid request" });
+  const result = await payments.checkPayment(authResult.tenantId, parsed.data);
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ id: result.check.id, decision: result.check.decision, reasons: result.reasons, verify: result.verify });
+  });
+
+app.get("/security/payments", auth, async (req: AuthedRequest, res) => {
+  res.json({ payments: await payments.listPayments(req.user!.tenant_id, { heldOnly: req.query.held === "true" }) });
+});
+
+async function resolvePaymentRoute(req: AuthedRequest, res: express.Response, resolution: "released" | "rejected") {
+  const id = String(req.params.id ?? "");
+  if (!/^PAY-[0-9A-F]{16}$/.test(id)) return res.status(404).json({ detail: "No such payment on hold" });
+  const check = await payments.resolvePayment(req.user!.tenant_id, id, req.user!.id, resolution);
+  if (!check) return res.status(404).json({ detail: "No such payment on hold" });
+  await store.audit({
+    tenant_id: req.user!.tenant_id, user_id: req.user!.id, user_email: req.user!.email, action: `security.payment_${resolution}`,
+    resource_type: "payment", resource_id: id, detail: `${check.amount} ${check.currency} to ${check.beneficiary_hint}`, ip_address: req.ip ?? null,
+  });
+  return res.json({ payment: check });
+}
+app.post("/security/payments/:id/release", requireRole("admin"), (req: AuthedRequest, res) => resolvePaymentRoute(req, res, "released"));
+app.post("/security/payments/:id/reject", requireRole("admin"), (req: AuthedRequest, res) => resolvePaymentRoute(req, res, "rejected"));
 
 // --- Integrations ------------------------------------------------------------
 // The catalogue of integrations and this workspace's configured connections

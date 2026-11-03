@@ -224,6 +224,8 @@ menejeringiz orqali **taxminan bir daqiqada** bloklaydi.
 | Tez ko'p bosqichli hujum (`rapid_chain`) | bitta manzildan 15 daqiqada ≥ 3 xil MITRE usuli | ha |
 | Ko'p serverlarni aylanib chiqish (`wide_sweep`) | bitta manzildan 10 daqiqada ≥ 5 server | ha |
 | Keskin faollik (`velocity`) | bitta manzildan 5 daqiqada ≥ 30 ogohlantirish | ha |
+| Parol hujumi (`credential_attack`) | bitta manzildan 10 daqiqada ≥ 10 ta muvaffaqiyatsiz kirish yoki ≥ 5 xil hisobga urinish | ha |
+| Hisob buzib kirildi (`account_compromise`) | o'sha manzil ≥ 3 xatodan keyin 30 daqiqa ichida hisobga kirdi | ha (hujumchi manzili) |
 | Ko'p manzil, bitta server (`swarm`) | 10 daqiqada ≥ 10 manzil bitta serverga | **yo'q** (manzillar juda ko'p; bu DDoS — EDGE-SECURITY.md) |
 | AI'ni aldashga urinish (`ai_manipulation`) | log ichida AI'ga buyruq ("ignore previous instructions", yashirin belgilar, model tokenlari…) | **yo'q** (manzil emas, matn) |
 

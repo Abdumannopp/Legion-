@@ -233,6 +233,24 @@ async function main() {
   await sees(page, "deepfake calls are honestly only partly visible", "Partly visible");
   await shot(page, "defense-coverage");
 
+  console.log("▶ 6c. a payment that looks like fraud is STOPPED until a person confirms it");
+  const paymentFile = join(WORK, "payment.json");
+  writeFileSync(paymentFile, JSON.stringify({ beneficiary: { account: "DE89 3704 0044 0532 0130 00", name: "Acme Supplies Ltd" }, amount: 12500, currency: "EUR", requestedBy: "dana@acme.example" }));
+  const askPayment = () => spawnSync("python3", [join(REPO, "integrations", "custom-legion.py"), "--payment-check", apiKey ?? "", `${API}/security-events/webhook`, paymentFile], {
+    env: { ...process.env, LEGION_INTEGRATION_LOG: join(WORK, "integrations.log") }, encoding: "utf8", timeout: 30_000,
+  });
+  const first = askPayment();
+  check("the payment software is told to HOLD a payment to a new account (exit 3)", first.status === 3 && /"decision": "hold"/.test(first.stdout), `${first.status} ${first.stdout} ${first.stderr}`);
+  await page.reload();
+  await sees(page, "the held payment is on the Defense page", "12500.00 EUR to account …3000");
+  await sees(page, "with the reason in words", "New account: it has never been confirmed");
+  await shot(page, "payment-held");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "I confirmed it by phone — release" }).click();
+  await sees(page, "released by a person", "Released. The payment software will be allowed on its next check.");
+  const second = askPayment();
+  check("the payment software is now allowed (exit 0)", second.status === 0 && /"decision": "allow"/.test(second.stdout), `${second.status} ${second.stdout} ${second.stderr}`);
+
   console.log("▶ 7. first AI agent");
   await page.goto(`${WEB}/agents`);
   await sees(page, "agents page explains what Legion does for agents", "Legion checks every action your AI agents take");

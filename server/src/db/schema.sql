@@ -607,7 +607,8 @@ CREATE TABLE IF NOT EXISTS attack_campaigns (
 ALTER TABLE attack_campaigns DROP CONSTRAINT IF EXISTS attack_campaigns_rule_check;
 ALTER TABLE attack_campaigns ADD CONSTRAINT attack_campaigns_rule_check CHECK (rule IN (
   'rapid_chain', 'wide_sweep', 'swarm', 'velocity', 'ai_manipulation',
-  'ransomware', 'mailbox_takeover', 'phishing_execution', 'supply_chain', 'slow_intrusion')) NOT VALID;
+  'ransomware', 'mailbox_takeover', 'phishing_execution', 'supply_chain', 'slow_intrusion',
+  'credential_attack', 'account_compromise')) NOT VALID;
 CREATE UNIQUE INDEX IF NOT EXISTS attack_campaigns_active_uniq
   ON attack_campaigns (tenant_id, rule, subject) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS attack_campaigns_tenant_seen_idx ON attack_campaigns (tenant_id, last_seen DESC);
@@ -643,3 +644,37 @@ ALTER TABLE tenants ADD CONSTRAINT tenants_auto_block_minutes_check CHECK (auto_
 -- Never blocked automatically (comma-separated IPs/CIDRs): your own offices,
 -- partners, scanners you run on purpose.
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS block_allowlist text NOT NULL DEFAULT '';
+
+-- Payment check (src/payments.ts): the customer's payment software asks Legion
+-- before paying. Account numbers are never stored, only a keyed hash (to
+-- recognise the account again) and the last four characters.
+CREATE TABLE IF NOT EXISTS payment_beneficiaries (
+  tenant_id        uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  beneficiary_hash text        NOT NULL CHECK (length(beneficiary_hash) = 64),
+  first_seen       timestamptz NOT NULL DEFAULT now(),
+  last_seen        timestamptz NOT NULL DEFAULT now(),
+  -- A person confirmed this account (by releasing a payment to it).
+  verified_at      timestamptz,
+  verified_by      uuid,
+  PRIMARY KEY (tenant_id, beneficiary_hash)
+);
+CREATE TABLE IF NOT EXISTS payment_checks (
+  tenant_id        uuid          NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  id               text          NOT NULL,
+  created_at       timestamptz   NOT NULL DEFAULT now(),
+  beneficiary_hash text          NOT NULL CHECK (length(beneficiary_hash) = 64),
+  beneficiary_hint text          NOT NULL CHECK (length(beneficiary_hint) <= 8),
+  beneficiary_name text          CHECK (length(beneficiary_name) <= 200),
+  amount           numeric(20,2) NOT NULL CHECK (amount >= 0),
+  currency         text          NOT NULL CHECK (currency ~ '^[A-Z0-9]{2,10}$'),
+  requested_by     text          CHECK (length(requested_by) <= 200),
+  reference        text          CHECK (length(reference) <= 200),
+  decision         text          NOT NULL CHECK (decision IN ('allow', 'hold')),
+  reasons          text[]        NOT NULL DEFAULT '{}',
+  resolution       text          CHECK (resolution IN ('released', 'rejected')),
+  resolved_at      timestamptz,
+  resolved_by      uuid,
+  PRIMARY KEY (tenant_id, id)
+);
+CREATE INDEX IF NOT EXISTS payment_checks_tenant_created_idx ON payment_checks (tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS payment_checks_lookup_idx ON payment_checks (tenant_id, beneficiary_hash, amount, currency) WHERE resolution IS NOT NULL;

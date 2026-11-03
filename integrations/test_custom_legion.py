@@ -5,6 +5,7 @@
 import hashlib
 import hmac
 import importlib.util
+import io
 import json
 import os
 import tempfile
@@ -518,3 +519,49 @@ class BlocklistTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PaymentCheckTests(unittest.TestCase):
+    """--payment-check: payment software asks Legion before paying."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.log = os.path.join(self.dir.name, "integrations.log")
+        self.mod = load_module(self.log)
+        self.payment = {"beneficiary": {"account": "DE89370400440532013000", "name": "Acme"}, "amount": 12500, "currency": "EUR"}
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def ask(self, reply, status=200, payment=None):
+        server = Server([(status, {"Content-Type": "application/json"}, json.dumps(reply).encode())])
+        out = io.StringIO()
+        try:
+            code = self.mod.payment_check(server.url, KEY_ID, SECRET, payment if payment is not None else self.payment, out=out)
+        finally:
+            server.close()
+        return code, server.requests, out.getvalue()
+
+    def test_allow_exits_0_and_the_request_is_signed_and_purpose_bound(self):
+        code, requests, out = self.ask({"id": "PAY-1", "decision": "allow", "reasons": [], "verify": None})
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["decision"], "allow")
+        self.assertEqual(len(requests), 1)
+        body = json.loads(requests[0]["body"])
+        self.assertEqual(body["action"], "payment-check")
+        self.assertEqual(body["amount"], 12500)
+        self.assertTrue(requests[0]["headers"]["x-legion-signature"].startswith("v2="))
+        self.assertNotIn(SECRET, open(self.log).read())
+
+    def test_hold_exits_3(self):
+        code, _, out = self.ask({"id": "PAY-2", "decision": "hold", "reasons": [{"code": "new_beneficiary"}], "verify": "call"})
+        self.assertEqual(code, 3)
+        self.assertEqual(json.loads(out)["reasons"][0]["code"], "new_beneficiary")
+
+    def test_any_failure_means_do_not_pay(self):
+        # Legion refuses, is unreachable, or answers nonsense: never exit 0.
+        self.assertEqual(self.ask({"detail": "x"}, status=401)[0], 1)
+        self.assertEqual(self.ask({"decision": "maybe"})[0], 1)
+        self.assertEqual(self.mod.payment_check("http://127.0.0.1:9/security-events/webhook", KEY_ID, SECRET, self.payment, out=io.StringIO()), 1)
+        self.assertEqual(self.mod.payment_check("http://example/other", KEY_ID, SECRET, self.payment, out=io.StringIO()), 1)
+        self.assertEqual(self.ask({"decision": "allow"}, payment=["not", "an", "object"])[0], 1)

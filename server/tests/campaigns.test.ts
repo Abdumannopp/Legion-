@@ -481,3 +481,65 @@ describe("the dashboard names every campaign rule", () => {
     for (const block of ruleBlocks) for (const r of CAMPAIGN_RULES) expect(block, r).toContain(`${r}: "`);
   });
 });
+
+describe("stopping unauthorized access", () => {
+  const login = (ok: boolean, user: string, ip = ATTACKER, host = "vpn-01") =>
+    event({ ip, host, mitre: [], log: ok ? `sshd[1]: Accepted password for ${user} from ${ip} port 22 ssh2` : `sshd[1]: Failed password for ${user} from ${ip} port 22 ssh2` });
+  const rulesOf = async () => (await campaigns(tenantA)).map((c) => c.rule).sort();
+
+  it("password guessing: ten failures from one address is an attack, nine is not", async () => {
+    for (let i = 0; i < 9; i++) await send(credA, login(false, "root"));
+    expect(await rulesOf()).toEqual([]);
+    await send(credA, login(false, "root"));
+    expect(await rulesOf()).toEqual(["credential_attack"]);
+    expect((await correlationAlerts(tenantA))[0].title).toMatch(/^Password attack from 45\.155\.205\.12/);
+  });
+
+  it("password spraying: one address failing against five accounts, even once each", async () => {
+    for (const u of ["anna", "bob", "carl", "dina", "emil"]) await send(credA, login(false, u));
+    const [c] = await campaigns(tenantA);
+    expect(c).toMatchObject({ rule: "credential_attack", subject: ATTACKER });
+    expect((await correlationAlerts(tenantA))[0].summary).toMatch(/5 account\(s\)/);
+  });
+
+  it("a successful sign-in after failures is a broken-into account: critical, about the ACCOUNT, and says what to do", async () => {
+    for (let i = 0; i < 3; i++) await send(credA, login(false, "dana"));
+    await send(credA, login(true, "dana"));
+    const c = (await campaigns(tenantA)).find((x) => x.rule === "account_compromise");
+    expect(c).toMatchObject({ subject: "dana", sources: [ATTACKER] });
+    const a = (await correlationAlerts(tenantA)).find((x) => x.id === c.alert_id);
+    expect(a.severity).toBe("critical");
+    expect(a.summary).toMatch(/reset the password of dana/);
+  });
+
+  it("an ordinary user who mistypes once or twice and gets in is not a compromise", async () => {
+    await send(credA, login(false, "erin", "45.155.205.40"));
+    await send(credA, login(false, "erin", "45.155.205.40"));
+    await send(credA, login(true, "erin", "45.155.205.40"));
+    expect(await rulesOf()).toEqual([]);
+  });
+
+  it("success from a DIFFERENT address than the failures is not called a compromise", async () => {
+    for (let i = 0; i < 3; i++) await send(credA, login(false, "fay", "45.155.205.50"));
+    await send(credA, login(true, "fay", "45.155.205.51"));
+    expect(await rulesOf()).toEqual([]);
+  });
+
+  it("with automatic response on, both are STOPPED: the attacking address is blocked and the manager is told", async () => {
+    await setAuto({ mode: "auto" }).expect(200);
+    for (let i = 0; i < 3; i++) await send(credA, login(false, "dana"));
+    await send(credA, login(true, "dana"));
+    const blocks = await activeBlocks(tenantA);
+    expect(blocks.map((b) => b.ip)).toEqual([ATTACKER]);
+    expect((await blocklistFor(credA).expect(200)).body.entries.map((e: { ip: string }) => e.ip)).toEqual([ATTACKER]);
+    for (let i = 0; i < 10; i++) await send(credA, login(false, "root", OTHER));
+    expect((await activeBlocks(tenantA)).map((b) => b.ip).sort()).toEqual([ATTACKER, OTHER].sort());
+  });
+
+  it("from a private address it is reported, never blocked (it could be your own office)", async () => {
+    await setAuto({ mode: "auto" }).expect(200);
+    for (let i = 0; i < 10; i++) await send(credA, login(false, "root", "10.0.0.7"));
+    expect(await rulesOf()).toEqual(["credential_attack"]);
+    expect(await activeBlocks(tenantA)).toEqual([]);
+  });
+});

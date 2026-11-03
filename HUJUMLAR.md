@@ -61,3 +61,21 @@ AGENTLAR.md'ga qarang.
   qilmaydi; u imzo xatosi, ma'lum zararli paket nomi yoki o'rnatishdan keyingi
   shubhali harakat orqali sezadi. Legion'ning **o'z** kutubxonalari esa CI'da
   har safar tekshiriladi (zaiflik topilsa, chiqarilish to'xtaydi).
+
+## To'xtatish: Legion qayerda hujumni to'xtatadi
+
+Aniqlash yetarli emas — Legion qo'li yetadigan joyda hujumni to'xtatadi:
+
+| Hujum | Qanday to'xtatiladi |
+|---|---|
+| **Ruxsatsiz kirish** (parol topish, spraying) | Bitta manzildan 10 daqiqada 10+ xato yoki 5+ xil hisobga urinish → `credential_attack`. Avtomatik javob yoqilgan bo'lsa, manzil Wazuh orqali **bloklanadi** (WAZUH.md, "Avtomatik javob"). |
+| **Buzib kirilgan hisob** | O'sha manzil xatolardan keyin hisobga kirdi → `account_compromise` (kritik). Hujumchi manzili **bloklanadi**; ogohlantirish parolni almashtirish, sessiyalarni tugatish va ikkinchi bosqichli himoyani yoqishni aytadi. |
+| **Moliyaviy hujum** (BEC, soxta direktor, o'g'irlangan hisob) | **To'lov tekshiruvi**: to'lov dasturi pul jo'natishdan oldin so'raydi; shubhali to'lov inson telefon orqali tasdiqlaguncha **to'xtatiladi** (TOLOV-TEKSHIRUVI.md). |
+| **Fishing** | Fishingning maqsadi — parol yoki pul. O'g'irlangan parol bilan kirish → yuqoridagi bloklash; pul so'rash → to'lov tekshiruvi. Office hujjati skript ishga tushirsa, darhol ogohlantirish. |
+
+Halol chegara: fishing xatining o'zini pochta qutisiga kelishidan oldin
+to'xtatish — pochta xavfsizlik shlyuzining (Microsoft Defender for Office,
+Google Workspace, Proofpoint va h.k.) ishi; Legion pochta serveringizni
+boshqarmaydi. Avtomatik bloklash sukut bo'yicha **o'chiq** — Himoya
+sahifasida administrator yoqadi. Ichki (private) manzillar va istisnolar
+hech qachon bloklanmaydi.

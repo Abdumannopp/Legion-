@@ -137,6 +137,56 @@ def blocklist_url(hook_url):
     return hook_url.rstrip("/")[: -len("/webhook")] + "/blocklist"
 
 
+def payment_check_url(hook_url):
+    if not hook_url.rstrip("/").endswith("/webhook"):
+        return None
+    return hook_url.rstrip("/")[: -len("/webhook")] + "/payment-check"
+
+
+# Exit codes for --payment-check, so payment software can branch without parsing.
+PAYMENT_ALLOW, PAYMENT_ERROR, PAYMENT_HOLD = 0, 1, 3
+
+
+def payment_check(hook_url, key_id, secret, payment, out=sys.stdout):
+    """Asks Legion whether a payment may go ahead. Prints Legion's answer as
+    JSON. Returns 0 (allow), 3 (hold: do not pay yet) or 1 (could not ask).
+    Anything but 0 means: do not pay automatically."""
+    url = payment_check_url(hook_url)
+    if not url:
+        log("ERROR --payment-check needs the webhook URL (ending in /security-events/webhook)")
+        return PAYMENT_ERROR
+    if not isinstance(payment, dict):
+        log("ERROR payment-check: the payment must be a JSON object")
+        return PAYMENT_ERROR
+    body = json.dumps(dict(payment, action="payment-check")).encode("utf-8")
+    timestamp = str(int(time.time()))
+    nonce = secrets.token_urlsafe(16)
+    request = urllib.request.Request(url, data=body, method="POST", headers={
+        "Content-Type": "application/json",
+        "User-Agent": USER_AGENT,
+        "x-legion-key-id": key_id,
+        "x-legion-timestamp": timestamp,
+        "x-legion-nonce": nonce,
+        "x-legion-signature": sign(secret, timestamp, nonce, body),
+    })
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+            answer = json.loads(response.read(64 * 1024).decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        log(f"ERROR payment-check: Legion answered {exc.code}; do not pay automatically")
+        return PAYMENT_ERROR
+    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        log(f"ERROR payment-check: could not reach Legion ({type(exc).__name__}); do not pay automatically")
+        return PAYMENT_ERROR
+    decision = answer.get("decision") if isinstance(answer, dict) else None
+    if decision not in ("allow", "hold"):
+        log("ERROR payment-check: unexpected answer from Legion; do not pay automatically")
+        return PAYMENT_ERROR
+    out.write(json.dumps(answer) + "\n")
+    log(f"PAYMENT {answer.get('id', '?')} {decision}")
+    return PAYMENT_ALLOW if decision == "allow" else PAYMENT_HOLD
+
+
 def clean_text(value, limit=200):
     text = "".join(ch for ch in str(value or "") if ch.isprintable())
     return text[:limit]
@@ -244,6 +294,25 @@ def sync_blocklist(hook_url, key_id, secret):
 
 
 def main(argv):
+    # Payment check, for payment software (ERP, bank connector) before it pays:
+    #   custom-legion.py --payment-check <api_key or @file> <hook_url> <payment.json or ->
+    # payment.json: {"beneficiary": {"account": "...", "name": "..."}, "amount": 12500,
+    #                "currency": "EUR", "requestedBy": "dana@acme.example"}
+    # Exit 0: allow. Exit 3: hold (a person must confirm by phone). Exit 1: error — do not pay.
+    if len(argv) == 5 and argv[1] == "--payment-check":
+        creds = parse_api_key(read_api_key(argv[2]))
+        if not creds:
+            return PAYMENT_ERROR
+        try:
+            if argv[4] == "-":
+                payment = json.load(sys.stdin)
+            else:
+                with open(argv[4], "r", encoding="utf-8") as handle:
+                    payment = json.load(handle)
+        except (OSError, ValueError):
+            log("ERROR payment-check: could not read the payment JSON")
+            return PAYMENT_ERROR
+        return payment_check(argv[3], creds[0], creds[1], payment)
     # Blocklist mode, for Wazuh's command wodle (every minute):
     #   custom-legion.py --sync-blocklist <api_key or @file> <hook_url>
     if len(argv) == 4 and argv[1] == "--sync-blocklist":

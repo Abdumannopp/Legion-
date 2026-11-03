@@ -1007,3 +1007,29 @@ export interface ThreatCoverage {
 export function getCoverage(): Promise<{ windowDays: number; eventsAnalyzed: number; threats: ThreatCoverage[] }> {
   return request("/security/coverage");
 }
+
+// ---- Payment check: payments held until a person confirms them ----------------
+export type PaymentHoldReason = "new_beneficiary" | "account_under_attack" | "mailbox_takeover_active" | "rejected_before";
+export interface PaymentCheck {
+  id: string;
+  created_at: string;
+  beneficiary_hint: string;
+  beneficiary_name: string | null;
+  amount: string;
+  currency: string;
+  requested_by: string | null;
+  reference: string | null;
+  decision: "allow" | "hold";
+  reasons: PaymentHoldReason[];
+  resolution: "released" | "rejected" | null;
+  resolved_at: string | null;
+}
+export function getHeldPayments(): Promise<{ payments: PaymentCheck[] }> {
+  return request("/security/payments?held=true");
+}
+export function releasePayment(id: string): Promise<{ payment: PaymentCheck }> {
+  return request(`/security/payments/${encodeURIComponent(id)}/release`, { method: "POST" });
+}
+export function rejectPayment(id: string): Promise<{ payment: PaymentCheck }> {
+  return request(`/security/payments/${encodeURIComponent(id)}/reject`, { method: "POST" });
+}

@@ -27,6 +27,10 @@
  *                       malicious link was clicked.
  *   supply_chain        a signature or checksum failed, a malicious package, or
  *                       a software install followed by attacker activity.
+ *   credential_attack   unauthorized access attempts: one address failing many
+ *                       sign-ins, or failing against many accounts (spraying).
+ *   account_compromise  the same address then signs in to an account it was
+ *                       failing against: the password was guessed or stolen.
  *   slow_intrusion      cyber espionage: on one host over days, persistence
  *                       plus command-and-control, exfiltration or credential
  *                       dumping — quiet, patient, the opposite of rapid_chain.
@@ -53,6 +57,7 @@ export const CORRELATION_SOURCE = "legion-correlation";
 export const CAMPAIGN_RULES = [
   "rapid_chain", "wide_sweep", "swarm", "velocity", "ai_manipulation",
   "ransomware", "mailbox_takeover", "phishing_execution", "supply_chain", "slow_intrusion",
+  "credential_attack", "account_compromise",
 ] as const;
 export type CampaignRule = (typeof CAMPAIGN_RULES)[number];
 
@@ -61,6 +66,10 @@ export const THRESHOLDS = {
   wide_sweep: { windowMinutes: 10, targets: 5 },
   swarm: { windowMinutes: 10, sources: 10 },
   velocity: { windowMinutes: 5, alerts: 30 },
+  /** Password guessing from one address: many failures, or failures against many accounts (spraying). */
+  credential_attack: { windowMinutes: 10, failures: 10, accounts: 5 },
+  /** A successful sign-in to an account from the address that just failed against it. */
+  account_compromise: { windowMinutes: 30, failuresBefore: 3 },
   /** File changes on one host that look like encryption in progress. */
   ransomware: { windowMinutes: 10, fileChanges: 50 },
   /** An install, then attacker activity on the same host. */
@@ -119,9 +128,10 @@ export function parentTechniques(values: Array<string | null>): string[] {
 const EVENT_TIME = "coalesce(occurred_at, created_at)";
 
 async function bySource(tenantId: string, ip: string): Promise<Detection[]> {
-  const longest = Math.max(THRESHOLDS.rapid_chain.windowMinutes, THRESHOLDS.wide_sweep.windowMinutes, THRESHOLDS.velocity.windowMinutes);
-  const rows = await queryAll<{ t: Date; target: string | null; mitre_technique: string | null }>(
-    `SELECT ${EVENT_TIME} AS t, target, mitre_technique
+  const longest = Math.max(THRESHOLDS.rapid_chain.windowMinutes, THRESHOLDS.wide_sweep.windowMinutes, THRESHOLDS.velocity.windowMinutes,
+    THRESHOLDS.credential_attack.windowMinutes, THRESHOLDS.account_compromise.windowMinutes);
+  const rows = await queryAll<{ t: Date; target: string | null; mitre_technique: string | null; title: string; summary: string }>(
+    `SELECT ${EVENT_TIME} AS t, target, mitre_technique, title, left(summary, 2000) AS summary
        FROM alerts
       WHERE tenant_id = $1 AND source_ip = $2 AND source <> $3
         AND created_at >= now() - interval '1 day'
@@ -150,12 +160,55 @@ async function bySource(tenantId: string, ip: string): Promise<Detection[]> {
       techniques: parentTechniques(sweep.map((r) => r.mitre_technique)), minutes: spanMinutes(sweep), sourceIp: ip, target: null,
     });
   }
+  found.push(...signIns(ip, rows, within));
   const burst = within(THRESHOLDS.velocity.windowMinutes);
   if (burst.length >= THRESHOLDS.velocity.alerts) {
     found.push({
       rule: "velocity", subject: ip, alertCount: burst.length, sources: [ip], targets: distinct(burst.map((r) => r.target)),
       techniques: parentTechniques(burst.map((r) => r.mitre_technique)), minutes: spanMinutes(burst), sourceIp: ip, target: null,
     });
+  }
+  return found;
+}
+
+type SourceRow = { t: Date; target: string | null; mitre_technique: string | null; title: string; summary: string };
+
+/** What a row says about a sign-in: failed, succeeded, and for which account. */
+function signIn(r: SourceRow): { failed: boolean; ok: boolean; account: string | null } {
+  const reading = readEvent({
+    id: "x", tenantId: "x", title: r.title, summary: r.summary, severity: "low", createdAt: new Date().toISOString(), source: "x",
+    mitreTechniques: [], ruleGroups: [],
+  } as SecurityEvent);
+  const ids = new Set(reading.signals.map((s) => s.id));
+  const account = userFromLog(r.summary) ?? userFromLog(r.title);
+  return { failed: ids.has("failed_authentication"), ok: ids.has("successful_login") && !ids.has("failed_authentication"), account: account ? account.toLowerCase() : null };
+}
+
+/** Unauthorized access: password guessing, spraying, and the sign-in that finally worked. */
+function signIns(ip: string, rows: SourceRow[], within: (min: number) => SourceRow[]): Detection[] {
+  const found: Detection[] = [];
+  const ca = THRESHOLDS.credential_attack;
+  const recent = within(ca.windowMinutes).map((r) => ({ r, s: signIn(r) }));
+  const failures = recent.filter((x) => x.s.failed);
+  const accounts = distinct(failures.map((x) => x.s.account));
+  if (failures.length >= ca.failures || accounts.length >= ca.accounts) {
+    found.push({
+      rule: "credential_attack", subject: ip, alertCount: failures.length, sources: [ip], targets: distinct(failures.map((x) => x.r.target)),
+      techniques: ["T1110"], minutes: spanMinutes(failures.map((x) => x.r)), sourceIp: ip, target: null,
+      signals: [`${failures.length} failed sign-ins`, ...(accounts.length ? [`${accounts.length} account(s): ${list(accounts, 5)}`] : [])],
+    });
+  }
+  const ac = THRESHOLDS.account_compromise;
+  const window = within(ac.windowMinutes).map((r) => ({ r, s: signIn(r) })).sort((a, b) => new Date(a.r.t).getTime() - new Date(b.r.t).getTime());
+  for (const success of window.filter((x) => x.s.ok && x.s.account)) {
+    const before = window.filter((x) => x.s.failed && x.s.account === success.s.account && new Date(x.r.t) <= new Date(success.r.t));
+    if (before.length < ac.failuresBefore) continue;
+    found.push({
+      rule: "account_compromise", subject: success.s.account!, alertCount: before.length + 1, sources: [ip],
+      targets: distinct([success.r.target]), techniques: ["T1110", "T1078"], minutes: spanMinutes([...before.map((x) => x.r), success.r]),
+      sourceIp: ip, target: success.r.target, signals: [`${before.length} failed sign-ins, then a successful one`],
+    });
+    break;
   }
   return found;
 }
@@ -315,6 +368,7 @@ const list = (xs: string[], n = 8) => (xs.length > n ? `${xs.slice(0, n).join(",
 const SEVERITY: Record<CampaignRule, Severity> = {
   rapid_chain: "critical", swarm: "critical", wide_sweep: "high", velocity: "high", ai_manipulation: "high",
   ransomware: "critical", mailbox_takeover: "high", phishing_execution: "high", supply_chain: "high", slow_intrusion: "critical",
+  credential_attack: "high", account_compromise: "critical",
 };
 
 /** The announcing alert's wording. English, like every sensor alert title. */
@@ -379,6 +433,20 @@ export function describe(d: Detection): { title: string; summary: string } {
         title: `Possible supply-chain compromise on ${d.subject}`,
         summary: `${list(d.signals ?? [])} on ${d.subject}. Attackers who compromise a vendor, an update or a package reach every customer that trusts it. `
           + "Stop the update or package on other hosts, check the publisher's advisory, compare hashes with the vendor's, and look for the same activity elsewhere.",
+      };
+    case "credential_attack":
+      return {
+        title: `Password attack from ${d.subject}: ${list(d.signals ?? [], 2)}`,
+        summary: `One address (${d.subject}) is trying to sign in without permission: ${list(d.signals ?? [])} within ${d.minutes} minute(s)`
+          + `${d.targets.length ? ` on ${list(d.targets)}` : ""}. This is password guessing or password spraying (one password tried against many accounts). `
+          + "With automatic response on, Legion blocks the address on your Wazuh manager. Make sure every exposed account has a second factor (MFA).",
+      };
+    case "account_compromise":
+      return {
+        title: `Account broken into: ${d.subject} signed in from ${d.sourceIp ?? "an attacking address"} after failed attempts`,
+        summary: `The address ${d.sourceIp ?? "(unknown)"} failed to sign in to ${d.subject} and then succeeded (${list(d.signals ?? [])}). `
+          + "The password was guessed or stolen, often by phishing. With automatic response on, Legion blocks the address. "
+          + `Now: reset the password of ${d.subject}, end its sessions, require a second factor, and check what the account did after the sign-in.`,
       };
     case "slow_intrusion":
       return {
@@ -477,9 +545,10 @@ export const COVERAGE_DAYS = 7;
 export async function threatCoverage(tenantId: string): Promise<{ windowDays: number; eventsAnalyzed: number; threats: ThreatCoverage[] }> {
   const rows = await queryAll<{ id: string; created_at: Date; title: string; summary: string }>(
     `SELECT id, created_at, title, left(summary, 4000) AS summary FROM alerts
-      WHERE tenant_id = $1 AND source <> $2 AND created_at >= now() - make_interval(days => $3)
+      WHERE tenant_id = $1 AND source <> ALL($2::text[]) AND created_at >= now() - make_interval(days => $3)
       ORDER BY created_at DESC LIMIT 2000`,
-    [tenantId, CORRELATION_SOURCE, COVERAGE_DAYS],
+    // Legion's own alerts are not evidence of what the sensors send.
+    [tenantId, [CORRELATION_SOURCE, "legion-payments"], COVERAGE_DAYS],
   );
   const events = rows.map((r) => ({ id: r.id, createdAt: new Date(r.created_at).toISOString(), text: `${r.title}\n${r.summary}` }));
   const aiTextAttempts = events.filter((e) => manipulationSignals(e.text).length > 0).map((e) => e.id);

@@ -552,6 +552,8 @@ describe("route coverage", () => {
     "DELETE /users/:id": "tenant A accessing tenant B's users",
     "POST /security-events/credentials/:id/rotate": "exports/credentials",
     "DELETE /security-events/credentials/:id": "exports/credentials",
+    "POST /security/payments/:id/release": "payments.test.ts (another organisation's administrator cannot release a hold: 404)",
+    "POST /security/payments/:id/reject": "payments.test.ts (another organisation's administrator cannot reject a hold: 404)",
     "DELETE /security/blocks/:ip": "campaigns.test.ts (another workspace's administrator cannot lift a block: 404)",
     "POST /notifications/deliveries/:id/retry": "reliability.test.ts (dead letters: another organisation's job is a 404)",
     // Agent layer (packages/agent-identity: covered by its own cross-tenant tests, listed by file)

@@ -8,12 +8,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Ban, Eye, EyeOff, Loader2, Radar, ShieldAlert, ShieldCheck, TriangleAlert, Zap } from "lucide-react";
+import { Ban, Banknote, Eye, EyeOff, Loader2, Radar, ShieldAlert, ShieldCheck, TriangleAlert, Zap } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import ErrorNotice from "@/components/ErrorNotice";
 import {
-  ApiError, AttackCampaign, AutoResponseSettings, IpBlock, ThreatCoverage,
-  blockAddress, getAutoResponse, getBlocks, getCampaigns, getCoverage, getMe, isLoggedIn, unblockAddress, updateAutoResponse,
+  ApiError, AttackCampaign, AutoResponseSettings, IpBlock, PaymentCheck, ThreatCoverage,
+  blockAddress, getAutoResponse, getBlocks, getCampaigns, getCoverage, getHeldPayments, rejectPayment, releasePayment, getMe, isLoggedIn, unblockAddress, updateAutoResponse,
 } from "@/lib/api";
 import { palette } from "@/lib/theme";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
@@ -32,6 +32,8 @@ export default function DefensePage() {
   const [draft, setDraft] = useState<AutoResponseSettings | null>(null);
   const [campaigns, setCampaigns] = useState<AttackCampaign[]>([]);
   const [blocks, setBlocks] = useState<IpBlock[]>([]);
+  const [held, setHeld] = useState<PaymentCheck[]>([]);
+  const [paymentNotice, setPaymentNotice] = useState<string | null>(null);
   const [coverage, setCoverage] = useState<{ windowDays: number; threats: ThreatCoverage[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -47,6 +49,7 @@ export default function DefensePage() {
       setSettings(s); setDraft(s); setCampaigns(c); setBlocks(b);
       // Coverage is extra: the page still works if it cannot be read.
       getCoverage().then(setCoverage).catch(() => {});
+      getHeldPayments().then((r) => setHeld(r.payments)).catch(() => {});
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) { router.push("/login"); return; }
       setError(err);
@@ -59,7 +62,11 @@ export default function DefensePage() {
     if (!isLoggedIn()) { router.push("/login"); return; }
     load();
     // Campaigns and blocks change while an attack is under way.
-    const timer = setInterval(() => { getCampaigns().then(setCampaigns).catch(() => {}); getBlocks(true).then(setBlocks).catch(() => {}); }, 15_000);
+    const timer = setInterval(() => {
+      getCampaigns().then(setCampaigns).catch(() => {});
+      getBlocks(true).then(setBlocks).catch(() => {});
+      getHeldPayments().then((r) => setHeld(r.payments)).catch(() => {});
+    }, 15_000);
     return () => clearInterval(timer);
   }, [load, router]);
 
@@ -76,6 +83,17 @@ export default function DefensePage() {
     if (!window.confirm(d.blocks.confirmUnblock(ip))) return;
     setError(null);
     try { await unblockAddress(ip); setBlocks(await getBlocks(true)); } catch (err) { setError(err); }
+  }
+
+  async function resolvePayment(p: PaymentCheck, release: boolean) {
+    const what = d.payments.to(p.amount, p.currency, p.beneficiary_hint);
+    if (!window.confirm(release ? d.payments.confirmRelease(what) : d.payments.confirmReject(what))) return;
+    setError(null); setPaymentNotice(null);
+    try {
+      if (release) await releasePayment(p.id); else await rejectPayment(p.id);
+      setPaymentNotice(release ? d.payments.released : d.payments.rejected);
+      setHeld((await getHeldPayments()).payments);
+    } catch (err) { setError(err); }
   }
 
   async function addBlock(e: React.FormEvent) {
@@ -151,6 +169,38 @@ export default function DefensePage() {
                     </div>
                     <p className="text-ink-faint text-[11px] leading-relaxed border-t border-line pt-3">{d.auto.wazuhNote}</p>
                   </div>
+                )}
+              </section>
+
+              {/* Payments held until a person confirms them */}
+              <section className={card} data-testid="payments">
+                <h2 className="text-ink font-medium flex items-center gap-2 mb-1"><Banknote size={16} color={palette.warning} />{d.payments.title}</h2>
+                <p className="text-ink-faint text-xs mb-3 leading-relaxed">{d.payments.intro}</p>
+                {paymentNotice && <p role="status" className="text-xs text-success mb-2 flex items-center gap-1"><ShieldCheck size={13} />{paymentNotice}</p>}
+                {held.length === 0 ? (
+                  <p className="text-ink-faint text-sm">{d.payments.empty}</p>
+                ) : (
+                  <ul className="divide-y divide-line">
+                    {held.map((p) => (
+                      <li key={p.id} className="py-3" data-testid="held-payment">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-ink text-sm font-medium">{d.payments.to(p.amount, p.currency, p.beneficiary_hint)}</span>
+                          {p.beneficiary_name && <span className="text-ink-muted text-xs">{p.beneficiary_name}</span>}
+                          <span className="text-xs text-ink-faint" title={formatDateTime(p.created_at, locale)}>{timeAgo(p.created_at, locale)}</span>
+                        </div>
+                        {p.requested_by && <p className="text-ink-faint text-xs mt-0.5">{d.payments.requestedBy(p.requested_by)}</p>}
+                        <ul className="mt-1.5 space-y-0.5">
+                          {p.reasons.map((r) => <li key={r} className="text-warning text-xs leading-relaxed">{d.payments.reasons[r] ?? r}</li>)}
+                        </ul>
+                        {isAdmin && (
+                          <div className="flex flex-wrap gap-2 mt-2">
+                            <button type="button" onClick={() => resolvePayment(p, true)} className="text-xs font-medium px-3 py-1.5 rounded-lg bg-brand hover:bg-brand-hover text-white">{d.payments.release}</button>
+                            <button type="button" onClick={() => resolvePayment(p, false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-ink-muted hover:text-ink">{d.payments.reject}</button>
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
                 )}
               </section>
 
