@@ -22,6 +22,7 @@ import {
   type SkillDataSource,
   type SkillModel,
 } from "@legion/agent-identity";
+import { isPublicAddress } from "./blocklist.js";
 import { alertForBehaviorChange, alertForFirewallDecision, alertForSecurityEvent } from "./agent-alerts.js";
 import { chatSafe } from "./ai.js";
 import { aiPolicy, consumeAiQuota } from "./ai-policy.js";
@@ -46,6 +47,44 @@ export interface AgentLayerDeps {
   newAlertFrame?: (alert: Alert) => unknown;
 }
 
+/**
+ * Who a log line is about. Legion stores no separate user field, but the
+ * sensor's log line names the account (sshd, sudo, PAM, Windows). This reads
+ * the common forms and nothing else; anything it does not recognise stays
+ * unknown rather than guessed. The text comes from whoever wrote the log, so
+ * the result is bounded and only ever treated as data.
+ */
+const NAME = "([A-Za-z0-9._@\\$-]{1,64})";
+const USER_PATTERNS: RegExp[] = [
+  new RegExp(`\\b(?:Failed|Accepted) [a-z-]+ for (?:invalid user )?${NAME} from\\b`, "i"),
+  new RegExp(`\\bInvalid user ${NAME} from\\b`, "i"),
+  new RegExp(`\\bsession (?:opened|closed) for user ${NAME}`, "i"),
+  new RegExp(`\\bsudo:\\s+${NAME}\\s*:`, "i"),
+  new RegExp(`\\btarget ?user ?name"?\\s*[:=]\\s*"?${NAME}`, "i"),
+  new RegExp(`\\buser(?:name)?"?\\s*[:=]\\s*"?${NAME}`, "i"),
+];
+const NOT_A_USER = new Set(["unknown", "null", "(null)", "none", "from", "for", "-", "n/a"]);
+
+export function userFromLog(text: string | null | undefined): string | null {
+  const t = String(text ?? "").slice(0, 4_000);
+  for (const re of USER_PATTERNS) {
+    const m = re.exec(t);
+    const name = m?.[1]?.replace(/[.,;:]+$/, "");
+    if (name && !NOT_A_USER.has(name.toLowerCase())) return name;
+  }
+  return null;
+}
+
+/**
+ * What Legion can say about an asset's reachability. A public address is
+ * directly reachable from the internet. A private address says nothing: the
+ * asset may sit behind NAT, a load balancer or a port forward, so it stays
+ * "unknown" instead of being called internal (which would reassure wrongly).
+ */
+export function exposureOf(ip: string | null | undefined): "internet" | "unknown" {
+  return ip && isPublicAddress(ip) ? "internet" : "unknown";
+}
+
 /** A Legion alert in the shape the security skills read. */
 export function toSecurityEvent(a: Alert): SecurityEvent {
   return {
@@ -59,7 +98,7 @@ export function toSecurityEvent(a: Alert): SecurityEvent {
     source: (a.source || "unknown").slice(0, 100),
     sourceIp: a.source_ip,
     asset: a.target,
-    user: null,
+    user: userFromLog(a.summary) ?? userFromLog(a.title),
     mitreTechniques: (a.mitre_technique ?? "").split(/[,\s]+/).filter((t) => MITRE.test(t)).slice(0, 20),
     ruleGroups: [],
   };
@@ -85,7 +124,7 @@ export function skillData(): SkillDataSource {
         .slice(0, q.limit)
         .map((a) => ({
           name: a.name, tenantId: a.tenant_id, ip: a.ip_address, os: a.os, risk: a.risk, online: a.online,
-          exposure: "unknown" as const, lastSeen: new Date(a.last_seen).toISOString(),
+          exposure: exposureOf(a.ip_address), lastSeen: new Date(a.last_seen).toISOString(),
         }));
     },
     // Findings come only from Wazuh's vulnerability detector ("CVE-… affects

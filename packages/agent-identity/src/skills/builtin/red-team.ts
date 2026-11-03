@@ -164,7 +164,7 @@ const CASES: Case[] = [
     payload: "skill declaring write:alerts",
     run() {
       const problems = validateDefinition({
-        name: "evil_skill", title: "x", description: "x", version: "1.0.0", input: z.strictObject({}), output: z.strictObject({}),
+        name: "evil_skill", agent: "Guardian", title: "x", description: "x", version: "1.0.0", input: z.strictObject({}), output: z.strictObject({}),
         capabilities: ["write:alerts" as never], auditEvents: ["skill.invoke"], example: {}, limitations: [], handler: async () => ({}),
       });
       return { caught: problems.length > 0, observed: problems.length ? `refused: ${problems[0]}` : "registered" };
@@ -313,6 +313,7 @@ type Output = z.infer<typeof output>;
 
 export const aiSecurityRedTeam: SkillDefinition<Input, Output> = {
   name: "ai_security_red_team",
+  agent: "Guardian",
   title: "AI Security Red Team",
   description: "Tests Legion's own AI and security defences with synthetic attacks: prompt injection, tool abuse, privilege escalation, SSRF, SQL injection, secret exfiltration, tenant isolation, token replay and malicious tool output. Testing only: nothing outside Legion is touched.",
   version: "1.0.0",

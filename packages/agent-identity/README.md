@@ -622,16 +622,26 @@ as a proposal with `executed: false`.
 
 ### Available skills
 
-| Skill | Purpose | Capabilities → permissions the agent must already hold |
-|---|---|---|
-| `threat_detection` | Analyse recent Wazuh alerts: suspicious patterns (brute force, success after failures, multi-stage activity, prompt-injection attempts), related-event groups, a risk level with reasons | `read:security_events` → `alerts:read` |
-| `alert_analysis` | One alert in detail: summary, affected asset/user, likely attack type and stage, indicators, related events, investigation steps; optional model narrative | `read:security_events`, `read:assets` → `alerts:read`, `assets:read` |
-| `incident_response` | Response plan for a suspected or confirmed incident: containment, investigation and recovery steps. **Recommends only** | `read:security_events`, `read:assets` → `alerts:read`, `assets:read` |
-| `threat_intelligence` | Classify IPs, domains, URLs, hashes, CVEs and email addresses as `known_malicious` / `suspicious` / `unknown` / `known_safe`, with Legion's own sightings as context | `read:threat_intel`, `read:security_events` → `intel:read`, `alerts:read` |
-| `attack_investigation` | Link events into possible attack chains (failed login → login → process → connection → file change) with a timeline, stages, assets and confidence | `read:security_events`, `read:assets` → `alerts:read`, `assets:read` |
-| `vulnerability_analysis` | Explain scanner findings: component, CVE, severity (CVSS or scanner), exposure, priority and remediation | `read:vulnerabilities`, `read:assets` → `vulnerabilities:read`, `assets:read` |
-| `security_reporting` | A report: what happened, when, affected assets, risk, evidence, actions already taken (marked unverified), next steps, plus safe Markdown | `read:security_events`, `read:assets` → `alerts:read`, `assets:read` |
-| `ai_security_red_team` | Test Legion's own defences with synthetic attacks (prompt injection, tool abuse, privilege escalation, SSRF, SQL injection, secret exfiltration, tenant isolation, token replay, malicious tool output). **Testing only** | `run:security_self_test` → `security:self_test` |
+Every skill belongs to one of Legion's five agents (`agent` in its definition
+and in discovery; the registry refuses a skill without one). Sentinel
+watches, Hunter hunts, Guardian protects, Oracle explains and prioritises,
+Executor prepares the response. Even Executor's skills only recommend.
+
+| Skill | Agent | Purpose | Capabilities → permissions the agent must already hold |
+|---|---|---|---|
+| `account_activity_watch` | Sentinel | Stolen or guessed accounts: a login after repeated failures, one account from many addresses, one address against many accounts (password spraying), privilege use or account changes right after a login. Offers a credential reset for a person | `read:security_events` → `alerts:read` |
+| `data_exfiltration_hunt` | Hunter | Data gathered and then sent out (dump, bulk read or archive, then an upload tool or large transfer) on the same host or account, with the stated size and external destination. Gathering alone is not reported | `read:security_events` → `alerts:read` |
+| `exposure_review` | Guardian | Assets ranked by how likely a successful attack is: reachable from the internet, known vulnerabilities (with the fixed version), recent events. Cheapest fixes first | `read:assets`, `read:vulnerabilities`, `read:security_events` → `assets:read`, `vulnerabilities:read`, `alerts:read` |
+| `triage_priority` | Oracle | The open alerts in the order to handle them (now / today / this week), each score explained; resolved alerts excluded | `read:security_events`, `read:assets` → `alerts:read`, `assets:read` |
+| `containment_candidates` | Executor | Attacking public addresses worth blocking, with evidence; private and documentation addresses listed as not blockable; warns when many addresses attack one host. **Blocks nothing** | `read:security_events` → `alerts:read` |
+| `threat_detection` | Sentinel | Analyse recent Wazuh alerts: suspicious patterns (brute force, success after failures, multi-stage activity, prompt-injection attempts), related-event groups, a risk level with reasons | `read:security_events` → `alerts:read` |
+| `alert_analysis` | Oracle | One alert in detail: summary, affected asset/user, likely attack type and stage, indicators, related events, investigation steps; optional model narrative | `read:security_events`, `read:assets` → `alerts:read`, `assets:read` |
+| `incident_response` | Executor | Response plan for a suspected or confirmed incident: containment, investigation and recovery steps. **Recommends only** | `read:security_events`, `read:assets` → `alerts:read`, `assets:read` |
+| `threat_intelligence` | Hunter | Classify IPs, domains, URLs, hashes, CVEs and email addresses as `known_malicious` / `suspicious` / `unknown` / `known_safe`, with Legion's own sightings as context | `read:threat_intel`, `read:security_events` → `intel:read`, `alerts:read` |
+| `attack_investigation` | Hunter | Link events into possible attack chains (failed login → login → process → connection → file change) with a timeline, stages, assets and confidence | `read:security_events`, `read:assets` → `alerts:read`, `assets:read` |
+| `vulnerability_analysis` | Guardian | Explain scanner findings: component, CVE, severity (CVSS or scanner), exposure, priority and remediation | `read:vulnerabilities`, `read:assets` → `vulnerabilities:read`, `assets:read` |
+| `security_reporting` | Oracle | A report: what happened, when, affected assets, risk, evidence, actions already taken (marked unverified), next steps, plus safe Markdown | `read:security_events`, `read:assets` → `alerts:read`, `assets:read` |
+| `ai_security_red_team` | Guardian | Test Legion's own defences with synthetic attacks (prompt injection, tool abuse, privilege escalation, SSRF, SQL injection, secret exfiltration, tenant isolation, token replay, malicious tool output). **Testing only** | `run:security_self_test` → `security:self_test` |
 
 Three permissions were added for skills: `vulnerabilities:read` (tier 0),
 `intel:read` (tier 1, because a provider may reach outside Legion) and

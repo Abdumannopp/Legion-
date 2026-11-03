@@ -210,7 +210,7 @@ describe("attempts to bypass the other skills' protections", () => {
 
 describe("a skill's own code cannot widen what it may do", () => {
   const probe = (handler: SkillDefinition["handler"], output: z.ZodType = z.strictObject({ ok: z.boolean() }), usesModel = false): SkillDefinition => ({
-    name: "probe_skill", title: "Probe", description: "test", version: "1.0.0",
+    name: "probe_skill", agent: "Guardian", title: "Probe", description: "test", version: "1.0.0",
     input: z.strictObject({}), output, capabilities: ["read:security_events"], auditEvents: ["skill.invoke"],
     example: {}, limitations: [], usesModel, handler,
   });

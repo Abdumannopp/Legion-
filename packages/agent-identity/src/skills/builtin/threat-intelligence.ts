@@ -49,6 +49,7 @@ function verdictFrom(results: IntelResult[]): { verdict: (typeof VERDICTS)[numbe
 
 export const threatIntelligence: SkillDefinition<Input, Output> = {
   name: "threat_intelligence",
+  agent: "Hunter",
   title: "Threat Intelligence",
   description: "Enriches IPs, domains, URLs, file hashes, CVEs and email addresses with the configured threat-intelligence provider and Legion's own sightings, classifying each as known malicious, suspicious, unknown or known safe.",
   version: "1.0.0",

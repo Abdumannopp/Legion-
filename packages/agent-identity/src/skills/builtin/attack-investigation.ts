@@ -45,6 +45,7 @@ function entities(e: SecurityEvent): string[] {
 
 export const attackInvestigation: SkillDefinition<Input, Output> = {
   name: "attack_investigation",
+  agent: "Hunter",
   title: "Attack Investigation",
   description: "Connects related security events into possible attack chains (e.g. failed logins → successful login → unusual process → network connection → file change) with a timeline, stages, affected assets and a confidence level.",
   version: "1.0.0",

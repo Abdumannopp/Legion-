@@ -1,0 +1,123 @@
+import { defineMessages } from "../core";
+
+/**
+ * Legion's five agents and the skills each one has. The skill lines are keyed
+ * by skill name (server: packages/agent-identity/src/skills/builtin); a skill
+ * without a line here falls back to the server's own English description.
+ */
+export const team = defineMessages({
+  en: {
+    title: "Legion team",
+    intro: "Five agents, each with one job. Their skills are tools you can give to your own AI agents (open an agent → Skills), so they check your security the same way Legion does. Legion's own detection and blocking run by themselves — see Defense.",
+    skills: (n: number) => (n === 1 ? "1 skill" : `${n} skills`),
+    onlyRecommends: "Skills only read your data and recommend. Nothing here blocks, deletes or changes anything — a person approves and does that.",
+    loadFailed: "Could not load the skills.",
+    assign: {
+      intro: "Choose which skills this agent may use. A skill only reads and recommends. The agent also needs the permissions the skill reads with — nothing is granted by choosing a skill.",
+      use: "Use this skill",
+      needs: (list: string) => `Also needs permission: ${list}. Grant it in “What it can do”.`,
+      ready: "Ready to use",
+      saved: "Saved",
+      adminOnly: "Only workspace admins can choose an agent's skills.",
+    },
+    agents: {
+      Sentinel: { role: "Watches", job: "Keeps an eye on sign-ins, accounts and events from your servers, and notices when something is wrong." },
+      Hunter: { role: "Hunts", job: "Connects separate events into one attack, and looks for data being gathered and sent out." },
+      Guardian: { role: "Protects", job: "Finds what is open to attack before anyone attacks it, and checks Legion's own defences." },
+      Oracle: { role: "Explains and prioritises", job: "Explains what an alert means in plain words and puts the open alerts in the order to handle them." },
+      Executor: { role: "Prepares the response", job: "Prepares what to do next — which address to block, what to isolate — with the evidence, for a person to approve." },
+    } as Record<string, { role: string; job: string }>,
+    skillLines: {
+      threat_detection: "Finds suspicious patterns in recent events and groups the related ones.",
+      account_activity_watch: "Spots stolen or guessed accounts: a login after many failures, one account used from many addresses, one address trying many accounts.",
+      attack_investigation: "Links related events into one attack timeline.",
+      threat_intelligence: "Checks addresses, domains and files against known threats.",
+      data_exfiltration_hunt: "Finds data being gathered and then sent out: a database dump followed by an upload.",
+      vulnerability_analysis: "Explains known weaknesses on your assets and how to fix them.",
+      ai_security_red_team: "Tests Legion's own defences with safe, synthetic attacks.",
+      exposure_review: "Ranks assets by how likely they are to be attacked: reachable from the internet, with known weaknesses.",
+      alert_analysis: "Explains one alert: what happened, to what, and what to check next.",
+      security_reporting: "Writes a security report with evidence and recommended next steps.",
+      triage_priority: "Orders the open alerts: what needs attention now, today, this week — and why.",
+      incident_response: "Builds a response plan: containment, investigation and recovery steps.",
+      containment_candidates: "Lists the attacking addresses worth blocking, and the ones that must not be blocked.",
+    } as Record<string, string>,
+  },
+  ru: {
+    title: "Команда Legion",
+    intro: "Пять агентов, у каждого своя задача. Их навыки — инструменты, которые можно дать вашим собственным ИИ-агентам (откройте агента → «Навыки»), чтобы они проверяли вашу безопасность так же, как Legion. Собственное обнаружение и блокировка Legion работают сами — см. «Защита».",
+    skills: (n: number) => {
+      const m10 = n % 10, m100 = n % 100;
+      return m10 === 1 && m100 !== 11 ? `${n} навык` : m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20) ? `${n} навыка` : `${n} навыков`;
+    },
+    onlyRecommends: "Навыки только читают ваши данные и рекомендуют. Здесь ничто не блокирует, не удаляет и не меняет — это одобряет и делает человек.",
+    loadFailed: "Не удалось загрузить навыки.",
+    assign: {
+      intro: "Выберите, какие навыки может использовать этот агент. Навык только читает и рекомендует. Агенту также нужны права, с которыми навык читает данные: выбор навыка ничего не выдаёт.",
+      use: "Использовать этот навык",
+      needs: (list: string) => `Нужно также право: ${list}. Выдайте его на вкладке «Что может».`,
+      ready: "Готов к работе",
+      saved: "Сохранено",
+      adminOnly: "Выбирать навыки агента могут только администраторы.",
+    },
+    agents: {
+      Sentinel: { role: "Наблюдает", job: "Следит за входами, учётными записями и событиями ваших серверов и замечает, когда что-то не так." },
+      Hunter: { role: "Охотится", job: "Связывает отдельные события в одну атаку и ищет сбор и вывод данных." },
+      Guardian: { role: "Защищает", job: "Находит то, что открыто для атаки, пока никто не атаковал, и проверяет собственную защиту Legion." },
+      Oracle: { role: "Объясняет и расставляет приоритеты", job: "Простыми словами объясняет, что значит оповещение, и выстраивает открытые оповещения в порядке обработки." },
+      Executor: { role: "Готовит ответ", job: "Готовит следующие шаги — какой адрес заблокировать, что изолировать — с доказательствами, чтобы человек одобрил." },
+    } as Record<string, { role: string; job: string }>,
+    skillLines: {
+      threat_detection: "Находит подозрительные закономерности в последних событиях и группирует связанные.",
+      account_activity_watch: "Замечает украденные или подобранные учётные записи: вход после множества неудач, одна запись с многих адресов, один адрес перебирает многие записи.",
+      attack_investigation: "Связывает события в одну хронологию атаки.",
+      threat_intelligence: "Проверяет адреса, домены и файлы по базам известных угроз.",
+      data_exfiltration_hunt: "Находит сбор данных с последующей отправкой: дамп базы, затем выгрузка.",
+      vulnerability_analysis: "Объясняет известные уязвимости ваших активов и как их исправить.",
+      ai_security_red_team: "Проверяет защиту самого Legion безопасными синтетическими атаками.",
+      exposure_review: "Ранжирует активы по вероятности успешной атаки: доступны из интернета, есть известные уязвимости.",
+      alert_analysis: "Объясняет одно оповещение: что произошло, с чем и что проверить дальше.",
+      security_reporting: "Составляет отчёт по безопасности с доказательствами и рекомендациями.",
+      triage_priority: "Упорядочивает открытые оповещения: что сейчас, сегодня, на этой неделе — и почему.",
+      incident_response: "Строит план реагирования: сдерживание, расследование и восстановление.",
+      containment_candidates: "Перечисляет атакующие адреса, которые стоит заблокировать, и те, которые блокировать нельзя.",
+    } as Record<string, string>,
+  },
+  uz: {
+    title: "Legion jamoasi",
+    intro: "Beshta agent, har birining o'z vazifasi bor. Ularning skill'lari sizning o'z AI agentlaringizga berish mumkin bo'lgan vositalardir (agentni oching → «Skill'lar»), shunda ular xavfsizligingizni Legion kabi tekshiradi. Legion'ning o'z aniqlash va bloklashi o'zi ishlaydi — «Himoya» bo'limiga qarang.",
+    skills: (n: number) => `${n} ta skill`,
+    onlyRecommends: "Skill'lar faqat ma'lumotingizni o'qiydi va tavsiya beradi. Bu yerda hech narsa bloklanmaydi, o'chirilmaydi yoki o'zgartirilmaydi — buni inson tasdiqlab, o'zi bajaradi.",
+    loadFailed: "Skill'larni yuklab bo'lmadi.",
+    assign: {
+      intro: "Bu agent qaysi skill'lardan foydalanishini tanlang. Skill faqat o'qiydi va tavsiya beradi. Agentga skill o'qiydigan ruxsatlar ham kerak: skill tanlash hech narsa bermaydi.",
+      use: "Bu skill'dan foydalanish",
+      needs: (list: string) => `Yana ruxsat kerak: ${list}. Uni «Nima qila oladi» yorlig'ida bering.`,
+      ready: "Ishlashga tayyor",
+      saved: "Saqlandi",
+      adminOnly: "Agent skill'larini faqat administratorlar tanlay oladi.",
+    },
+    agents: {
+      Sentinel: { role: "Kuzatadi", job: "Serverlaringizdagi kirishlar, hisoblar va hodisalarni kuzatadi va nimadir noto'g'ri bo'lganda sezadi." },
+      Hunter: { role: "Qidiradi", job: "Alohida hodisalarni bitta hujumga bog'laydi va ma'lumot yig'ilib, tashqariga yuborilishini qidiradi." },
+      Guardian: { role: "Himoya qiladi", job: "Hech kim hujum qilmasdan oldin hujumga ochiq joylarni topadi va Legion'ning o'z himoyasini tekshiradi." },
+      Oracle: { role: "Tushuntiradi va tartiblaydi", job: "Ogohlantirish nimani anglatishini oddiy tilda tushuntiradi va ochiq ogohlantirishlarni ko'rib chiqish tartibiga qo'yadi." },
+      Executor: { role: "Javobni tayyorlaydi", job: "Keyingi qadamni tayyorlaydi — qaysi manzilni bloklash, nimani ajratish — dalillari bilan, inson tasdiqlashi uchun." },
+    } as Record<string, { role: string; job: string }>,
+    skillLines: {
+      threat_detection: "So'nggi hodisalardagi shubhali qonuniyatlarni topadi va bog'liqlarini guruhlaydi.",
+      account_activity_watch: "O'g'irlangan yoki topilgan hisoblarni sezadi: ko'p muvaffaqiyatsizlikdan keyingi kirish, bitta hisobning ko'p manzildan ishlatilishi, bitta manzildan ko'p hisobni sinash.",
+      attack_investigation: "Hodisalarni bitta hujum xronologiyasiga bog'laydi.",
+      threat_intelligence: "Manzillar, domenlar va fayllarni ma'lum tahdidlar bo'yicha tekshiradi.",
+      data_exfiltration_hunt: "Ma'lumot yig'ilib, keyin yuborilishini topadi: bazani nusxalash, keyin yuklash.",
+      vulnerability_analysis: "Aktivlaringizdagi ma'lum zaifliklarni va ularni qanday tuzatishni tushuntiradi.",
+      ai_security_red_team: "Legion'ning o'z himoyasini xavfsiz, sun'iy hujumlar bilan sinaydi.",
+      exposure_review: "Aktivlarni muvaffaqiyatli hujum ehtimoli bo'yicha tartiblaydi: internetdan ochiq, ma'lum zaifliklari bor.",
+      alert_analysis: "Bitta ogohlantirishni tushuntiradi: nima bo'ldi, nimaga va keyin nimani tekshirish kerak.",
+      security_reporting: "Dalillar va tavsiyalar bilan xavfsizlik hisobotini yozadi.",
+      triage_priority: "Ochiq ogohlantirishlarni tartiblaydi: hozir, bugun, shu hafta nima kerak — va nega.",
+      incident_response: "Javob rejasini tuzadi: to'xtatish, tekshirish va tiklash qadamlari.",
+      containment_candidates: "Bloklashga arziydigan hujumchi manzillarni va bloklab bo'lmaydiganlarini ko'rsatadi.",
+    } as Record<string, string>,
+  },
+});

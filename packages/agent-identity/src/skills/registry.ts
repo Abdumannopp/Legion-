@@ -3,8 +3,10 @@ import {
   ALL_SKILL_CAPABILITIES,
   capabilityPermission,
   capabilityTier,
+  LEGION_AGENTS,
   MAX_SKILL_PERMISSION_TIER,
   SKILL_CAPABILITIES,
+  type LegionAgent,
   type SkillDefinition,
 } from "./types.js";
 
@@ -14,6 +16,8 @@ const SEMVER = /^\d+\.\d+\.\d+$/;
 /** A skill as discovery shows it: everything but the handler. */
 export interface SkillDescriptor {
   name: string;
+  /** Which of Legion's five agents this skill belongs to. */
+  agent: LegionAgent;
   title: string;
   description: string;
   version: string;
@@ -67,6 +71,7 @@ export function validateDefinition(def: SkillDefinition<any, any>): string[] {
   const p: string[] = [];
   if (!def || typeof def !== "object") return ["not a definition"];
   if (typeof def.name !== "string" || !SKILL_NAME.test(def.name)) p.push("name must be lowercase snake_case, 3–63 characters");
+  if (!(LEGION_AGENTS as readonly unknown[]).includes(def.agent)) p.push(`agent must be one of ${LEGION_AGENTS.join(", ")}`);
   if (typeof def.version !== "string" || !SEMVER.test(def.version)) p.push("version must be semantic (x.y.z)");
   if (!def.title || !def.description) p.push("title and description are required");
   if (!(def.input instanceof z.ZodType) || !(def.output instanceof z.ZodType)) p.push("input and output must be zod schemas");
@@ -101,6 +106,7 @@ function jsonSchema(s: z.ZodType): unknown {
 function describe(d: SkillDefinition<any, any>): SkillDescriptor {
   return {
     name: d.name,
+    agent: d.agent,
     title: d.title,
     description: d.description,
     version: d.version,

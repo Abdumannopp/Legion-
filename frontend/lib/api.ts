@@ -971,3 +971,26 @@ export function updateAutoResponse(patch: Partial<AutoResponseSettings>): Promis
   return request<AutoResponseSettings>("/security/auto-response", { method: "PATCH", body: JSON.stringify(patch) });
 }
 
+
+// ---- Legion's five agents and their skills ---------------------------------
+export type LegionAgentName = "Sentinel" | "Hunter" | "Guardian" | "Oracle" | "Executor";
+export interface SkillInfo {
+  name: string;
+  agent: LegionAgentName;
+  title: string;
+  description: string;
+  requiredPermissions: string[];
+}
+export function getSkills(): Promise<{ skills: SkillInfo[] }> {
+  return request("/skills");
+}
+export interface SkillAssignmentResult { missingPermissions: string[]; requiredPermissions: string[] }
+export function getSkillAssignments(identityId: string): Promise<{ assignments: { skill: string }[] }> {
+  return request(`/skills/assignments?identityId=${encodeURIComponent(identityId)}`);
+}
+export function assignSkill(identityId: string, skill: string): Promise<SkillAssignmentResult> {
+  return request("/skills/assignments", { method: "POST", body: JSON.stringify({ identityId, skill }) });
+}
+export function unassignSkill(identityId: string, skill: string): Promise<unknown> {
+  return request(`/skills/assignments/${encodeURIComponent(identityId)}/${encodeURIComponent(skill)}`, { method: "DELETE" });
+}

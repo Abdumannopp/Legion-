@@ -38,6 +38,7 @@ type Output = z.infer<typeof output>;
 
 export const alertAnalysis: SkillDefinition<Input, Output> = {
   name: "alert_analysis",
+  agent: "Oracle",
   title: "Alert Analysis",
   description: "Analyses one alert in detail: summary, affected asset and user, likely attack type, indicators, and the investigation steps to take next.",
   version: "1.0.0",

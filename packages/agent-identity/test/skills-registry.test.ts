@@ -1,4 +1,7 @@
 /** Skill definitions and the shared, deterministic knowledge they use. No database. */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { maskSecrets } from "../src/firewall/scan.js";
@@ -7,10 +10,10 @@ import { BUILTIN_SKILLS, createBuiltinRegistry } from "../src/skills/builtin/ind
 import { mdSafe } from "../src/skills/builtin/common.js";
 import { extractIndicators, normalizeIndicator, primaryStage, readEvent } from "../src/skills/knowledge.js";
 import { SkillRegistry, validateDefinition } from "../src/skills/registry.js";
-import { ALL_SKILL_CAPABILITIES, capabilityPermission, MAX_SKILL_PERMISSION_TIER, securityEventSchema, type SkillDefinition } from "../src/skills/types.js";
+import { ALL_SKILL_CAPABILITIES, LEGION_AGENTS, capabilityPermission, MAX_SKILL_PERMISSION_TIER, securityEventSchema, type SkillDefinition } from "../src/skills/types.js";
 
 const valid = (): SkillDefinition => ({
-  name: "ok_skill", title: "OK", description: "d", version: "1.0.0",
+  name: "ok_skill", agent: "Guardian", title: "OK", description: "d", version: "1.0.0",
   input: z.strictObject({ a: z.number().default(1) }), output: z.strictObject({}), capabilities: ["read:assets"],
   auditEvents: ["skill.invoke"], example: {}, limitations: [], handler: async () => ({}),
 });
@@ -18,11 +21,31 @@ const valid = (): SkillDefinition => ({
 describe("registry", () => {
   it("registers every built-in skill, each valid, strict and read-only", () => {
     const r = createBuiltinRegistry();
-    expect(r.names()).toHaveLength(8);
+    expect(r.names()).toHaveLength(13);
     for (const s of BUILTIN_SKILLS) {
       expect(validateDefinition(s as SkillDefinition)).toEqual([]);
       expect(s.limitations.length).toBeGreaterThan(0);
       for (const c of s.capabilities) expect(PERMISSION_TIERS[capabilityPermission(c)]).toBeLessThanOrEqual(MAX_SKILL_PERMISSION_TIER);
+    }
+  });
+
+  it("every skill belongs to one of the five agents, and every agent has skills", () => {
+    const byAgent = new Map<string, string[]>();
+    for (const s of BUILTIN_SKILLS) byAgent.set(s.agent, [...(byAgent.get(s.agent) ?? []), s.name]);
+    expect([...byAgent.keys()].sort()).toEqual([...LEGION_AGENTS].sort());
+    for (const [agent, names] of byAgent) expect(names.length, agent).toBeGreaterThanOrEqual(2);
+  });
+
+  it("refuses a skill that names no agent, or one that does not exist", () => {
+    expect(validateDefinition({ ...valid(), agent: "Overlord" } as unknown as SkillDefinition).join("; ")).toMatch(/agent must be one of/);
+    expect(validateDefinition({ ...valid(), agent: undefined } as unknown as SkillDefinition).join("; ")).toMatch(/agent must be one of/);
+  });
+
+  it("the dashboard's Legion team page describes every built-in skill (so a new skill is not shown without text)", () => {
+    const page = readFileSync(join(fileURLToPath(import.meta.url), "..", "..", "..", "..", "frontend", "lib", "i18n", "ns", "team.ts"), "utf8");
+    for (const s of BUILTIN_SKILLS) {
+      // once per language: en, ru, uz
+      expect(page.split(`      ${s.name}: "`).length - 1, s.name).toBe(3);
     }
   });
 

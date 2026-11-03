@@ -115,7 +115,7 @@ export const agents = defineMessages({
     } as Record<string, string>,
     groups: { legion: "In Legion", tools: "Tools and outside services" },
 
-    tabs: { permissions: "What it can do", activity: "What it did", approvals: "Waiting for you" },
+    tabs: { permissions: "What it can do", skills: "Skills", activity: "What it did", approvals: "Waiting for you" },
     edit: "Change",
     save: "Save changes",
     cancel: "Cancel",
@@ -308,7 +308,7 @@ export const agents = defineMessages({
     } as Record<string, string>,
     groups: { legion: "В Legion", tools: "Инструменты и внешние сервисы" },
 
-    tabs: { permissions: "Что может", activity: "Что делал", approvals: "Ждут вас" },
+    tabs: { permissions: "Что может", skills: "Навыки", activity: "Что делал", approvals: "Ждут вас" },
     edit: "Изменить",
     save: "Сохранить",
     cancel: "Отмена",
@@ -501,7 +501,7 @@ export const agents = defineMessages({
     } as Record<string, string>,
     groups: { legion: "Legion ichida", tools: "Vositalar va tashqi xizmatlar" },
 
-    tabs: { permissions: "Nima qila oladi", activity: "Nima qildi", approvals: "Sizni kutmoqda" },
+    tabs: { permissions: "Nima qila oladi", skills: "Skill'lar", activity: "Nima qildi", approvals: "Sizni kutmoqda" },
     edit: "O'zgartirish",
     save: "Saqlash",
     cancel: "Bekor qilish",

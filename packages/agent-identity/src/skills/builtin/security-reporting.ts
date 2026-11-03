@@ -39,6 +39,7 @@ type Output = z.infer<typeof output>;
 
 export const securityReporting: SkillDefinition<Input, Output> = {
   name: "security_reporting",
+  agent: "Oracle",
   title: "Security Reporting",
   description: "Writes a security report from Legion findings: what happened, when, affected assets, risk, evidence, actions already taken and recommended next steps.",
   version: "1.0.0",

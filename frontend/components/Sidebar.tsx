@@ -14,6 +14,7 @@ import {
   Plug,
   BrainCircuit,
   ShieldAlert,
+  Network,
 } from "lucide-react";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
@@ -32,6 +33,7 @@ export default function Sidebar() {
     { label: t.nav.agents, Icon: BrainCircuit, href: "/agents" },
     { label: t.nav.incidents, Icon: ClipboardList, href: "/incidents" },
     { label: t.nav.defense, Icon: ShieldAlert, href: "/defense" },
+    { label: t.nav.team, Icon: Network, href: "/team" },
     { label: t.nav.copilot, Icon: Bot, href: "/copilot" },
     { label: t.nav.reports, Icon: BarChart3, href: "/reports" },
     { label: t.nav.billing, Icon: CreditCard, href: "/billing" },

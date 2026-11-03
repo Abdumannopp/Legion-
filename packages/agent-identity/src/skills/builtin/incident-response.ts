@@ -40,6 +40,7 @@ const HOST_STAGES: Stage[] = ["execution", "persistence", "privilege_escalation"
 
 export const incidentResponse: SkillDefinition<Input, Output> = {
   name: "incident_response",
+  agent: "Executor",
   title: "Incident Response",
   description: "Builds a response plan for a suspected or confirmed incident: containment, investigation and recovery steps. Recommends only — it never performs any action.",
   version: "1.0.0",

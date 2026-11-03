@@ -253,6 +253,29 @@ async function main() {
   await sees(page, "new permission listed", "Read databases");
   await shot(page, "agent-permissions");
 
+  console.log("▶ 8b. Legion's five agents: give one of their skills to this agent");
+  await page.getByRole("tab", { name: "Skills" }).click();
+  for (const name of ["Sentinel", "Hunter", "Guardian", "Oracle", "Executor"]) await sees(page, `skills are grouped under ${name}`, name);
+  await page.getByLabel("Use this skill: Triage Priority").check();
+  await sees(page, "choosing a skill is saved", "Saved");
+  await sees(page, "the agent already holds what the skill reads with", "Ready to use");
+  await page.getByLabel("Use this skill: Threat Intelligence").check();
+  await sees(page, "a skill that needs a permission the agent lacks says which", "Also needs permission");
+  await shot(page, "agent-skills");
+  const mine = await (await page.request.get(`${API}/skills/assignments?identityId=${agentId}`)).json();
+  check("both skills are assigned on the server", ["triage_priority", "threat_intelligence"].every((n) => mine.assignments?.some((a) => a.skill === n)), JSON.stringify(mine));
+  const grantedNow = await (await page.request.get(`${API}/agents/${agentId}`)).json();
+  check("choosing skills granted no permission", !JSON.stringify(grantedNow).includes("intel:read"), "unexpected permission");
+
+  console.log("▶ 8c. the Legion team page");
+  await page.goto(`${WEB}/team`);
+  await sees(page, "team page is titled", "Legion team");
+  await sees(page, "Executor only prepares the response", "Prepares the response");
+  await sees(page, "a skill is described in words", "Lists the attacking addresses worth blocking");
+  await sees(page, "the page says skills never act", "Nothing here blocks, deletes or changes anything");
+  await shot(page, "team");
+  await page.goto(`${WEB}/agents/${agentId}`);
+
   // ---------------------------------------------------------------------------
   console.log("▶ 9. allow: a risky action waits for a person, who approves it");
   const cur = await (await page.request.get(`${API}/firewall/policy`)).json();
@@ -274,6 +297,13 @@ async function main() {
   await sees(page, "approved", "The agent may now do this once.");
   const retry = await agentCall(`/agent/v1/alerts/${alertId}/status`, { method: "PATCH", body: JSON.stringify({ status: "resolved" }), headers: { "x-legion-approval-id": askedBody.error?.approval?.id } });
   check("the approved action goes through, once", retry.status === 200, String(retry.status));
+
+  // A skill reads alert text, which Legion counts as external content: it runs after the approval step above.
+  const ran = await agentCall("/agent/v1/skills/triage_priority/invoke", { method: "POST", body: JSON.stringify({ input: {} }) });
+  const ranBody = await ran.json();
+  check("the agent runs its assigned skill over this workspace's alerts", ran.status === 200 && Array.isArray(ranBody.output?.queue) && ranBody.output.queue.length > 0, JSON.stringify(ranBody).slice(0, 300));
+  const refused = await agentCall("/agent/v1/skills/exposure_review/invoke", { method: "POST", body: JSON.stringify({ input: {} }) });
+  check("a skill nobody assigned to it is refused", refused.status === 403 && (await refused.json()).error?.code === "not_assigned");
 
   console.log("▶ 10. block: Legion stops an agent reaching another workspace, and says why");
   const grab = await agentCall("/agent/v1/tools/authorize", { method: "POST", body: JSON.stringify({ call: { kind: "database", operation: "query", sql: "SELECT id FROM alerts WHERE tenant_id = $1 LIMIT 5", params: [lab?.id] } }) });

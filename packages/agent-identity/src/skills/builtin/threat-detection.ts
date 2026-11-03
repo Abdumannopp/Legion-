@@ -94,6 +94,7 @@ function groupBy(scored: ScoredEvent[], kind: "source_ip" | "asset" | "technique
 
 export const threatDetection: SkillDefinition<Input, Output> = {
   name: "threat_detection",
+  agent: "Sentinel",
   title: "Threat Detection",
   description: "Analyses the tenant's recent security events (Wazuh alerts), finds suspicious patterns, groups related events, assigns a risk level and explains why.",
   version: "1.0.0",

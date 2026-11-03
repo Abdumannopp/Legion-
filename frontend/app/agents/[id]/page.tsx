@@ -9,6 +9,7 @@ import {
 import Sidebar from "@/components/Sidebar";
 import ErrorNotice from "@/components/ErrorNotice";
 import AgentApprovals from "@/components/AgentApprovals";
+import AgentSkills from "@/components/AgentSkills";
 import AgentStatus from "@/components/AgentStatus";
 import { PermissionPicker, PermissionSummary } from "@/components/AgentPermissions";
 import {
@@ -128,7 +129,7 @@ export default function AgentPage() {
   const [catalogue, setCatalogue] = useState<{ permissions: AgentPermissionInfo[]; never: string[] } | null>(null);
   const [decisions, setDecisions] = useState<AgentDecision[]>([]);
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
-  const [tab, setTab] = useState<"permissions" | "activity" | "approvals">("permissions");
+  const [tab, setTab] = useState<"permissions" | "skills" | "activity" | "approvals">("permissions");
   const [editing, setEditing] = useState<string[] | null>(null);
   const [stopping, setStopping] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -226,7 +227,7 @@ export default function AgentPage() {
               </header>
 
               <div className="flex gap-1 border-b border-line" role="tablist">
-                {(["permissions", "activity", "approvals"] as const).map((k) => (
+                {(["permissions", "skills", "activity", "approvals"] as const).map((k) => (
                   <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
                     className={`text-xs px-3 py-2 -mb-px border-b-2 ${tab === k ? "border-brand-hover text-ink" : "border-transparent text-ink-faint hover:text-ink-muted"}`}>
                     {a.tabs[k]}{k === "approvals" && approvals.length ? ` (${approvals.length})` : ""}
@@ -261,6 +262,8 @@ export default function AgentPage() {
                   )}
                 </section>
               )}
+
+              {tab === "skills" && <AgentSkills agentId={agent.id} granted={agent.permissions.effective} canEdit={isAdmin && agent.status !== "revoked"} />}
 
               {tab === "activity" && (
                 <section className="rounded-xl border border-line bg-surface">
