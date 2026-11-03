@@ -21,7 +21,7 @@ const valid = (): SkillDefinition => ({
 describe("registry", () => {
   it("registers every built-in skill, each valid, strict and read-only", () => {
     const r = createBuiltinRegistry();
-    expect(r.names()).toHaveLength(14);
+    expect(r.names()).toHaveLength(18);
     for (const s of BUILTIN_SKILLS) {
       expect(validateDefinition(s as SkillDefinition)).toEqual([]);
       expect(s.limitations.length).toBeGreaterThan(0);

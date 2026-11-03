@@ -24,6 +24,7 @@ import {
 } from "@legion/agent-identity";
 import { isPublicAddress } from "./blocklist.js";
 import { userFromLog } from "./log-fields.js";
+import { listPaymentsForSkills } from "./payments.js";
 export { userFromLog };
 import { alertForBehaviorChange, alertForFirewallDecision, alertForSecurityEvent } from "./agent-alerts.js";
 import { chatSafe } from "./ai.js";
@@ -100,6 +101,10 @@ export function skillData(): SkillDataSource {
           name: a.name, tenantId: a.tenant_id, ip: a.ip_address, os: a.os, risk: a.risk, online: a.online,
           exposure: exposureOf(a.ip_address), lastSeen: new Date(a.last_seen).toISOString(),
         }));
+    },
+    async listPayments(tenantId, q) {
+      if (!UUID.test(tenantId)) return [];
+      return listPaymentsForSkills(tenantId, q);
     },
     // Findings come only from Wazuh's vulnerability detector ("CVE-… affects
     // <package>"). An alert that merely mentions a CVE is not a finding.

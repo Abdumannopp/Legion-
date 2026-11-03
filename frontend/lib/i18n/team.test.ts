@@ -5,6 +5,7 @@ const SKILLS = [
   "threat_detection", "account_activity_watch", "attack_investigation", "threat_intelligence", "data_exfiltration_hunt",
   "vulnerability_analysis", "ai_security_red_team", "exposure_review", "alert_analysis", "security_reporting",
   "triage_priority", "incident_response", "containment_candidates", "threat_coverage",
+  "secret_exposure_check", "sensitive_access_watch", "response_sla_review", "payment_fraud_review",
 ];
 const AGENTS = ["Sentinel", "Hunter", "Guardian", "Oracle", "Executor"];
 

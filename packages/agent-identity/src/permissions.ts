@@ -18,6 +18,8 @@ export const PERMISSION_TIERS = {
   "stats:read": 0,
   // Security skills (src/skills/). Read-only by construction.
   "vulnerabilities:read": 0,
+  // Payment checks (held and allowed payments). Never an account number.
+  "payments:read": 0,
   // Tier 1: a threat-intelligence provider may itself reach outside Legion.
   "intel:read": 1,
   // Tier 1: runs synthetic attacks against Legion's own in-process defences.

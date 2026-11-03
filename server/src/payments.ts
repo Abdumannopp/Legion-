@@ -212,3 +212,25 @@ export async function resolvePayment(tenantId: string, id: string, userId: strin
   const { beneficiary_hash: _hash, ...check } = row;
   return check;
 }
+
+/**
+ * Payment checks for the security skills (src/agents.ts). Same data as the
+ * dashboard, never an account number: only its last characters.
+ */
+export async function listPaymentsForSkills(tenantId: string, q: { since?: string; limit: number }) {
+  const rows = await queryAll<{
+    id: string; created_at: Date; beneficiary_hint: string; beneficiary_name: string | null; amount: string; currency: string;
+    requested_by: string | null; decision: "allow" | "hold"; reasons: string[]; resolution: "released" | "rejected" | null; resolved_at: Date | null;
+  }>(
+    `SELECT id, created_at, beneficiary_hint, beneficiary_name, amount::text AS amount, currency, requested_by, decision, reasons, resolution, resolved_at
+       FROM payment_checks
+      WHERE tenant_id = $1 ${q.since ? "AND created_at >= $3::timestamptz" : ""}
+      ORDER BY created_at DESC LIMIT $2`,
+    q.since ? [tenantId, Math.min(Math.max(q.limit, 1), 500), q.since] : [tenantId, Math.min(Math.max(q.limit, 1), 500)],
+  );
+  return rows.map((r) => ({
+    id: r.id, tenantId, createdAt: new Date(r.created_at).toISOString(), beneficiaryHint: r.beneficiary_hint, beneficiaryName: r.beneficiary_name,
+    amount: Number(r.amount), currency: r.currency, requestedBy: r.requested_by, decision: r.decision, reasons: r.reasons,
+    resolution: r.resolution, resolvedAt: r.resolved_at ? new Date(r.resolved_at).toISOString() : null,
+  }));
+}

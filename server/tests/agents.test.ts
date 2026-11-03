@@ -252,3 +252,44 @@ describe("security skills over Legion's own data", () => {
     expect(r.body.output.results[0].sightings.count).toBeGreaterThan(0);
   });
 });
+
+describe("business skills over Legion's own data", () => {
+  it("Payment Fraud Review reads this tenant's real payment checks, and never an account number", async () => {
+    const { checkPayment } = await import("../src/payments.js");
+    await checkPayment(tenantA, { action: "payment-check", beneficiary: { account: "DE89 3704 0044 0532 0130 00", name: "Acme Supplies" }, amount: 12500, currency: "EUR", requestedBy: "dana@acme.example" });
+    await checkPayment(tenantB, { action: "payment-check", beneficiary: { account: "FR1420041010050500013M02606", name: "Secret B Corp" }, amount: 99, currency: "EUR" });
+    const a = await agent(adminA, ["payments:read"]);
+    await request(app).post("/skills/assignments").set(...asUser(adminA)).send({ identityId: a.id, skill: "payment_fraud_review" });
+    const r = await request(app).post("/agent/v1/skills/payment_fraud_review/invoke").set(...bearer(a.token)).send({ input: {} });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.output.summary).toMatchObject({ held: 1, waiting: 1, waitingAmountByCurrency: { EUR: 12500 } });
+    expect(r.body.output.waiting[0]).toMatchObject({ account: "…3000", name: "Acme Supplies" });
+    const dump = JSON.stringify(r.body);
+    expect(dump).not.toContain("Secret B Corp");
+    expect(dump).not.toContain("370400440532");
+  });
+
+  it("Response Time Review reads this tenant's real open alerts", async () => {
+    const id = `OLD-${randomUUID().slice(0, 6)}`;
+    await alert(tenantA, id, { title: "Ransomware on fs-01", severity: "critical", mitre_technique: null });
+    await query("UPDATE alerts SET created_at = now() - interval '10 hours' WHERE id = $1", [id]);
+    const a = await agent(adminA, ["alerts:read", "assets:read"]);
+    await request(app).post("/skills/assignments").set(...asUser(adminA)).send({ identityId: a.id, skill: "response_sla_review" });
+    const r = await request(app).post("/agent/v1/skills/response_sla_review/invoke").set(...bearer(a.token)).send({ input: {} });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    const late = r.body.output.overdue.find((x: { eventId: string }) => x.eventId === id);
+    expect(late).toMatchObject({ severity: "critical", asset: "web-01" });
+    expect(late.lateByHours).toBeGreaterThan(5.9);
+  });
+
+  it("Secret Exposure Check finds a card number in a real alert and reports only its kind", async () => {
+    const id = `SEC-${randomUUID().slice(0, 6)}`;
+    await alert(tenantA, id, { title: "Checkout log", summary: "charge for card 4111 1111 1111 1111 approved", target: "shop-01", mitre_technique: null });
+    const a = await agent(adminA, ["alerts:read"]);
+    await request(app).post("/skills/assignments").set(...asUser(adminA)).send({ identityId: a.id, skill: "secret_exposure_check" });
+    const r = await request(app).post("/agent/v1/skills/secret_exposure_check/invoke").set(...bearer(a.token)).send({ input: {} });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    expect(r.body.output.findings.map((f: { kind: string }) => f.kind)).toContain("card_number");
+    expect(JSON.stringify(r.body)).not.toContain("4111");
+  });
+});

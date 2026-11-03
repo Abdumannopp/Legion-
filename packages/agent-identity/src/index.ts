@@ -69,7 +69,7 @@ export { assessCoverage, type CoverageEvent, type CoverageStatus, type ThreatCov
 export { readEvent, STAGES, type Stage } from "./skills/knowledge.js";
 export {
   SKILL_CAPABILITIES, SkillError, type SkillCapability, type SkillContext, type SkillDataSource, type SkillDefinition, type SkillModel,
-  type SecurityEvent, type Asset, type IntelResult, type Vulnerability,
+  type SecurityEvent, type Asset, type IntelResult, type Vulnerability, type PaymentRecord,
 } from "./skills/types.js";
 export {
   applyLeastPrivilegeRole, withAgentTenant, assertIdentifier, AGENT_TENANT_SETTING, DENIED_ROLE_MEMBERSHIPS,

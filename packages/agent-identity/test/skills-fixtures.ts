@@ -37,6 +37,8 @@ export const ASSETS = [
   { name: "b-host", tenantId: TENANT_B, exposure: "internal" },
 ];
 
+const RANK: Record<string, number> = { low: 1, medium: 2, high: 3, critical: 4 };
+
 /** A host data source that behaves like Legion's: every query is filtered by the tenant it is given. */
 export class FakeData implements SkillDataSource {
   calls: { method: string; tenantId: string; q: unknown }[] = [];
@@ -57,6 +59,7 @@ export class FakeData implements SkillDataSource {
     { id: "V2", tenantId: TENANT_A, asset: "db-01", component: "openssl", cve: "CVE-2022-3602", severity: "high", detectedAt: at(0), source: "wazuh-vd", evidence: "openssl 3.0.5 installed" },
     { id: "VB", tenantId: TENANT_B, asset: "b-host", component: "log4j-core", cve: "CVE-2021-44228", cvss: 10, detectedAt: at(0), source: "wazuh-vd" },
   ];
+  payments: Record<string, unknown>[] = [];
   /** Simulates a bug in the host: ignores the tenant filter. */
   leakOtherTenants = false;
   fail = false;
@@ -65,7 +68,7 @@ export class FakeData implements SkillDataSource {
     return this.leakOtherTenants ? rows : rows.filter((r) => r.tenantId === tenantId);
   }
 
-  async listSecurityEvents(tenantId: string, q: { ids?: string[]; since?: string; until?: string; asset?: string; sourceIp?: string; limit: number }) {
+  async listSecurityEvents(tenantId: string, q: { ids?: string[]; since?: string; until?: string; asset?: string; sourceIp?: string; minSeverity?: string; limit: number }) {
     this.calls.push({ method: "listSecurityEvents", tenantId, q });
     if (this.fail) throw new Error("database is down (password=hunter2)");
     return this.scope(this.events as { tenantId?: unknown; id?: unknown; createdAt?: unknown; asset?: unknown; sourceIp?: unknown }[], tenantId)
@@ -74,6 +77,8 @@ export class FakeData implements SkillDataSource {
       .filter((e) => !q.until || (e.createdAt as string) <= q.until)
       .filter((e) => !q.asset || e.asset === q.asset)
       .filter((e) => !q.sourceIp || e.sourceIp === q.sourceIp)
+      // The real host honours the minimum severity, so a skill can read the serious alerts deeply.
+      .filter((e) => !q.minSeverity || (RANK[(e as { severity?: string }).severity ?? "low"] ?? 0) >= (RANK[q.minSeverity] ?? 0))
       .slice(0, q.limit);
   }
 
@@ -86,6 +91,14 @@ export class FakeData implements SkillDataSource {
     this.calls.push({ method: "lookupIndicators", tenantId, q: indicators });
     if (!this.intel) throw new Error("provider down");
     return this.intel;
+  }
+
+  async listPayments(tenantId: string, q: { since?: string; limit: number }) {
+    this.calls.push({ method: "listPayments", tenantId, q });
+    if (this.fail) throw new Error("database is down (password=hunter2)");
+    return this.scope(this.payments as { tenantId?: unknown; createdAt?: unknown }[], tenantId)
+      .filter((p) => !q.since || (p.createdAt as string) >= q.since)
+      .slice(0, q.limit);
   }
 
   async listVulnerabilities(tenantId: string, q: { cve?: string; asset?: string; limit: number }) {
@@ -117,7 +130,7 @@ export interface SkillTestEnv {
   invoke(skill: string, input: unknown, token?: string): Promise<request.Response>;
 }
 
-export const ALL_SKILL_PERMISSIONS = ["alerts:read", "assets:read", "intel:read", "vulnerabilities:read", "security:self_test"];
+export const ALL_SKILL_PERMISSIONS = ["alerts:read", "assets:read", "intel:read", "vulnerabilities:read", "payments:read", "security:self_test"];
 
 export async function skillEnv(opts: { permissions?: string[]; data?: FakeData | null; model?: FakeModel | null } = {}): Promise<SkillTestEnv> {
   const data = opts.data === null ? undefined : (opts.data ?? new FakeData());

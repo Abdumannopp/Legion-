@@ -23,6 +23,7 @@ export const SKILL_CAPABILITIES = {
   "read:assets": { permission: "assets:read", description: "Read the tenant's asset inventory." },
   "read:threat_intel": { permission: "intel:read", description: "Look up indicators with the configured threat-intelligence provider." },
   "read:vulnerabilities": { permission: "vulnerabilities:read", description: "Read vulnerability findings for the tenant's assets." },
+  "read:payments": { permission: "payments:read", description: "Read the tenant's payment checks: amount, currency, who asked, why a payment was held. Never an account number." },
   "run:security_self_test": { permission: "security:self_test", description: "Run synthetic attacks against Legion's own in-process defences." },
 } as const satisfies Record<string, { permission: Permission; description: string }>;
 
@@ -126,6 +127,27 @@ export const vulnerabilitySchema = z.object({
 });
 export type Vulnerability = z.infer<typeof vulnerabilitySchema>;
 
+/**
+ * One payment check (src/payments.ts in the host). The account number is never
+ * here: only its last characters, enough for a person to recognise it. The
+ * names are typed by whoever raised the payment, so they are untrusted text.
+ */
+export const paymentSchema = z.object({
+  id: z.string().min(1).max(200),
+  tenantId: z.string().min(1).max(100),
+  createdAt: isoTime,
+  beneficiaryHint: shortText(8),
+  beneficiaryName: shortText(200).nullish(),
+  amount: z.number().finite().min(0),
+  currency: z.string().regex(/^[A-Z0-9]{2,10}$/),
+  requestedBy: shortText(200).nullish(),
+  decision: z.enum(["allow", "hold"]),
+  reasons: z.array(shortText(60)).max(10).default([]),
+  resolution: z.enum(["released", "rejected"]).nullish(),
+  resolvedAt: isoTime.nullish(),
+});
+export type PaymentRecord = z.infer<typeof paymentSchema>;
+
 export interface SecurityEventQuery {
   ids?: string[];
   since?: string;
@@ -148,6 +170,7 @@ export interface SkillDataSource {
   listAssets?(tenantId: string, q: { names?: string[]; limit: number }): Promise<unknown[]>;
   lookupIndicators?(tenantId: string, indicators: { type: IndicatorType; value: string }[]): Promise<unknown[]>;
   listVulnerabilities?(tenantId: string, q: { cve?: string; asset?: string; component?: string; limit: number }): Promise<unknown[]>;
+  listPayments?(tenantId: string, q: { since?: string; limit: number }): Promise<unknown[]>;
 }
 
 /** A language model the host provides. It only ever receives assembled prompts (see prompt-guard/assembly.ts). */
@@ -186,6 +209,7 @@ export interface SkillContext {
     assets(q: { names?: string[]; limit: number }): Promise<Asset[]>;
     lookupIndicators(indicators: { type: IndicatorType; value: string }[]): Promise<IntelResult[]>;
     vulnerabilities(q: { cve?: string; asset?: string; component?: string; limit: number }): Promise<Vulnerability[]>;
+    payments(q: { since?: string; limit: number }): Promise<PaymentRecord[]>;
   };
   /** Prompt-injection verdict for a record's text, as classified when it was read. */
   verdictOf(id: string): Verdict;

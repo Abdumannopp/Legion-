@@ -14,12 +14,14 @@ import {
   assetSchema,
   capabilityPermission,
   intelResultSchema,
+  paymentSchema,
   securityEventSchema,
   SkillError,
   vulnerabilitySchema,
   type Asset,
   type IntelResult,
   type Narrative,
+  type PaymentRecord,
   type SecurityEvent,
   type SkillCapability,
   type SkillContext,
@@ -346,6 +348,14 @@ class Run {
           const answered = rows.filter((r) => asked.has(`${r.type}:${r.indicator}`));
           await self.observe("api_response", answered.filter((r) => r.notes).map((r) => ({ id: `intel:${r.type}:${r.indicator}`, text: r.notes! })));
           return answered;
+        },
+        async payments(q) {
+          self.gate("read:payments");
+          const limit = clamp(q.limit);
+          const rows = await self.load<PaymentRecord>("listPayments", d?.listPayments && (() => d.listPayments!(tenantId, { since: q.since, limit })), paymentSchema, limit);
+          // Names and requesters are typed by whoever raised the payment.
+          await self.observe("api_response", rows.map((r) => ({ id: `payment:${r.id}`, text: [r.beneficiaryName, r.requestedBy].filter(Boolean).join("\n") })).filter((x) => x.text));
+          return rows;
         },
         async vulnerabilities(q) {
           self.gate("read:vulnerabilities");
