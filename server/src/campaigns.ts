@@ -127,17 +127,28 @@ export function parentTechniques(values: Array<string | null>): string[] {
 // keeps the scan on the index.
 const EVENT_TIME = "coalesce(occurred_at, created_at)";
 
-async function bySource(tenantId: string, ip: string): Promise<Detection[]> {
-  const longest = Math.max(THRESHOLDS.rapid_chain.windowMinutes, THRESHOLDS.wide_sweep.windowMinutes, THRESHOLDS.velocity.windowMinutes,
-    THRESHOLDS.credential_attack.windowMinutes, THRESHOLDS.account_compromise.windowMinutes);
-  const rows = await queryAll<{ t: Date; target: string | null; mitre_technique: string | null; title: string; summary: string }>(
-    `SELECT ${EVENT_TIME} AS t, target, mitre_technique, title, left(summary, 2000) AS summary
+/** An active (not yet quiet) campaign of this rule for this subject. */
+async function hasActive(tenantId: string, rule: CampaignRule, subject: string): Promise<boolean> {
+  const row = await queryOne<{ n: number }>(
+    `SELECT count(*)::int AS n FROM attack_campaigns
+      WHERE tenant_id = $1 AND rule = $2 AND subject = $3 AND status = 'active' AND last_seen > now() - make_interval(secs => $4)`,
+    [tenantId, rule, subject, QUIET_MS / 1000],
+  );
+  return (row?.n ?? 0) > 0;
+}
+
+// The newest 1500 rows are plenty for every threshold below (the biggest needs 30
+// alerts), and every arriving alert runs this: during a flood it must stay cheap.
+async function bySource(tenantId: string, ip: string, signIn: { failures: boolean; success: boolean }): Promise<Detection[]> {
+  const longest = Math.max(THRESHOLDS.rapid_chain.windowMinutes, THRESHOLDS.wide_sweep.windowMinutes, THRESHOLDS.velocity.windowMinutes);
+  const rows = await queryAll<{ t: Date; target: string | null; mitre_technique: string | null }>(
+    `SELECT ${EVENT_TIME} AS t, target, mitre_technique
        FROM alerts
       WHERE tenant_id = $1 AND source_ip = $2 AND source <> $3
         AND created_at >= now() - interval '1 day'
         AND ${EVENT_TIME} >= now() - make_interval(mins => $4)
       ORDER BY created_at DESC
-      LIMIT 5000`,
+      LIMIT 1500`,
     [tenantId, ip, CORRELATION_SOURCE, longest],
   );
   const now = Date.now();
@@ -160,7 +171,7 @@ async function bySource(tenantId: string, ip: string): Promise<Detection[]> {
       techniques: parentTechniques(sweep.map((r) => r.mitre_technique)), minutes: spanMinutes(sweep), sourceIp: ip, target: null,
     });
   }
-  found.push(...signIns(ip, rows, within));
+  if (signIn.failures || signIn.success) found.push(...await signInDetections(tenantId, ip, signIn));
   const burst = within(THRESHOLDS.velocity.windowMinutes);
   if (burst.length >= THRESHOLDS.velocity.alerts) {
     found.push({
@@ -171,44 +182,74 @@ async function bySource(tenantId: string, ip: string): Promise<Detection[]> {
   return found;
 }
 
-type SourceRow = { t: Date; target: string | null; mitre_technique: string | null; title: string; summary: string };
-
-/** What a row says about a sign-in: failed, succeeded, and for which account. */
-function signIn(r: SourceRow): { failed: boolean; ok: boolean; account: string | null } {
+/** What an alert says about a sign-in (a fresh alert, or a stored row). */
+export function signInOf(title: string, summary: string): { failed: boolean; ok: boolean; account: string | null } {
   const reading = readEvent({
-    id: "x", tenantId: "x", title: r.title, summary: r.summary, severity: "low", createdAt: new Date().toISOString(), source: "x",
+    id: "x", tenantId: "x", title, summary, severity: "low", createdAt: new Date().toISOString(), source: "x",
     mitreTechniques: [], ruleGroups: [],
   } as SecurityEvent);
   const ids = new Set(reading.signals.map((s) => s.id));
-  const account = userFromLog(r.summary) ?? userFromLog(r.title);
+  const account = userFromLog(summary) ?? userFromLog(title);
   return { failed: ids.has("failed_authentication"), ok: ids.has("successful_login") && !ids.has("failed_authentication"), account: account ? account.toLowerCase() : null };
 }
 
-/** Unauthorized access: password guessing, spraying, and the sign-in that finally worked. */
-function signIns(ip: string, rows: SourceRow[], within: (min: number) => SourceRow[]): Detection[] {
-  const found: Detection[] = [];
+/**
+ * The most rows read for one address's sign-in analysis. During a flood every
+ * arriving alert triggers this, so it must stay cheap: the answer never needs
+ * more than this many recent sign-in events.
+ */
+const SIGN_IN_ROWS = 300;
+
+/**
+ * Unauthorized access: password guessing, spraying, and the sign-in that
+ * finally worked. Runs only when the arriving alerts are sign-in events
+ * (`signIn` says which kind), reads at most SIGN_IN_ROWS short rows, and skips
+ * the guessing check while a campaign for the address is already active.
+ */
+async function signInDetections(tenantId: string, ip: string, want: { failures: boolean; success: boolean }): Promise<Detection[]> {
   const ca = THRESHOLDS.credential_attack;
-  const recent = within(ca.windowMinutes).map((r) => ({ r, s: signIn(r) }));
-  const failures = recent.filter((x) => x.s.failed);
-  const accounts = distinct(failures.map((x) => x.s.account));
-  if (failures.length >= ca.failures || accounts.length >= ca.accounts) {
-    found.push({
-      rule: "credential_attack", subject: ip, alertCount: failures.length, sources: [ip], targets: distinct(failures.map((x) => x.r.target)),
-      techniques: ["T1110"], minutes: spanMinutes(failures.map((x) => x.r)), sourceIp: ip, target: null,
-      signals: [`${failures.length} failed sign-ins`, ...(accounts.length ? [`${accounts.length} account(s): ${list(accounts, 5)}`] : [])],
-    });
-  }
   const ac = THRESHOLDS.account_compromise;
-  const window = within(ac.windowMinutes).map((r) => ({ r, s: signIn(r) })).sort((a, b) => new Date(a.r.t).getTime() - new Date(b.r.t).getTime());
-  for (const success of window.filter((x) => x.s.ok && x.s.account)) {
-    const before = window.filter((x) => x.s.failed && x.s.account === success.s.account && new Date(x.r.t) <= new Date(success.r.t));
-    if (before.length < ac.failuresBefore) continue;
-    found.push({
-      rule: "account_compromise", subject: success.s.account!, alertCount: before.length + 1, sources: [ip],
-      targets: distinct([success.r.target]), techniques: ["T1110", "T1078"], minutes: spanMinutes([...before.map((x) => x.r), success.r]),
-      sourceIp: ip, target: success.r.target, signals: [`${before.length} failed sign-ins, then a successful one`],
-    });
-    break;
+  const failures = want.failures && !(await hasActive(tenantId, "credential_attack", ip));
+  if (!failures && !want.success) return [];
+  const rows = await queryAll<{ t: Date; target: string | null; title: string; summary: string }>(
+    `SELECT ${EVENT_TIME} AS t, target, title, left(summary, 400) AS summary
+       FROM alerts
+      WHERE tenant_id = $1 AND source_ip = $2 AND source <> $3
+        AND created_at >= now() - interval '1 day'
+        AND ${EVENT_TIME} >= now() - make_interval(mins => $4)
+        AND (title ~* $5 OR summary ~* $5)
+      ORDER BY created_at DESC
+      LIMIT ${SIGN_IN_ROWS}`,
+    [tenantId, ip, CORRELATION_SOURCE, Math.max(ca.windowMinutes, ac.windowMinutes), "(fail|invalid user|accepted|authenticat|logon|login|session opened)"],
+  );
+  const now = Date.now();
+  const rated = rows.map((r) => ({ r, s: signInOf(r.title, r.summary) }));
+  const inside = (min: number) => rated.filter((x) => now - new Date(x.r.t).getTime() <= min * 60_000);
+  const found: Detection[] = [];
+
+  if (failures) {
+    const failed = inside(ca.windowMinutes).filter((x) => x.s.failed);
+    const accounts = distinct(failed.map((x) => x.s.account));
+    if (failed.length >= ca.failures || accounts.length >= ca.accounts) {
+      found.push({
+        rule: "credential_attack", subject: ip, alertCount: failed.length, sources: [ip], targets: distinct(failed.map((x) => x.r.target)),
+        techniques: ["T1110"], minutes: spanMinutes(failed.map((x) => x.r)), sourceIp: ip, target: null,
+        signals: [`${failed.length} failed sign-ins`, ...(accounts.length ? [`${accounts.length} account(s): ${list(accounts, 5)}`] : [])],
+      });
+    }
+  }
+  if (want.success) {
+    const window = inside(ac.windowMinutes).sort((a, b) => new Date(a.r.t).getTime() - new Date(b.r.t).getTime());
+    for (const success of window.filter((x) => x.s.ok && x.s.account)) {
+      const before = window.filter((x) => x.s.failed && x.s.account === success.s.account && new Date(x.r.t) <= new Date(success.r.t));
+      if (before.length < ac.failuresBefore) continue;
+      found.push({
+        rule: "account_compromise", subject: success.s.account!, alertCount: before.length + 1, sources: [ip],
+        targets: distinct([success.r.target]), techniques: ["T1110", "T1078"], minutes: spanMinutes([...before.map((x) => x.r), success.r]),
+        sourceIp: ip, target: success.r.target, signals: [`${before.length} failed sign-ins, then a successful one`],
+      });
+      break;
+    }
   }
   return found;
 }
@@ -272,6 +313,7 @@ const FILE_CHANGE_SQL = "(integrity checksum changed|file (was )?(modified|delet
 
 /** Encryption in progress: a mass of file changes on one host within minutes. */
 async function massFileChanges(tenantId: string, target: string): Promise<Detection[]> {
+  if (await hasActive(tenantId, "ransomware", target)) return [];
   const w = THRESHOLDS.ransomware;
   const row = await queryOne<{ n: number }>(
     `SELECT count(*)::int AS n FROM alerts
@@ -292,6 +334,7 @@ async function massFileChanges(tenantId: string, target: string): Promise<Detect
 /** A software install followed, on the same host, by attacker activity. */
 async function installThenActivity(tenantId: string, alert: Alert): Promise<Detection[]> {
   if (!alert.target || !ACTIVITY_AFTER_INSTALL.test(`${alert.title}\n${alert.summary}`)) return [];
+  if (await hasActive(tenantId, "supply_chain", alert.target)) return [];
   const w = THRESHOLDS.supply_chain;
   const rows = await queryAll<{ id: string; title: string; summary: string }>(
     `SELECT id, title, left(summary, 2000) AS summary FROM alerts
@@ -332,12 +375,13 @@ async function slowIntrusion(tenantId: string, alert: Alert): Promise<Detection[
   if (!alert.target) return [];
   const own = stagesOf({ id: alert.id, title: alert.title, summary: alert.summary, mitre_technique: alert.mitre_technique });
   if (!own.some((s) => ESPIONAGE_STAGES.has(s))) return [];
+  if (await hasActive(tenantId, "slow_intrusion", alert.target)) return [];
   const w = THRESHOLDS.slow_intrusion;
   const rows = await queryAll<{ id: string; t: Date; title: string; summary: string; mitre_technique: string | null; source_ip: string | null }>(
     `SELECT id, ${EVENT_TIME} AS t, title, left(summary, 2000) AS summary, mitre_technique, source_ip FROM alerts
       WHERE tenant_id = $1 AND target = $2 AND source <> $3
         AND created_at >= now() - make_interval(days => $4)
-      ORDER BY created_at DESC LIMIT 2000`,
+      ORDER BY created_at DESC LIMIT 600`,
     [tenantId, alert.target, CORRELATION_SOURCE, w.days + 1],
   );
   const staged = rows.map((r) => ({ r, stages: stagesOf(r) })).filter((x) => x.stages.length);
@@ -469,6 +513,14 @@ async function record(tenantId: string, d: Detection, realtime?: (a: Alert) => u
       WHERE tenant_id = $1 AND rule = $2 AND subject = $3 AND status = 'active' AND last_seen < now() - make_interval(secs => $4)`,
     [tenantId, d.rule, d.subject, QUIET_MS / 1000],
   );
+  // An account can be broken into again from ANOTHER address while its campaign
+  // is still active: that address must be answered too (see the end of this function).
+  const knownSources = d.rule === "account_compromise" && d.sourceIp
+    ? (await queryOne<{ sources: string[] }>(
+        "SELECT sources FROM attack_campaigns WHERE tenant_id = $1 AND rule = $2 AND subject = $3 AND status = 'active'",
+        [tenantId, d.rule, clip(d.subject, 255)],
+      ))?.sources ?? null
+    : null;
   const id = `CMP-${randomBytes(8).toString("hex").toUpperCase()}`;
   const row = await queryOne<Campaign & { inserted: boolean }>(
     `INSERT INTO attack_campaigns (tenant_id, id, rule, subject, alert_count, sources, targets, techniques)
@@ -482,7 +534,12 @@ async function record(tenantId: string, d: Detection, realtime?: (a: Alert) => u
      RETURNING *, (xmax = 0) AS inserted`,
     [tenantId, id, d.rule, clip(d.subject, 255), d.alertCount, d.sources.slice(0, MAX_LIST), d.targets.slice(0, MAX_LIST).map((t) => clip(t, 255)), d.techniques.slice(0, MAX_LIST)],
   );
-  if (!row?.inserted) return null;
+  if (!row?.inserted) {
+    // Same account, new attacking address: no second alert, but the response
+    // (the automatic block) must see that address.
+    if (row && knownSources && d.sourceIp && !knownSources.includes(d.sourceIp)) return { ...row, sources: [d.sourceIp], alert_id: row.alert_id };
+    return null;
+  }
 
   const { title, summary } = describe(d);
   const alert = await outbox.insertAlertAndNotify({
@@ -505,7 +562,10 @@ export async function correlate(tenantId: string, alerts: Alert[], opts: { realt
   const fresh = alerts.filter((a) => a.source !== CORRELATION_SOURCE);
   if (!fresh.length) return [];
   const detections: Detection[] = [];
-  for (const ip of distinct(fresh.map((a) => a.source_ip)).filter((ip) => isIP(ip) !== 0)) detections.push(...await bySource(tenantId, ip));
+  for (const ip of distinct(fresh.map((a) => a.source_ip)).filter((ip) => isIP(ip) !== 0)) {
+    const kinds = fresh.filter((a) => a.source_ip === ip).map((a) => signInOf(a.title, a.summary));
+    detections.push(...await bySource(tenantId, ip, { failures: kinds.some((k) => k.failed), success: kinds.some((k) => k.ok) }));
+  }
   for (const target of distinct(fresh.map((a) => a.target))) detections.push(...await byTarget(tenantId, target));
   for (const a of fresh) { const m = manipulation(a); if (m) detections.push(m); }
   for (const a of fresh) {
@@ -545,10 +605,12 @@ export const COVERAGE_DAYS = 7;
 export async function threatCoverage(tenantId: string): Promise<{ windowDays: number; eventsAnalyzed: number; threats: ThreatCoverage[] }> {
   const rows = await queryAll<{ id: string; created_at: Date; title: string; summary: string }>(
     `SELECT id, created_at, title, left(summary, 4000) AS summary FROM alerts
-      WHERE tenant_id = $1 AND source <> ALL($2::text[]) AND created_at >= now() - make_interval(days => $3)
+      WHERE tenant_id = $1 AND source NOT LIKE 'legion-%' AND created_at >= now() - make_interval(days => $2)
       ORDER BY created_at DESC LIMIT 2000`,
-    // Legion's own alerts are not evidence of what the sensors send.
-    [tenantId, [CORRELATION_SOURCE, "legion-payments"], COVERAGE_DAYS],
+    // Legion's own alerts (legion-correlation, legion-payments, legion-agent-security,
+    // legion-monitor) describe attacks in words like "mailbox" and "email": they are
+    // not evidence of what the sensors send, and must not make a blind spot look watched.
+    [tenantId, COVERAGE_DAYS],
   );
   const events = rows.map((r) => ({ id: r.id, createdAt: new Date(r.created_at).toISOString(), text: `${r.title}\n${r.summary}` }));
   const aiTextAttempts = events.filter((e) => manipulationSignals(e.text).length > 0).map((e) => e.id);

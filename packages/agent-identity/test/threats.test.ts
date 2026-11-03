@@ -127,3 +127,20 @@ describe("Guardian: threat_coverage skill", () => {
     expect(JSON.stringify(r.body)).not.toContain("Tenant B secret alert");
   });
 });
+
+describe("Legion's own alerts are not evidence for coverage", () => {
+  it("a Legion alert that mentions a mailbox does not make BEC look watched, and its text is not a detection", async () => {
+    const data = new FakeData();
+    data.events = [{
+      id: "OWN1", tenantId: TENANT_A, title: "Payment held: 12,500.00 EUR", severity: "high", createdAt: new Date().toISOString(), source: "legion-payments",
+      summary: "A mailbox in your organisation shows takeover signs. Mail forwarded or redirected outside. Shadow copies deleted.",
+    }];
+    env = await skillEnv({ data });
+    await env.assign("threat_coverage");
+    const r = await env.invoke("threat_coverage", {});
+    const by = Object.fromEntries(r.body.output.threats.map((t: { threat: string; status: string }) => [t.threat, t.status]));
+    expect(by.bec).toBe("blind");
+    expect(by.ransomware).toBe("blind");
+    expect(r.body.output.eventsAnalyzed).toBe(0);
+  });
+});

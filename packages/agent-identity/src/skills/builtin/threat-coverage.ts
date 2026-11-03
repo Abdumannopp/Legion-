@@ -56,7 +56,10 @@ export const threatCoverage: SkillDefinition<Input, Output> = {
   async handler(ctx, q) {
     const to = ctx.now.toISOString();
     const from = isoMinusHours(ctx.now, q.windowDays * 24);
-    const events = await ctx.data.securityEvents({ since: from, until: to, limit: 500 });
+    // Legion's own alerts (source "legion-…") describe attacks in words like
+    // "mailbox" and "email". They are not evidence of what the sensors send, and
+    // must not make a blind spot look watched.
+    const events = (await ctx.data.securityEvents({ since: from, until: to, limit: 500 })).filter((e) => !e.source.startsWith("legion-"));
     const threats = assessCoverage(
       events.map((e) => ({ id: e.id, createdAt: e.createdAt, text: eventText(e) })),
       { aiTextAttempts: events.filter((e) => ctx.verdictOf(e.id) !== "clean").map((e) => e.id) },

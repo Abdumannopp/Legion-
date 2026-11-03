@@ -536,6 +536,29 @@ describe("stopping unauthorized access", () => {
     expect((await activeBlocks(tenantA)).map((b) => b.ip).sort()).toEqual([ATTACKER, OTHER].sort());
   });
 
+  it("the same account broken into again from ANOTHER address: that address is blocked too (the campaign already exists)", async () => {
+    await setAuto({ mode: "auto" }).expect(200);
+    for (let i = 0; i < 3; i++) await send(credA, login(false, "dana"));
+    await send(credA, login(true, "dana"));
+    for (let i = 0; i < 3; i++) await send(credA, login(false, "dana", OTHER));
+    await send(credA, login(true, "dana", OTHER));
+    expect((await campaigns(tenantA)).filter((c) => c.rule === "account_compromise")).toHaveLength(1);   // one campaign, one alert
+    expect((await correlationAlerts(tenantA)).filter((a) => a.title.startsWith("Account broken into"))).toHaveLength(1);
+    expect((await activeBlocks(tenantA)).map((b) => b.ip).sort()).toEqual([ATTACKER, OTHER].sort());
+    const audited = (await query("SELECT resource_id FROM audit_log WHERE tenant_id = $1 AND action = 'security.auto_block'", [tenantA])).rows.map((r) => r.resource_id);
+    expect(audited.sort()).toEqual([ATTACKER, OTHER].sort());
+  });
+
+  it("while a password-attack campaign for an address is active, further failures from it are not re-analysed (a flood must not make Legion slower)", async () => {
+    for (let i = 0; i < 10; i++) await send(credA, login(false, "root"));
+    expect(await rulesOf()).toEqual(["credential_attack"]);
+    const before = (await campaigns(tenantA))[0];
+    for (let i = 0; i < 5; i++) await send(credA, login(false, "root"));
+    expect(await rulesOf()).toEqual(["credential_attack"]);
+    expect((await correlationAlerts(tenantA))).toHaveLength(1);
+    expect((await campaigns(tenantA))[0].id).toBe(before.id);
+  });
+
   it("from a private address it is reported, never blocked (it could be your own office)", async () => {
     await setAuto({ mode: "auto" }).expect(200);
     for (let i = 0; i < 10; i++) await send(credA, login(false, "root", "10.0.0.7"));
