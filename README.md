@@ -1,213 +1,189 @@
 # Legion
 
-**Wazuh alertlarini tushunarli qaroriga aylantiradigan xavfsizlik konsoli.**
+**A security operations console that turns Wazuh alerts into clear decisions, and helps stop attacks before they cost money.**
 
-Legion sizning serveringizda ishlaydi. Ma'lumotingiz sizning tarmog'ingizdan
-chiqmaydi.
+Legion runs on your own server. Your security data stays in your network unless you choose to connect an AI provider.
 
-- Wazuh hodisalarini real vaqtda qabul qiladi va tartiblaydi
-- Har bir alertni tushuntiradi va keyingi qadamni taklif qiladi
-- Aktivlar inventarizatsiyasini sensorlardan avtomatik to'ldiradi
-- Jamoa, rollar (admin / analitik / kuzatuvchi) va to'liq audit jurnali
-- Ikki bosqichli autentifikatsiya (TOTP)
-- Uch tilda to'liq: English, Русский, O'zbekcha — ekranlar, xatolar, emaillar
-  va AI javoblari tanlangan tilda ([batafsil](frontend/lib/i18n/README.md))
+- Takes in Wazuh events in real time, ranks them, and explains each alert in plain language with the next step to take
+- Links separate events into one attack ("campaign"): brute force, account takeover, ransomware, mailbox takeover, phishing, supply-chain installs, slow intrusions, AI-driven attacks
+- Can block an attacker's IP automatically through Wazuh active response (off by default, with an allowlist, limits and expiry)
+- **Payment check:** your payment software asks Legion before paying, and a payment that looks like fraud is held until a person confirms it by phone
+- Five AI agents (Sentinel, Hunter, Guardian, Oracle, Executor) with read-only skills you can also give to your own AI agents
+- Security controls for AI agents: identity, permissions, prompt-injection detection and an audit trail for every tool call
+- Teams, roles (admin / analyst / viewer), two-factor sign-in (TOTP) and a full audit log
+- Self-hosted or run as a multi-tenant SaaS
 
 ---
 
-## O'rnatish
+## What Legion protects against
 
-**Kerak:** Node.js 20.9+ va PostgreSQL 14+. Docker shart emas — Legion
-to'g'ridan-to'g'ri Node.js'da ishlaydi. 2 GB RAM yetarli.
+| Threat | What Legion does |
+|---|---|
+| Brute force, stolen passwords | Detects many failed sign-ins and a success after failures, and can block the source IP |
+| Account takeover | Flags an account used from many addresses or after a password-guessing attack |
+| Business email compromise and payment fraud | Holds payments to new accounts, or payments requested while a mailbox is under attack |
+| Ransomware | Detects mass file changes and the steps that come before encryption |
+| Phishing | Detects a malicious attachment or link being opened and run |
+| Supply-chain attacks | Detects a new package or update followed by suspicious activity |
+| AI-driven and automated attacks | Detects attack chains that move faster than a person could, and attempts to manipulate AI agents |
+| Data theft | Detects data being collected and then sent out |
+
+The dashboard's **Defense** page shows, for each threat, what Legion detected, what it is watching, and where it is blind because the data it needs never arrives.
+
+**Limits:**
+- Blocking an IP does not stop an attack spread across thousands of addresses (a botnet).
+- A DDoS on your own website needs an edge service such as Cloudflare.
+- The payment check works only when your payment software asks Legion before paying.
+- Legion does not filter email. Stopping the phishing message itself is your mail gateway's job.
+
+---
+
+## Installation
+
+**You need:** Node.js 20.9+ and PostgreSQL 14+. Docker is optional. 2 GB of RAM is enough.
 
 ```bash
 git clone <repo> legion && cd legion
 npm install
-npm run setup      # bazani yaratadi, sirlarni yozadi, sxemani qo'llaydi
+npm run setup      # creates the database, writes secrets, applies the schema
 npm run build && npm start
 ```
 
-`npm run setup` PostgreSQL'ni o'zi topadi. Topa olmasa, host va superuser
-parolini so'raydi — boshqa hech narsa qilish kerak emas. Bazaga ulanish uchun
-Legion superuser emas, o'zining alohida rolini yaratadi.
+`npm run setup` finds PostgreSQL on its own. If it cannot, it asks for the host and the superuser password. Legion then creates its own restricted database role and does not run as a superuser.
 
-Tugagach http://localhost:3000 ni oching va **darhol birinchi administrator
-hisobini yarating** — u yaratilmaguncha sahifaga birinchi yetgan odam admin
-bo'lib oladi. API standart holatda faqat `127.0.0.1` da tinglaydi
-(`.env` → `LEGION_BIND_ADDRESS`); tashqaridan kirish uchun HTTPS proxy qo'ying.
+When it finishes, open http://localhost:3000 and **create the first administrator account straight away**. Until it exists, the first person to reach the page becomes the admin. After that, sign-up closes automatically and others join only by invitation (Settings → Team).
 
-> Birinchi hisob yaratilgach ro'yxatdan o'tish avtomatik **yopiladi**. Qolgan
-> xodimlar Settings → Team orqali taklif bilan qo'shiladi. Ya'ni serveringiz
-> internetda ochiq bo'lsa ham, begona odam hisob ocha olmaydi.
+By default the API listens only on `127.0.0.1` (`LEGION_BIND_ADDRESS` in `.env`). To reach it from outside, put an HTTPS reverse proxy in front: see [deploy/nginx.conf](deploy/nginx.conf). Then set `COOKIE_SECURE=true` in `.env`. Do not set it without HTTPS, because sign-in will stop working.
 
-Boshqa manzilda ishlatish uchun `.env` da `FRONTEND_URL` va
-`NEXT_PUBLIC_API_URL` ni o'zgartiring va `npm run build && npm start` ni
-qayta ishga tushiring.
+**Windows:** `.\start-legion.ps1` does all of the above.
 
-**Windows:** `.\start-legion.ps1` — yuqoridagi hamma narsani o'zi bajaradi.
-
-Batafsil qadamma-qadam: [SINOV.md](SINOV.md)
+Full guide for customers: [INSTALL.md](INSTALL.md).
 
 ---
 
-## Keyingi qadamlar
+## Connecting your systems
 
-| Vazifa | Hujjat |
+| Task | Guide |
 |---|---|
-| **Internetga chiqarish (VPS + domen + HTTPS), qadamma-qadam** | [DEPLOY-ONLINE.md](DEPLOY-ONLINE.md) |
-| **Pullik onlayn xizmat (SaaS): ro'yxatdan o'tish, sinov, Paddle, email** | [SAAS.md](SAAS.md) |
-| **Mijozga beriladigan to'liq qo'llanma** (ingliz tilida) | [INSTALL.md](INSTALL.md) |
-| Wazuh'ni ulash | [WAZUH.md](WAZUH.md) |
-| Backup sozlash | [BACKUP.md](BACKUP.md) |
-| HTTPS orqasiga qo'yish | [deploy/nginx.conf](deploy/nginx.conf) |
-| Email (parol tiklash, taklif) | `.env` dagi `SMTP_*` |
+| Install and run Legion | [INSTALL.md](INSTALL.md) |
+| Connect Wazuh (events in, automatic blocking out) | [WAZUH.md](WAZUH.md) |
+| Proxies, origins, cookies and headers | [EDGE-SECURITY.md](EDGE-SECURITY.md) |
+| How organisations are kept apart (multi-tenant) | [TENANT-ISOLATION.md](TENANT-ISOLATION.md) |
+| Disaster recovery | [RECOVERY.md](RECOVERY.md) |
+| CI and the release security gate | [.github/CI.md](.github/CI.md) |
 
-### HTTPS haqida
-
-Legion standart holatda HTTP'da ishlaydi, chunki ko'p o'rnatmalar ichki
-tarmoqda bo'ladi. Agar server internetdan ochiq bo'lsa:
-
-1. `deploy/nginx.conf` ni sertifikatingiz bilan sozlang
-2. `.env` da `COOKIE_SECURE=true` qiling
-3. Qayta ishga tushiring: `npm run build && npm start`
-
-`COOKIE_SECURE=true` ni HTTPS'siz qo'ymang — sessiya cookie'si yuborilmay
-qoladi va hech kim kira olmaydi.
+Some step-by-step guides (backup, SaaS setup, online deployment, payment check) are still written in Uzbek and are being translated.
 
 ---
 
-## AI haqida (muhim)
+## AI (optional)
 
-Oracle va Copilot **ixtiyoriy**. Hech qanday kalit qo'yilmasa:
+The Oracle explanations and the Copilot assistant are **optional**. Without an API key, both still work using local, deterministic analysis, and **no data leaves your server**.
 
-- Ikkalasi ham ishlaydi, lekin lokal, deterministik tahlil bilan
-- **Hech qanday ma'lumot serveringizdan chiqmaydi**
-
-Ikkita variant bor, bittasini tanlang:
+To use a model, set one provider in `.env`:
 
 ```env
-OPENROUTER_API_KEY=sk-or-…     # bitta kalit — ko'p sotuvchi, bepul modellar ham bor
-OPENROUTER_MODEL=              # bo'sh = OpenRouter hisobingizdagi standart model
+OPENROUTER_API_KEY=sk-or-…     # one key, many vendors (models: https://openrouter.ai/models)
+OPENROUTER_MODEL=              # empty = your OpenRouter account's default model
 
-GROQ_API_KEY=gsk-…             # muqobil
+GROQ_API_KEY=gsk-…             # alternative
 ```
 
-Model tanlash: <https://openrouter.ai/models>
+With a key, the alert title, summary, host names and IP addresses are sent to that provider for analysis. That is your decision; take your obligations to your own customers into account. If both keys are set, OpenRouter is used (`AI_PROVIDER=groq` changes that). If a provider is named without a key, AI is switched **off**, so data never goes to a company you did not choose.
 
-Kalit qo'shsangiz, alert sarlavhasi, tavsifi, hostname va IP manzillari tahlil
-uchun o'sha xizmatga yuboriladi. Bu sizning qaroringiz — mijozlaringiz oldidagi
-majburiyatlaringizni hisobga oling.
-
-Ikkala kalit ham qo'yilsa OpenRouter tanlanadi; `AI_PROVIDER=groq` buni
-o'zgartiradi. Kalitsiz provayder nomlansa, AI **o'chadi** — ma'lumot siz
-tanlamagan kompaniyaga ketmaydi.
-
-Hozir nima ishlayotganini tekshirish: `curl http://localhost:8000/health` →
-`ai_provider` maydoni.
+Check what is active: `curl http://localhost:8000/health` → `ai_provider`.
 
 ---
 
-## Kundalik ish
+## Day-to-day operation
 
-`npm start` old planda ishlaydi. Doimiy server uchun uni systemd yoki pm2 kabi
-process supervisor orqali ishga tushiring — tayyor namuna:
-[deploy/legion.service](deploy/legion.service).
+Run Legion under a process supervisor. A systemd example is in [deploy/legion.service](deploy/legion.service).
 
 ```bash
-sudo systemctl status legion     # holati
-sudo systemctl restart legion    # qayta ishga tushirish
-journalctl -u legion -f          # loglarni kuzatish
+sudo systemctl status legion
+sudo systemctl restart legion
+journalctl -u legion -f
 ```
 
-### Yangilash
+### Updating
 
 ```bash
-DATABASE_URL=... ./ops/backup.sh    # avval har doim backup
+DATABASE_URL=... ./ops/backup.sh    # always back up first
 git pull
 npm install
 npm run build
-sudo systemctl restart legion       # yoki: npm start
+sudo systemctl restart legion
 ```
 
-Sxema o'zgarishlari avtomatik va ma'lumotni saqlagan holda qo'llanadi.
-`.env` dagi sirlaringiz o'zgarmaydi. Backup'larni muntazam serverdan
-tashqariga ko'chiring — [BACKUP.md](BACKUP.md).
+Schema changes are applied automatically and keep your data. Your secrets in `.env` do not change. Copy backups off the server regularly.
 
-### Nimadir ishlamayapti
+### Troubleshooting
 
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8000/health    # expect {"status":"ok","database":"up"}
 ```
 
-`{"status":"ok","database":"up"}` qaytishi kerak. Aks holda:
-
-| Belgi | Sabab |
+| Symptom | Cause |
 |---|---|
-| `database: down` | Postgres ko'tarilmagan yoki `DATABASE_URL` noto'g'ri |
-| Server ishga tushmaydi, "JWT_SECRET" xatosi | `.env` yo'q yoki buzilgan — `npm run setup` |
-| Kira olmayapman, parol to'g'ri | `COOKIE_SECURE=true` bo'lsa HTTPS kerak |
-| Parol tiklash xati kelmadi | SMTP sozlanmagan — link server logida |
-| Wazuh alertlari kelmayapti | [WAZUH.md](WAZUH.md) dagi tekshiruv bo'limi |
+| `database: down` | PostgreSQL is not running, or `DATABASE_URL` is wrong |
+| Server will not start, "JWT_SECRET" error | `.env` is missing or broken: run `npm run setup` |
+| Correct password but cannot sign in | `COOKIE_SECURE=true` needs HTTPS |
+| Password-reset email never arrives | SMTP is not configured, so the link is written to the server log |
+| No Wazuh alerts arrive | See the checks in [WAZUH.md](WAZUH.md) |
 
 ---
 
-## Xavfsizlik
+## Security
 
-- Parollar bcrypt (cost 12) bilan hash qilinadi
-- Sessiya tokeni HttpOnly cookie'da; 15 daqiqada yangilanadi, 30 kun amal qiladi
-- MFA: TOTP + bir martalik tiklash kodlari (faqat hash saqlanadi)
-- Har bir tenant ma'lumoti alohida; barcha so'rovlar tenant bo'yicha cheklangan
-- Barcha muhim amallar audit jurnaliga yoziladi
-- API superuser sifatida emas, o'zining alohida, imtiyozi cheklangan
-  Postgres roli bilan ishlaydi
+- Passwords hashed with bcrypt (cost 12)
+- Session token in an HttpOnly cookie, refreshed every 15 minutes, valid for 30 days
+- MFA: TOTP plus one-time recovery codes (only hashes are stored)
+- Every organisation's data is separated, and every query is scoped to its tenant
+- Every important action is written to the audit log
+- Sensors sign their requests (HMAC with timestamp and nonce); each signed request is bound to its purpose
+- Payment account numbers are never stored, only a keyed hash and the last four characters
+- The API connects to PostgreSQL with its own least-privilege role
 
-Zaiflik topsangiz — ommaviy issue ochmasdan to'g'ridan-to'g'ri xabar bering.
+If you find a vulnerability, report it privately rather than opening a public issue.
 
 ---
 
-## Tuzilma
+## Project layout
 
 ```text
 legion/
-├── server/scripts/setup.mjs   o'rnatish (sir yaratadi, bazani sozlaydi)
-├── ops/                       backup, restore, verify
 ├── server/                    Express + TypeScript API
-│   ├── src/db/                Postgres sxemasi va migratsiya
-│   └── tests/                 349 ta test
-├── frontend/                  Next.js dashboard
-├── integrations/              Wazuh integratsiyasi
-├── deploy/nginx.conf          HTTPS reverse proxy namunasi
-├── deploy/legion.service      systemd namunasi (doimiy ishga tushirish)
-├── LICENSE                    litsenziya — HALI QORALAMA, yuristsiz mijozga bermang
-└── NOTICE                     327 ta ochiq kodli paketning litsenziyalari
+│   ├── src/db/                PostgreSQL schema and migrations
+│   ├── scripts/setup.mjs      installer (creates secrets, sets up the database)
+│   └── tests/                 API test suite
+├── frontend/                  Next.js dashboard and website
+├── packages/agent-identity/   AI-agent identity, permissions, prompt guard and agent skills
+├── integrations/              Wazuh integration (sensor script, rules, active response)
+├── ops/                       backup, restore, verification and end-to-end tests
+├── deploy/                    nginx and systemd examples
+├── LICENSE                    licence — STILL A DRAFT, have a lawyer review it before giving it to a customer
+└── NOTICE                     licences of the open-source packages used
 ```
 
-## Mijozga berishdan oldin
+## Before giving Legion to a customer
 
-1. `LICENSE` faylining boshidagi ogohlantirish blokini o'qing. U yerda
-   `[BRACKETED]` maydonlar bor — kompaniya ro'yxatdan o'tgach to'ldiriladi va
-   yurist ko'rib chiqishi kerak.
-2. `.env` dagi `NEXT_PUBLIC_OPERATOR_NAME` va `NEXT_PUBLIC_SUPPORT_EMAIL` —
-   bularni **mijoz** o'zi to'ldiradi, siz emas. Bo'sh qolsa, maxfiylik
-   sahifasi buni ochiq ko'rsatadi.
-3. Bog'liqliklar o'zgargandan keyin `NOTICE` ni qayta yarating:
+1. Read the warning block at the top of `LICENSE`. Its `[BRACKETED]` fields are filled in once the company is registered, and a lawyer must review it.
+2. `NEXT_PUBLIC_OPERATOR_NAME` and `NEXT_PUBLIC_SUPPORT_EMAIL` in `.env` are filled in by the **customer**. If they are empty, the privacy page says so openly.
+3. Regenerate `NOTICE` after dependencies change:
    `npx license-checker-rseidelsohn --excludePrivatePackages --csv`
 
-## Ishlab chiquvchilar uchun
+## Development
 
 ```bash
-npm run dev      # frontend + API
-npm test         # test to'plami (Postgres talab qiladi)
-npm run check    # TypeScript tekshiruvi
+npm run dev      # dashboard + API
+npm test         # test suites (needs PostgreSQL)
+npm run check    # TypeScript and interface-text checks
 ```
 
-Testlar `TEST_DATABASE_URL` bazasiga ulanadi va har test oldidan jadvallarni
-tozalaydi — **alohida baza** ishlating.
+Tests connect to `TEST_DATABASE_URL` and empty the tables before each test, so **use a separate database**.
 
-## CI va reliz (xavfsizlik darvozasi)
+The interface is English only (see [frontend/lib/i18n/README.md](frontend/lib/i18n/README.md)).
 
-Har push va pull request'da xavfsizlik testlari va 56 ta hujum ssenariysi
-alohida ishga tushadi. Quyidagilardan biri bo'lsa, **reliz bloklanadi**:
-xavfsizlik testi yiqilsa; biror hujum Critical/High darajada "NOT DEFENDED"
-bo'lsa; majburiy ssenariy yo'q bo'lsa; natija fayli buzilgan yoki kodning
-aniq versiyasiga bog'lanmagan bo'lsa. Batafsil: [.github/CI.md](.github/CI.md).
+## CI and release gate
+
+Every push and pull request runs the security tests and the attack scenarios separately. A release is **blocked** if a security test fails, if any attack of Critical or High severity is "NOT DEFENDED", if a required scenario is missing, or if the result file is broken or not tied to the exact code version. Details: [.github/CI.md](.github/CI.md).
