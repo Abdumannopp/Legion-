@@ -278,7 +278,7 @@ jobs:
         run: node assessment/provenance.mjs validate assessment/results/latest.jsonl --require-clean --expect-commit "$(git rev-parse HEAD)"
       - name: Keep evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: security-assessment-${{ github.sha }}
           path: |
@@ -315,7 +315,7 @@ jobs:
         with:
           name: security-assessment-${{ github.sha }}
           path: security-evidence
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: legion-release-${{ github.ref_name }}
           path: |
