@@ -114,7 +114,7 @@ export function parseAllowlist(text: string): AllowlistResult {
   return { ok: true, list, entries };
 }
 
-function allowlisted(allowlist: string, ip: string): boolean {
+export function isAllowlisted(allowlist: string, ip: string): boolean {
   const parsed = parseAllowlist(allowlist);
   if (!parsed.ok) return false;
   const v = unmap(ip);
@@ -257,7 +257,7 @@ export async function respondToCampaigns(tenantId: string, campaigns: Campaign[]
     if (settings.mode !== "auto") { decisions.push({ campaign: c.id, ip, action: "skipped", why: "off" }); continue; }
     if (!ip) { decisions.push({ campaign: c.id, ip: null, action: "skipped", why: "rule" }); continue; }
     if (!isPublicAddress(ip)) { decisions.push({ campaign: c.id, ip, action: "skipped", why: "not_public" }); continue; }
-    if (allowlisted(settings.allowlist, ip)) { decisions.push({ campaign: c.id, ip, action: "skipped", why: "allowlisted" }); continue; }
+    if (isAllowlisted(settings.allowlist, ip)) { decisions.push({ campaign: c.id, ip, action: "skipped", why: "allowlisted" }); continue; }
     const recent = await queryOne<{ n: number }>(
       "SELECT count(*)::int AS n FROM ip_blocks WHERE tenant_id = $1 AND created_by IS NULL AND created_at > now() - interval '1 hour'",
       [tenantId],

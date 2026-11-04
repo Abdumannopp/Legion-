@@ -4,6 +4,7 @@
  * editing at once cannot silently overwrite each other.
  */
 import { randomUUID } from "node:crypto";
+import type pg from "pg";
 import { query, queryAll, queryOne, transaction } from "../db/pool.js";
 import { canonicalJson, sha256Hex } from "./canonical.js";
 import { parsePolicyDocument, type PolicyDocument } from "./document.js";
@@ -95,9 +96,9 @@ export interface DecisionRecord {
   policy: { version: number; hash: string } | null;
 }
 
-export async function recordDecision(tenantId: string, outcome: PolicyOutcome, rec: DecisionRecord): Promise<string> {
+export async function recordDecision(tenantId: string, outcome: PolicyOutcome, rec: DecisionRecord, client?: pg.PoolClient): Promise<string> {
   const id = randomUUID();
-  await query(
+  await (client ? client.query.bind(client) : query)(
     `INSERT INTO policy_decisions (tenant_id, id, enforcement, call_site, action_id, risk_class, actor, origin, execution_mode, target,
        input_digest, decision, autonomy, matched_rule_ids, reason_codes, explanation, policy_version, policy_hash,
        catalog_version, engine_version, legacy_outcome, latency_us)

@@ -29,6 +29,9 @@ export const PERMISSIONS = {
   "policy:manage": "admin",
   "approvals:read": "analyst",
   "approvals:decide": "admin",
+  "actions:read": "analyst",
+  "actions:propose": "analyst",
+  "actions:control": "admin",
 } as const satisfies Record<string, Role>;
 
 export type Permission = keyof typeof PERMISSIONS;

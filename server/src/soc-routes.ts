@@ -13,6 +13,10 @@ import { ENGINE_VERSION, evaluatePolicy } from "./policy/evaluate.js";
 import { getActivePolicy, listDecisions, listPolicyVersions, PolicyConflict, PolicyInvalid, putPolicy, rollbackPolicy } from "./policy/store.js";
 import { AGENTS, ORIGINS } from "./policy/types.js";
 import { ApprovalError, decide, getApproval, listApprovals, type ApprovalStatus } from "./approvals/engine.js";
+import {
+  ActionError, actionEvents, approvalOf, cancelAction, getAction, isPaused, listActions, proposeAction, runQueued, setPaused, syncWithApproval,
+  type ActionRequest, type ActionStatus,
+} from "./actions/engine.js";
 
 type AuthedRequest = Request & { user?: User };
 type Middleware = (req: AuthedRequest, res: Response, next: NextFunction) => Promise<void>;
@@ -28,6 +32,14 @@ export interface SocRouteDeps {
 }
 
 const limitOf = (v: unknown, max = 200) => Math.min(max, Math.max(1, Math.floor(Number(v ?? 50)) || 50));
+
+const ACTION_STATUSES = ["denied", "recorded", "awaiting_approval", "rejected", "expired", "cancelled", "queued", "running", "simulated", "failed"] as const;
+const humanOf = (u: User) => ({ kind: "human" as const, user_id: u.id, role: u.role });
+
+/** v0: a queued simulation runs right away (Background Runtime takes this over later). */
+async function settle(tenantId: string, a: ActionRequest | null): Promise<ActionRequest | null> {
+  return a?.status === "queued" ? runQueued(tenantId, a.id) : a;
+}
 
 const APPROVAL_STATUSES = ["pending", "approved", "rejected", "expired", "consumed", "cancelled"] as const;
 
@@ -119,6 +131,66 @@ export function registerSocRoutes(app: Express, { requirePermission, parse, log,
     res.json({ decisions: await listDecisions(req.user!.tenant_id, { limit: limitOf(req.query.limit), actionId }) });
   });
 
+  // --- Action Engine v0 -------------------------------------------------------
+  // A person proposes through here; agents propose through the orchestrator.
+  // Who acts and where the request came from are taken from the session.
+
+  app.post("/actions", requirePermission("actions:propose"), async (req: AuthedRequest, res) => {
+    const body = parse(z.strictObject({
+      action_id: z.string().max(64),
+      input: z.record(z.string(), z.unknown()),
+      mode: z.enum(["shadow", "simulation"]),
+      idempotency_key: z.string().regex(/^[A-Za-z0-9_.:-]{8,100}$/, "idempotency_key: 8–100 letters, digits, . _ : -"),
+      reason: z.string().max(500).refine((s) => !/[\u0000-\u001f\u007f]/.test(s), "No control characters").optional(),
+    }), req.body, res); if (!body) return;
+    const user = req.user!;
+    try {
+      const { action, replayed } = await proposeAction(user.tenant_id, { ...body, actor: humanOf(user), origin: "human" });
+      if (!replayed) await log(req, "action.proposed", "action", action.id, `${action.action_id} → ${action.status} (${action.execution_mode})`);
+      res.status(replayed ? 200 : 201).json({ action: replayed ? action : await settle(user.tenant_id, action), replayed });
+    } catch (error) {
+      if (error instanceof ActionError) return res.status(error.status).json({ detail: error.message, code: error.code });
+      throw error;
+    }
+  });
+
+  app.get("/actions", requirePermission("actions:read"), async (req: AuthedRequest, res) => {
+    const raw = req.query.status;
+    if (raw !== undefined && (typeof raw !== "string" || !(ACTION_STATUSES as readonly string[]).includes(raw))) return res.status(422).json({ detail: "Unknown status" });
+    res.json({ actions: await listActions(req.user!.tenant_id, { status: raw as ActionStatus | undefined, limit: limitOf(req.query.limit) }), paused: await isPaused(req.user!.tenant_id) });
+  });
+
+  app.get("/actions/controls", requirePermission("actions:read"), async (req: AuthedRequest, res) => {
+    res.json({ paused: await isPaused(req.user!.tenant_id) });
+  });
+
+  app.post("/actions/controls", requirePermission("actions:control"), async (req: AuthedRequest, res) => {
+    const body = parse(z.strictObject({ paused: z.boolean(), reason: z.string().max(500).optional() }), req.body, res); if (!body) return;
+    await setPaused(req.user!.tenant_id, body.paused, req.user!.id, body.reason);
+    await log(req, body.paused ? "actions.paused" : "actions.resumed", "tenant", req.user!.tenant_id, body.reason ?? null);
+    res.json({ paused: body.paused });
+  });
+
+  app.get("/actions/:id", requirePermission("actions:read"), async (req: AuthedRequest, res) => {
+    const tenantId = req.user!.tenant_id;
+    const found = await getAction(tenantId, String(req.params.id));
+    if (!found) return res.status(404).json({ detail: "No such action" });
+    const action = found.status === "awaiting_approval" ? (await syncWithApproval(tenantId, found.id, { kind: "system", component: "action_engine" }))! : found;
+    res.json({ ...action, events: await actionEvents(tenantId, action.id), approval: await approvalOf(tenantId, action) });
+  });
+
+  app.post("/actions/:id/cancel", requirePermission("actions:propose"), async (req: AuthedRequest, res) => {
+    try {
+      const action = await cancelAction(req.user!.tenant_id, String(req.params.id), humanOf(req.user!));
+      if (!action) return res.status(404).json({ detail: "No such action" });
+      await log(req, "action.cancelled", "action", action.id, action.action_id);
+      res.json({ action });
+    } catch (error) {
+      if (error instanceof ActionError) return res.status(error.status).json({ detail: error.message, code: error.code });
+      throw error;
+    }
+  });
+
   // --- Approval Engine v0 -----------------------------------------------------
   // Requests are created only by the action engine. People list, read, decide.
 
@@ -150,7 +222,9 @@ export function registerSocRoutes(app: Express, { requirePermission, parse, log,
       });
       const verb = out.settled ?? (body.decision === "approve" ? "approval_counted" : "rejected");
       await log(req, `approval.${verb}`, "approval", out.approval.id, `${out.approval.action_id} ${out.approval.approvals}/${out.approval.required_approvals}`);
-      res.json(out);
+      // The action this approval is for moves on (consumed + queued + simulated, or rejected).
+      const action = out.settled ? await settle(user.tenant_id, await syncWithApproval(user.tenant_id, out.approval.subject_id, humanOf(user))) : await getAction(user.tenant_id, out.approval.subject_id);
+      res.json({ ...out, action });
     } catch (error) {
       if (error instanceof ApprovalError) return res.status(error.status).json({ detail: error.message, code: error.code });
       throw error;
