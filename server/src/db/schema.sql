@@ -741,3 +741,9 @@ CREATE INDEX IF NOT EXISTS tenant_deletions_tenant_idx ON tenant_deletions (tena
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS auto_block_ack_at      timestamptz;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS auto_block_ack_by      text;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS auto_block_ack_version text;
+
+-- Automatic deletion of a locked workspace is announced first: the admins are
+-- e-mailed, and the workspace is erased only after deletion_scheduled_for. Both
+-- are cleared if the workspace stops being locked (subscribed again, legal hold).
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS deletion_notice_at timestamptz;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS deletion_scheduled_for timestamptz;

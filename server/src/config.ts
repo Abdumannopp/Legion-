@@ -288,6 +288,8 @@ export const config = {
   /** Hosted only, OFF by default: a workspace locked for more than this many days is erased (0 = never). Irreversible — see DATA-RETENTION.md before turning it on. */
   tenantAutoDeleteDays: Math.max(0, Math.floor(Number(process.env.TENANT_AUTO_DELETE_DAYS ?? 0)) || 0),
   /** A file outside the database that records each erased workspace, so a restored backup can replay the deletions. */
+  // Days between the warning e-mail and the erasure of a locked workspace (never fewer than 7).
+  tenantDeleteNoticeDays: Math.max(7, Math.floor(Number(process.env.TENANT_DELETE_NOTICE_DAYS ?? 30)) || 30),
   deletionLedgerFile: process.env.DELETION_LEDGER_FILE || "",
   /** Hosted only: payment-check records are deleted after this many months (0 = keep). */
   retentionPaymentMonths: Math.max(0, Math.floor(Number(process.env.RETENTION_PAYMENT_MONTHS ?? 24)) || 0),

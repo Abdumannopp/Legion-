@@ -2613,7 +2613,7 @@ if (process.env.NODE_ENV !== "test") {
       // Resolved alerts older than the plan keeps them (hosted only).
       const aged = await pruneAlertsByPlan();
       if (aged > 0) console.info(`Removed ${aged} resolved alert(s) older than their plan's retention.`);
-      const erased = await autoDeleteExpired();
+      const erased = await autoDeleteExpired(undefined, (id, on) => console.info(`Workspace ${id} is locked for more than ${config.tenantAutoDeleteDays} days: its administrators were warned; it will be erased on ${on.toISOString().slice(0, 10)}.`));
       if (erased.length) console.info(`Erased ${erased.length} workspace(s) locked for more than ${config.tenantAutoDeleteDays} days.`);
       const kept = await runRetention();
       if (kept.payments || kept.audit) console.info(`Retention: ${kept.payments} payment check(s) deleted, ${kept.audit} audit entr${kept.audit === 1 ? "y" : "ies"} anonymised.`);

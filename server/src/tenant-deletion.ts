@@ -16,6 +16,7 @@
 import { appendFileSync, readFileSync, existsSync } from "node:fs";
 import { config } from "./config.js";
 import { pool, query } from "./db/pool.js";
+import { mailEnabled, sendMail, workspaceDeletionNoticeEmail } from "./mailer.js";
 
 export interface DeletionPlan {
   tenantId: string;
@@ -134,30 +135,98 @@ export async function replayLedger(file: string, opts: { dryRun?: boolean } = {}
   return back;
 }
 
+export interface ExpiredWorkspace { id: string; name: string; ended_at: string; notice_at: string | null; scheduled_for: string | null }
+
 /**
  * Locked workspaces whose subscription (or trial) ended more than `days` ago.
- * The caller decides what to do: list them, or (TENANT_AUTO_DELETE_DAYS) erase them.
+ * The caller decides what to do: list them, or (TENANT_AUTO_DELETE_DAYS) warn
+ * their administrators and then erase them.
  */
-export async function expiredWorkspaces(days: number): Promise<Array<{ id: string; name: string; ended_at: string }>> {
+export async function expiredWorkspaces(days: number): Promise<ExpiredWorkspace[]> {
   if (!(days > 0)) return [];
-  const r = await query<{ id: string; name: string; ended_at: Date }>(
-    `SELECT t.id, t.name, e.ended_at FROM tenants t
+  const r = await query<{ id: string; name: string; ended_at: Date; deletion_notice_at: Date | null; deletion_scheduled_for: Date | null }>(
+    `SELECT t.id, t.name, e.ended_at, t.deletion_notice_at, t.deletion_scheduled_for FROM tenants t
        LEFT JOIN subscriptions s ON s.tenant_id = t.id
        CROSS JOIN LATERAL (SELECT COALESCE(
            CASE WHEN s.status IN ('canceled', 'paused') THEN COALESCE(s.current_period_end, s.last_event_at) END,
            CASE WHEN s.tenant_id IS NULL THEN t.trial_ends_at END) AS ended_at) e
       WHERE NOT t.legal_hold AND e.ended_at IS NOT NULL AND e.ended_at < now() - make_interval(days => $1)
       ORDER BY e.ended_at`, [Math.floor(days)]);
-  return r.rows.map((x) => ({ id: x.id, name: x.name, ended_at: x.ended_at.toISOString() }));
+  return r.rows.map((x) => ({
+    id: x.id, name: x.name, ended_at: x.ended_at.toISOString(),
+    notice_at: x.deletion_notice_at?.toISOString() ?? null, scheduled_for: x.deletion_scheduled_for?.toISOString() ?? null,
+  }));
 }
 
-/** The opt-in job: erases workspaces that have been locked for longer than TENANT_AUTO_DELETE_DAYS. Hosted only. */
-export async function autoDeleteExpired(days = config.tenantAutoDeleteDays): Promise<string[]> {
+/** The people to warn: active administrators of the workspace, and its notification address. */
+export async function noticeRecipients(tenantId: string): Promise<string[]> {
+  const r = await query<{ email: string }>(
+    `SELECT u.email FROM workspace_memberships m JOIN users u ON u.id = m.user_id
+      WHERE m.tenant_id = $1 AND m.role = 'admin' AND m.status = 'active'
+     UNION
+     SELECT notification_email FROM tenants WHERE id = $1 AND notification_email IS NOT NULL`, [tenantId]);
+  return [...new Set(r.rows.map((x) => x.email.trim().toLowerCase()).filter(Boolean))];
+}
+
+/**
+ * E-mails the administrators that the workspace will be erased on `deleteOn`.
+ * True only if the mail server accepted it for at least one person: with no
+ * mail server, or nobody to tell, nothing is deleted (the warning is the point).
+ */
+async function sendDeletionNotice(w: { id: string; name: string }, deleteOn: Date): Promise<boolean> {
+  if (!mailEnabled()) return false;
+  const to = await noticeRecipients(w.id);
+  if (!to.length) return false;
+  const when = deleteOn.toISOString().slice(0, 10);
+  const mail = workspaceDeletionNoticeEmail({ workspace: w.name, deleteOn: when, billingUrl: `${config.frontendUrl}/billing`, exportUrl: `${config.frontendUrl}/settings` });
+  let delivered = 0;
+  for (const address of to) if ((await sendMail({ to: address, ...mail })).sent) delivered++;
+  return delivered > 0;
+}
+
+const AUTO_DELETE_LOCK = 7_450_911;
+
+/**
+ * The opt-in job (TENANT_AUTO_DELETE_DAYS). Hosted only. For a workspace locked longer than that:
+ *   1. the first time, its administrators are e-mailed and a date is set
+ *      (TENANT_DELETE_NOTICE_DAYS from now, never fewer than 7 days); nothing is deleted;
+ *   2. once that date has passed, and it is still locked, it is erased;
+ *   3. if it stopped being locked meanwhile (subscribed again, legal hold), the notice is cleared.
+ * Without a working mail server, or anyone to warn, a workspace is never erased by this job.
+ * Returns the ids erased; notices sent are reported through `onNotice`.
+ */
+export async function autoDeleteExpired(days = config.tenantAutoDeleteDays, onNotice?: (id: string, deleteOn: Date) => void): Promise<string[]> {
   if (config.deploymentMode === "self-hosted" || !(days > 0)) return [];
+  // One instance at a time: two must not both send the same warning.
+  const lock = await pool.connect();
   const gone: string[] = [];
-  for (const w of await expiredWorkspaces(days)) {
-    try { await deleteTenant(w.id, { by: "auto", reason: `locked since ${w.ended_at.slice(0, 10)}` }); gone.push(w.id); }
-    catch (error) { console.warn(`Legion: not auto-deleting ${w.id}: ${error instanceof Error ? error.message : error}`); }
+  try {
+    if (!(await lock.query<{ ok: boolean }>("SELECT pg_try_advisory_lock($1) AS ok", [AUTO_DELETE_LOCK])).rows[0]?.ok) return [];
+    const expired = await expiredWorkspaces(days);
+    await query(
+      "UPDATE tenants SET deletion_notice_at = NULL, deletion_scheduled_for = NULL WHERE deletion_notice_at IS NOT NULL AND NOT (id = ANY($1::uuid[]))",
+      [expired.map((w) => w.id)]);
+    for (const w of expired) {
+      try {
+        if (!w.notice_at || !w.scheduled_for) {
+          const deleteOn = new Date(Date.now() + config.tenantDeleteNoticeDays * 86_400_000);
+          if (!(await sendDeletionNotice(w, deleteOn))) {
+            console.warn(`Legion: not warning or deleting ${w.id}: the warning e-mail could not be sent (no mail server, or no administrator to tell)`);
+            continue;
+          }
+          await query("UPDATE tenants SET deletion_notice_at = now(), deletion_scheduled_for = $2 WHERE id = $1", [w.id, deleteOn.toISOString()]);
+          onNotice?.(w.id, deleteOn);
+        } else if (new Date(w.scheduled_for).getTime() <= Date.now()) {
+          await deleteTenant(w.id, { by: "auto", reason: `locked since ${w.ended_at.slice(0, 10)}; warned ${w.notice_at.slice(0, 10)}` });
+          gone.push(w.id);
+        }
+      } catch (error) {
+        console.warn(`Legion: not auto-deleting ${w.id}: ${error instanceof Error ? error.message : error}`);
+      }
+    }
+  } finally {
+    await lock.query("SELECT pg_advisory_unlock($1)", [AUTO_DELETE_LOCK]).catch(() => {});
+    lock.release();
   }
   return gone;
 }

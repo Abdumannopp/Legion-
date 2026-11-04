@@ -279,3 +279,29 @@ export function securityNoticeEmail(kind: SecurityNoticeKind, params: { when: st
     html: layout(t.title, `${lines.map((l) => para(escape(l))).join("\n")}\n${small(t.notYou)}`, locale),
   };
 }
+
+/**
+ * Warns a workspace's administrators that it will be erased on a given date unless
+ * it is brought back into use. Links go to the dashboard only (no one-click action),
+ * and the workspace name is shown as text.
+ */
+export function workspaceDeletionNoticeEmail(params: { workspace: string; deleteOn: string; billingUrl: string; exportUrl: string; locale?: Locale }) {
+  const locale = params.locale ?? "en";
+  const t = {
+    en: {
+      subject: `Your Legion workspace "${params.workspace}" will be deleted on ${params.deleteOn}`,
+      title: "Your workspace will be deleted",
+      body: `The Legion workspace "${params.workspace}" has been locked for a long time. On ${params.deleteOn} it will be permanently erased: its alerts, agents, audit history, payment checks and accounts. This cannot be undone.`,
+      keep: "To keep it, subscribe again before that date. The deletion is then cancelled automatically.",
+      subscribe: "Open billing",
+      exportNote: "To keep a copy of your data, an administrator can download it any time before then (Settings → Data export). Export works while the workspace is locked.",
+      exportButton: "Open settings",
+      ignore: "If you no longer need this workspace, you do not have to do anything.",
+    },
+  }[locale];
+  return {
+    subject: t.subject,
+    text: `${t.body}\n\n${t.keep}\n${params.billingUrl}\n\n${t.exportNote}\n${params.exportUrl}\n\n${t.ignore}`,
+    html: layout(t.title, `${para(escape(t.body))}\n${para(escape(t.keep))}\n${button(params.billingUrl, t.subscribe)}\n${para(escape(t.exportNote))}\n${button(params.exportUrl, t.exportButton)}\n${small(t.ignore)}`, locale),
+  };
+}

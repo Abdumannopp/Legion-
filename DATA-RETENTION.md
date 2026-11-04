@@ -58,8 +58,19 @@ npm run tenant:data -- replay --ledger "$DELETION_LEDGER_FILE" --apply    # eras
 
 ### Automatic deletion (OFF by default)
 
-`TENANT_AUTO_DELETE_DAYS=N` erases workspaces locked for more than N days. It is **off** because Legion
-does not yet send a warning before deleting. Turn it on only with a notice process in place.
+`TENANT_AUTO_DELETE_DAYS=N` turns on the job for workspaces locked for more than N days. It never deletes without warning:
+
+1. **Warning.** The first time a workspace qualifies, its active administrators (and the notification address) are
+   e-mailed: the date it will be erased, what goes, how to stop it (subscribe again), and how to download a copy
+   (Settings → Data export, which works while locked). Nothing is deleted yet.
+2. **Wait.** The date is `TENANT_DELETE_NOTICE_DAYS` later (default 30, never fewer than 7).
+3. **Erasure.** After that date, if the workspace is still locked, it is erased like a manual deletion; the tombstone
+   records that it was warned and when.
+4. **Cancelled** (and the notice cleared) if the workspace is subscribed again or put on a legal hold meanwhile.
+
+If mail is not configured, sending fails, or there is no administrator to tell, **the workspace is not deleted** and
+stays unwarned. `npm run tenant:data -- expired --days N` shows each workspace's notice and scheduled date.
+Only one instance runs the job at a time, so one warning is sent. There is no second reminder.
 
 ## Honest limits
 
