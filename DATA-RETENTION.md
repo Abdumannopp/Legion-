@@ -8,9 +8,18 @@ a self-hosted installation keeps its data for as long as its owner likes.
 | Resolved alerts | By plan: Starter 30 days … Enterprise 365 | `pruneAlertsByPlan` (open alerts are never deleted) |
 | Payment checks | 24 months (`RETENTION_PAYMENT_MONTHS`) | `prunePaymentChecks` |
 | Audit log: e-mail, IP, e-mail-like text in `detail` | 24 months (`RETENTION_AUDIT_MONTHS`), then removed. The entry itself stays | `pseudonymiseAudit` |
+| Agent logs (identity audit, firewall decisions, content scans, tool calls) | 24 months (`RETENTION_AGENT_LOG_MONTHS`); the oldest rows of each chain are deleted | `pruneAgentLogs` |
 | Backups | Up to 12 months | Local: `prune-backups.sh` (14 daily, 8 weekly, 12 monthly). **Off-server: the storage's lifecycle rule, which you must set to 12 months.** Deletions are re-applied after a restore (below) |
 
 All jobs skip a workspace on a **legal hold** (`tenants.legal_hold`).
+
+### How the agent logs are pruned
+
+These logs are hash-chained, so a row cannot be edited to remove personal data; the oldest rows are deleted instead.
+Only a contiguous prefix of a chain goes, and the newest row always stays. The hash of the last deleted row is
+kept in `chain_prune_anchors`, and `verifyChain` starts from it, so the remaining history is still proven unaltered.
+Not pruned: kill-switch events, agent behaviour events, agent-to-agent interactions and trust-graph snapshots
+(no message content or addresses; they stay as the record of what was stopped and why).
 
 ## Export
 
@@ -54,6 +63,7 @@ does not yet send a warning before deleting. Turn it on only with a notice proce
 
 ## Honest limits
 
-- Agent-layer logs (identity, firewall decisions) are not pseudonymised on a schedule; they go when the workspace is erased.
+- Pruning the agent logs removes history, including what an investigation might need: keep a workspace on legal hold when that matters.
+- A person with write access to the database can edit `chain_prune_anchors` together with the log, as they can already switch the erasure flag on. The chain protects against edits by the application, not against a database administrator.
 - A backup older than 12 months is gone; younger ones can hold deleted data until they expire, hence the replay step.
 - Legal retention duties (tax, disputes) are for a lawyer to decide: see LEGAL-DECISIONS.md.

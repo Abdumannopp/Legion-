@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from "pg";
-import { chainHash, GENESIS, GLOBAL_CHAIN, lockChain } from "./chain.js";
+import { chainHash, chainStart, GLOBAL_CHAIN, lockChain } from "./chain.js";
 import type { Principal, PrincipalType } from "./types.js";
 
 export type AuditOutcome = "attempt" | "success" | "failure" | "denied";
@@ -160,7 +160,7 @@ export class AuditLog {
       "SELECT * FROM principal_audit_log WHERE chain_key = $1 ORDER BY seq ASC",
       [chainKey],
     );
-    let prev = GENESIS;
+    let prev = await chainStart(this.pool, "principal_audit_log", chainKey);
     let n = 0;
     for (const r of res.rows) {
       n++;

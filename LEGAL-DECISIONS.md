@@ -11,6 +11,7 @@ Every item below must be confirmed by one before it is relied on. See LEGAL-QUES
 | Cloudflare listed as a sub-processor | privacy text |
 | Payment checks deleted after 24 months | `retention.ts` |
 | Audit-log personal data removed after 24 months | `retention.ts` |
+| Agent logs pruned after 24 months (oldest rows; chain stays verifiable) | `retention.ts` `pruneAgentLogs` |
 | Legal hold | `tenants.legal_hold`, `tenant:data hold` |
 | Customer data export | Settings → Data export |
 | Workspace erasure with proof, restore replay | `tenant-deletion.ts` |
@@ -22,5 +23,4 @@ Every item below must be confirmed by one before it is relied on. See LEGAL-QUES
 - DPA and SCC drafting; public sub-processor page
 - Warning e-mails before a workspace is deleted (so automatic deletion stays OFF)
 - Strict AI-provider default; consent screen for payment holds
-- Pseudonymisation of agent-layer logs
 - Row-level security, point-in-time recovery, external pentest

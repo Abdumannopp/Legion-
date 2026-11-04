@@ -1,5 +1,5 @@
 import type { Pool } from "pg";
-import { chainHash, GENESIS, lockChain } from "../chain.js";
+import { chainHash, chainStart, lockChain } from "../chain.js";
 import type { FirewallContext, FirewallDecision, ActionRequest } from "./types.js";
 import { digest, redact } from "./scan.js";
 
@@ -131,7 +131,7 @@ export class DecisionLog {
 
   async verifyChain(tenantId: string): Promise<{ ok: true; rows: number } | { ok: false; brokenAtSeq: string; rows: number }> {
     const res = await this.pool.query("SELECT * FROM firewall_decisions WHERE chain_key = $1 ORDER BY seq", [tenantId]);
-    let prev = GENESIS;
+    let prev = await chainStart(this.pool, "firewall_decisions", tenantId);
     let n = 0;
     for (const r of res.rows) {
       n++;

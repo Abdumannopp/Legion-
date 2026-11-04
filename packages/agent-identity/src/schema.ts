@@ -605,6 +605,22 @@ CREATE INDEX IF NOT EXISTS agent_action_approvals_open
 CREATE INDEX IF NOT EXISTS agent_action_approvals_recent
   ON agent_action_approvals (tenant_id, requested_at DESC);
 ` + WIDEN_DECISIONS_SQL + `
+
+-- ---- Retention of the hash-chained logs -------------------------------------------
+-- Old rows at the START of a chain are deleted by the retention job (the logs
+-- are append-only; deletion is allowed only under legion.audit_erasure). The
+-- first surviving row still links to the last deleted one, so the chain is
+-- verified from that row's hash instead of from GENESIS. One row per chain.
+-- tenant_id holds the chain key (a workspace id), so deleting a workspace removes it.
+CREATE TABLE IF NOT EXISTS chain_prune_anchors (
+  table_name         text        NOT NULL,
+  tenant_id          text        NOT NULL,
+  anchor_hash        text        NOT NULL CHECK (length(anchor_hash) = 64),
+  pruned_through_seq bigint      NOT NULL,
+  pruned_rows        bigint      NOT NULL DEFAULT 0,
+  pruned_at          timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (table_name, tenant_id)
+);
 `;
 
 /** Constant advisory-lock key, so concurrently starting instances migrate one at a time. */

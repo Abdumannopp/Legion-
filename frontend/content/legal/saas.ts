@@ -156,7 +156,7 @@ export const saasPrivacy: Record<Locale, LegalDoc> = {
         body: [
           "Account and workspace data are kept while your account exists. Resolved alerts are deleted automatically once they are older than your plan's alert history (30, 90, 180 or 365 days); open alerts are kept until they are resolved. After a subscription ends the workspace is locked but kept, so you can return; ask us to delete it and we will do so within 30 days.",
           "We keep encrypted backups for up to 12 months. Data you delete can remain in a backup until that backup expires; it is not used for anything else, and if a backup is ever restored, deletions made since then are applied again.",
-          "The workspace audit log records who did what. After 24 months the email address and IP address in an entry are removed, leaving only an anonymous user identifier. Payment-check records are deleted after 24 months.",
+          "The workspace audit log records who did what. After 24 months the email address and IP address in an entry are removed, leaving only an anonymous user identifier. Payment-check records are deleted after 24 months. The records of what your AI agents did (their identity, firewall, content-scan and tool-call logs) are deleted after 24 months, oldest first; the remaining records can still be verified as unaltered.",
           "Billing and tax records are kept by Paddle and by us for as long as the law requires.",
         ],
       },

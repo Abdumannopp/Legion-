@@ -12,7 +12,11 @@ import { closePool, migrate, query } from "../src/db/pool.js";
 import { truncateAll } from "../src/seed.js";
 import { config } from "../src/config.js";
 import * as store from "../src/store.js";
-import { prunePaymentChecks, pseudonymiseAudit } from "../src/retention.js";
+import { prunePaymentChecks, pseudonymiseAudit, pruneAgentLogs } from "../src/retention.js";
+import { pool } from "../src/db/pool.js";
+// The chained writers are not part of the package's public surface; the test drives them directly.
+import { DecisionLog } from "../../packages/agent-identity/dist/firewall/log.js";
+import { AuditLog } from "../../packages/agent-identity/dist/audit.js";
 import { pruneAlertsByPlan } from "../src/plan-limits.js";
 import type { Role, User } from "../src/types.js";
 
@@ -138,5 +142,84 @@ describe("the workspace export", () => {
     expect((await query("SELECT detail FROM audit_log WHERE tenant_id = $1 AND action = 'workspace.exported'", [tA])).rowCount).toBe(3);
     const limited = await request(app).get("/workspace/export").set(...bearer(adminA));
     expect(limited.status).toBe(429);
+  });
+});
+
+
+describe("the agent logs: oldest rows go after 24 months, and the chain still proves itself", () => {
+  const decision = (log: DecisionLog, t: string, monthsAgo: number) => log.record({
+    decisionId: randomUUID(), occurredAt: new Date(Date.now() - monthsAgo * 30.5 * 86_400_000).toISOString(),
+    tenantId: t, principalType: "ai_agent", principalId: "agent-1", principalName: "Triage", ownerUserId: "alice",
+    credentialId: null, tokenId: null, delegatedUser: null, delegationId: null, agentChain: [], viaMessageId: null,
+    surface: "api", action: "alerts:read", permission: null, resourceType: "alert", resourceId: null,
+    sensitivity: "internal", destination: "api:alert", decision: "ALLOW", wouldBlock: false, mode: "enforce",
+    riskScore: 0, riskFactors: [], ruleHits: [], advisor: [], policyVersion: 1, inputDigest: "0".repeat(64),
+    inputPreview: { note: "ip 203.0.113.9" }, requestId: null, ip: "203.0.113.9",
+  } as never);
+  const count = async (t: string) => Number((await query("SELECT count(*) AS n FROM firewall_decisions WHERE chain_key = $1", [t])).rows[0]!.n);
+
+  it("removes only the old prefix, records an anchor, and verifyChain passes before and after", async () => {
+    const log = new DecisionLog(pool);
+    for (const m of [30, 28, 26]) await decision(log, tA, m);
+    for (const m of [3, 1]) await decision(log, tA, m);
+    expect(await log.verifyChain(tA)).toMatchObject({ ok: true, rows: 5 });
+
+    expect(await pruneAgentLogs(24)).toBe(3);
+    expect(await count(tA)).toBe(2);
+    const anchor = (await query("SELECT * FROM chain_prune_anchors WHERE tenant_id = $1 AND table_name = 'firewall_decisions'", [tA])).rows[0];
+    expect(anchor).toMatchObject({ pruned_rows: 3 });
+    expect(await log.verifyChain(tA)).toMatchObject({ ok: true, rows: 2 });
+
+    await decision(log, tA, 0);                                                    // new entries keep linking
+    expect(await log.verifyChain(tA)).toMatchObject({ ok: true, rows: 3 });
+    expect(await pruneAgentLogs(24)).toBe(0);                                       // idempotent
+  });
+
+  it("still catches tampering after a prune, and the anchor cannot be bypassed", async () => {
+    const log = new DecisionLog(pool);
+    await decision(log, tA, 30); await decision(log, tA, 2); await decision(log, tA, 1);
+    await pruneAgentLogs(24);
+    expect(await log.verifyChain(tA)).toMatchObject({ ok: true });
+    await query("UPDATE chain_prune_anchors SET anchor_hash = $2 WHERE tenant_id = $1", [tA, "b".repeat(64)]);
+    expect((await log.verifyChain(tA)).ok).toBe(false);                             // the first row no longer links to the anchor
+    await expect(query("UPDATE firewall_decisions SET action = 'x' WHERE chain_key = $1", [tA])).rejects.toThrow(/append-only/);
+  });
+
+  it("always keeps the newest row, even when every row is old", async () => {
+    const log = new DecisionLog(pool);
+    for (const m of [40, 36, 30]) await decision(log, tA, m);
+    expect(await pruneAgentLogs(24)).toBe(2);
+    expect(await count(tA)).toBe(1);
+    expect(await log.verifyChain(tA)).toMatchObject({ ok: true, rows: 1 });
+    await decision(log, tA, 0);
+    expect(await log.verifyChain(tA)).toMatchObject({ ok: true, rows: 2 });
+  });
+
+  it("works for the identity audit log too, never touches another workspace, a legal hold, or a self-hosted install", async () => {
+    const held = await tenant("Held", "hold");
+    const log = new DecisionLog(pool);
+    await decision(log, tA, 30); await decision(log, tA, 1);
+    await decision(log, tB, 1);
+    await decision(log, held, 30); await decision(log, held, 1);
+    const audit = new AuditLog(pool);
+    const person = { type: "human", id: "alice", tenantId: tA, role: "admin", displayName: "Alice" } as never;
+    await audit.record({ principal: person, action: "login", outcome: "success", ip: "203.0.113.1" });
+    expect(await pruneAgentLogs(24)).toBe(1);
+    expect(await count(tA)).toBe(1); expect(await count(tB)).toBe(1); expect(await count(held)).toBe(2);
+    expect(await audit.verifyChain(tA)).toMatchObject({ ok: true });
+    (config as { deploymentMode: string }).deploymentMode = "self-hosted";
+    await decision(log, tB, 40);
+    expect(await pruneAgentLogs(24)).toBe(0);
+    expect(await pruneAgentLogs(0)).toBe(0);
+  });
+
+  it("erasing a workspace also removes its anchors", async () => {
+    const log = new DecisionLog(pool);
+    await decision(log, tA, 30); await decision(log, tA, 1);
+    await pruneAgentLogs(24);
+    const { deleteTenant } = await import("../src/tenant-deletion.js");
+    await deleteTenant(tA, { by: "test", ledgerFile: null });
+    expect(Number((await query("SELECT count(*) AS n FROM chain_prune_anchors WHERE tenant_id = $1", [tA])).rows[0]!.n)).toBe(0);
+    expect(await count(tA)).toBe(0);
   });
 });

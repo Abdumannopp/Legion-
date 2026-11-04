@@ -292,6 +292,7 @@ export const config = {
   /** Hosted only: payment-check records are deleted after this many months (0 = keep). */
   retentionPaymentMonths: Math.max(0, Math.floor(Number(process.env.RETENTION_PAYMENT_MONTHS ?? 24)) || 0),
   /** Hosted only: after this many months the email and IP address in a workspace audit-log entry are removed (0 = keep). */
+  retentionAgentLogMonths: Math.max(0, Math.floor(Number(process.env.RETENTION_AGENT_LOG_MONTHS ?? 24)) || 0),
   retentionAuditMonths: Math.max(0, Math.floor(Number(process.env.RETENTION_AUDIT_MONTHS ?? 24)) || 0),
   /** Audit P2-16: delivered alert emails (recipient + alert text) are kept this many days, then deleted. 0 = keep. */
   notifyRetentionDays: Math.max(0, Math.floor(Number(process.env.NOTIFY_RETENTION_DAYS ?? 30)) || 0),
