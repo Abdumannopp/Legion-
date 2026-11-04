@@ -17,6 +17,7 @@ import {
   ActionError, actionEvents, approvalOf, cancelAction, getAction, isPaused, listActions, proposeAction, runQueued, setPaused, syncWithApproval,
   type ActionRequest, type ActionStatus,
 } from "./actions/engine.js";
+import { getRun, listRuns, runWorkflow, workflowDefinitions, WorkflowError } from "./orchestrator/engine.js";
 
 type AuthedRequest = Request & { user?: User };
 type Middleware = (req: AuthedRequest, res: Response, next: NextFunction) => Promise<void>;
@@ -187,6 +188,40 @@ export function registerSocRoutes(app: Express, { requirePermission, parse, log,
       res.json({ action });
     } catch (error) {
       if (error instanceof ActionError) return res.status(error.status).json({ detail: error.message, code: error.code });
+      throw error;
+    }
+  });
+
+  // --- Agent Orchestrator v0 -------------------------------------------------
+  // Code-defined workflows only. Each step acts as its own agent and proposes
+  // through the action engine; the run's starter is recorded, not borrowed.
+
+  app.get("/workflows", requirePermission("workflows:read"), (_req, res) => {
+    res.json({ workflows: workflowDefinitions() });
+  });
+
+  app.get("/workflows/runs", requirePermission("workflows:read"), async (req: AuthedRequest, res) => {
+    res.json({ runs: await listRuns(req.user!.tenant_id, limitOf(req.query.limit)) });
+  });
+
+  app.get("/workflows/runs/:id", requirePermission("workflows:read"), async (req: AuthedRequest, res) => {
+    const run = await getRun(req.user!.tenant_id, String(req.params.id));
+    return run ? res.json(run) : res.status(404).json({ detail: "No such workflow run" });
+  });
+
+  app.post("/workflows/:name/runs", requirePermission("workflows:run"), async (req: AuthedRequest, res) => {
+    const body = parse(z.strictObject({
+      alert_id: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_.:-]+$/, "Not an alert id"),
+      mode: z.enum(["shadow", "simulation"]),
+    }), req.body, res); if (!body) return;
+    const name = String(req.params.name);
+    if (!/^[a-z_]{1,40}$/.test(name)) return res.status(404).json({ detail: "No such workflow" });
+    try {
+      const { run, replayed } = await runWorkflow(req.user!.tenant_id, name, body.alert_id, body.mode, humanOf(req.user!));
+      if (!replayed) await log(req, "workflow.run", "workflow_run", run.id, `${name} for ${body.alert_id} (${body.mode}): ${run.status}`);
+      res.status(replayed ? 200 : 201).json({ run, replayed });
+    } catch (error) {
+      if (error instanceof WorkflowError) return res.status(error.status).json({ detail: error.message, code: error.code });
       throw error;
     }
   });
