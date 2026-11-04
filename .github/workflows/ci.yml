@@ -35,6 +35,8 @@ jobs:
         # -x follows `source ops/lib/common.sh`, so the shared library is checked too.
         run: shellcheck -x ops/*.sh ops/tests/*.sh
       # Backups are always encrypted with age, so the test needs it too.
+      - name: PostgreSQL 16 client tools (match the server containers)
+        run: bash ops/ci-pg-client16.sh
       - name: Tools for the backup test (PostgreSQL client, age)
         run: |
           if ! command -v pg_dump >/dev/null || ! command -v pg_restore >/dev/null || ! command -v psql >/dev/null || ! command -v age >/dev/null; then
@@ -160,6 +162,8 @@ jobs:
       # and use age-encrypted backups. Without these tools those scenarios used
       # to skip silently; LEGION_REQUIRE_FAILURE_INJECTION turns a missing
       # tool into a failure instead.
+      - name: PostgreSQL 16 client tools (match the server containers)
+        run: bash ops/ci-pg-client16.sh
       - name: Tools for the failure-injection tests
         run: sudo apt-get update && sudo apt-get install -y redis-server age
       - run: npm test
