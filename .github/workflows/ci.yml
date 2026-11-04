@@ -121,7 +121,9 @@ jobs:
 
   app:
     name: Typecheck, tests and build
-    runs-on: ubuntu-latest
+    # Pinned: the browser tests install Playwright's own dependencies, and the
+    # pinned Playwright does not support the newer image `ubuntu-latest` became.
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16-alpine
