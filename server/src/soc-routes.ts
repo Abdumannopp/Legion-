@@ -22,6 +22,8 @@ import { listJobs, runtimeStatus } from "./runtime/queue.js";
 import { actionConnectors, connectedFor, connectorsFor } from "./integrations/action-connectors.js";
 import { addMemory, forget, listMemory, MAX_TTL_DAYS, MEMORY_KINDS, MemoryError, SUBJECT_TYPES, type SubjectType } from "./memory/store.js";
 import { learningSummary } from "./memory/learning.js";
+import { listAuditEvents, verifyAuditChain } from "./audit/events.js";
+import { socMetrics } from "./audit/metrics.js";
 
 type AuthedRequest = Request & { user?: User };
 type Middleware = (req: AuthedRequest, res: Response, next: NextFunction) => Promise<void>;
@@ -240,6 +242,25 @@ export function registerSocRoutes(app: Express, { requirePermission, parse, log,
       connected: await connectedFor(tenantId, a.id),
     })));
     res.json({ connectors: actionConnectors(), actions, live_execution: false });
+  });
+
+  // --- Audit and observability ------------------------------------------------
+
+  app.get("/soc/audit", requirePermission("audit:read"), async (req: AuthedRequest, res) => {
+    const category = typeof req.query.category === "string" && /^[a-z]{1,16}$/.test(req.query.category) ? req.query.category : undefined;
+    const before = req.query.before_seq !== undefined ? Math.floor(Number(req.query.before_seq)) : undefined;
+    if (before !== undefined && !(before > 0)) return res.status(422).json({ detail: "before_seq must be a positive number" });
+    res.json({ events: await listAuditEvents(req.user!.tenant_id, { category, beforeSeq: before, limit: limitOf(req.query.limit) }) });
+  });
+
+  app.get("/soc/audit/verify", requirePermission("audit:read"), async (req: AuthedRequest, res) => {
+    const result = await verifyAuditChain(req.user!.tenant_id);
+    await log(req, "soc_audit.verified", "tenant", req.user!.tenant_id, result.ok ? `ok (${result.events})` : `BROKEN at ${result.broken_at}`);
+    res.json(result);
+  });
+
+  app.get("/soc/metrics", requirePermission("runtime:read"), async (req: AuthedRequest, res) => {
+    res.json(await socMetrics(req.user!.tenant_id));
   });
 
   // --- Memory and Learning (foundation) ----------------------------------------

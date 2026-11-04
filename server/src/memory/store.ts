@@ -16,6 +16,7 @@
 import { randomUUID } from "node:crypto";
 import { isIP } from "node:net";
 import { query, queryAll, queryOne, transaction } from "../db/pool.js";
+import { appendAuditEventNow } from "../audit/events.js";
 
 export const MEMORY_KINDS = ["note", "false_positive", "known_benign"] as const;
 export const SUBJECT_TYPES = ["ip", "host", "account", "alert_title"] as const;
@@ -67,6 +68,7 @@ export async function addMemory(tenantId: string, m: { kind: MemoryKind; subject
       [tenantId, randomUUID(), m.kind, m.subject_type, key, content, m.source, m.created_by, ttl, MAX_PER_TENANT],
     )).rows[0] ?? null;
   });
+  if (row) await appendAuditEventNow(tenantId, { category: "memory", event: "memory.added", actor: m.created_by ? { kind: "human", user_id: m.created_by } : { kind: "system", component: "memory" }, subject_type: "memory", subject_id: row.id, detail: { kind: m.kind, subject_type: m.subject_type } });
   if (!row) throw new MemoryError(409, `This workspace already holds ${MAX_PER_TENANT} memory entries; remove some first`);
   return toMemory(row);
 }
@@ -102,6 +104,7 @@ export async function forget(tenantId: string, id: string, by: { user_id: string
   if (!row) return "not_found";
   if (row.created_by !== by.user_id && by.role !== "admin") return "forbidden";
   await query("DELETE FROM soc_memory WHERE tenant_id = $1 AND id = $2", [tenantId, id]);
+  await appendAuditEventNow(tenantId, { category: "memory", event: "memory.removed", actor: { kind: "human", user_id: by.user_id }, subject_type: "memory", subject_id: id });
   return "deleted";
 }
 

@@ -10,6 +10,7 @@ import { canonicalJson, sha256Hex } from "./canonical.js";
 import { parsePolicyDocument, type PolicyDocument } from "./document.js";
 import type { PolicyOutcome } from "./evaluate.js";
 import type { ActorRef, ExecutionMode, Origin } from "./types.js";
+import { appendAuditEvent } from "../audit/events.js";
 
 export interface ActivePolicy { version: number; hash: string; document: PolicyDocument; updated_at: string }
 
@@ -72,6 +73,7 @@ export async function putPolicy(tenantId: string, raw: unknown, opts: { expected
        RETURNING updated_at`,
       [tenantId, next, opts.userId],
     );
+    await appendAuditEvent(client, tenantId, { category: "policy", event: "policy.activated", actor: { kind: "human", user_id: opts.userId }, subject_type: "policy", subject_id: String(next), detail: { version: next, hash, previous: current } });
     return { version: next, hash, document: doc, updated_at: row.rows[0]!.updated_at.toISOString() };
   });
 }

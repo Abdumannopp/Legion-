@@ -310,6 +310,8 @@ export const config = {
    * background. "off" (default) or "shadow" (decisions recorded, no approval
    * requests, nothing done). Simulation and live are not offered here.
    */
+  /** Key for the SOC audit chain (HMAC). Unset: derived from JWT_SECRET (changing that secret then breaks verification of older events). */
+  socAuditKey: process.env.SOC_AUDIT_KEY || "",
   orchestratorAutoMode: (process.env.ORCHESTRATOR_AUTO_MODE || "off") as "off" | "shadow",
   retentionAuditMonths: Math.max(0, Math.floor(Number(process.env.RETENTION_AUDIT_MONTHS ?? 24)) || 0),
   /** Audit P2-16: delivered alert emails (recipient + alert text) are kept this many days, then deleted. 0 = keep. */

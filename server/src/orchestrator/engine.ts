@@ -26,6 +26,7 @@ import type { Agent, Alert } from "../types.js";
 import { ActionError, proposeAction, runQueued, type ActionRequest } from "../actions/engine.js";
 import type { ActorRef } from "../policy/types.js";
 import { recall, type Memory } from "../memory/store.js";
+import { appendAuditEventNow } from "../audit/events.js";
 
 export const MAX_STEPS = 10;
 
@@ -149,6 +150,8 @@ export async function runWorkflow(tenantId: string, name: string, alertId: strin
     `UPDATE workflow_runs SET status = $3, steps = $4, error = $5, finished_at = now() WHERE tenant_id = $1 AND id = $2 RETURNING ${COLUMNS}`,
     [tenantId, id, status, JSON.stringify(results), error],
   );
+  await appendAuditEventNow(tenantId, { category: "workflow", event: `workflow.${status}`, actor: startedBy, subject_type: "workflow_run", subject_id: id,
+    detail: { workflow: wf.name, alert_id: alert.id, mode, steps: results.map((r) => `${r.name}:${r.outcome}:${r.action_status ?? "-"}`) } });
   return { run: toRun(done!), replayed: false };
 }
 

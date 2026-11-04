@@ -28,6 +28,7 @@ import type { ActorRef, Origin } from "../policy/types.js";
 import { simulate } from "./simulate.js";
 import { enqueueJob } from "../runtime/queue.js";
 import { recordSignal, type Signal } from "../memory/learning.js";
+import { appendAuditEvent, appendAuditEventNow } from "../audit/events.js";
 
 export type ActionStatus = "denied" | "recorded" | "awaiting_approval" | "rejected" | "expired" | "cancelled" | "queued" | "running" | "simulated" | "failed";
 
@@ -70,6 +71,7 @@ async function event(client: pg.PoolClient, tenantId: string, id: string, from: 
     "INSERT INTO action_events (tenant_id, action_id, from_status, to_status, actor, note) VALUES ($1, $2, $3, $4, $5, $6)",
     [tenantId, id, from, to, JSON.stringify(actor), note?.slice(0, 500) ?? null],
   );
+  await appendAuditEvent(client, tenantId, { category: "action", event: `action.${to}`, actor, subject_type: "action_request", subject_id: id, detail: { from, to } });
 }
 
 export async function isPaused(tenantId: string, client?: pg.PoolClient): Promise<boolean> {
@@ -79,6 +81,7 @@ export async function isPaused(tenantId: string, client?: pg.PoolClient): Promis
 }
 
 export async function setPaused(tenantId: string, paused: boolean, userId: string, reason?: string): Promise<void> {
+  await appendAuditEventNow(tenantId, { category: "controls", event: paused ? "actions.paused" : "actions.resumed", actor: { kind: "human", user_id: userId }, subject_type: "tenant", subject_id: tenantId });
   await queryOne(
     `INSERT INTO soc_controls (tenant_id, actions_paused, reason, changed_by) VALUES ($1, $2, $3, $4)
      ON CONFLICT (tenant_id) DO UPDATE SET actions_paused = EXCLUDED.actions_paused, reason = EXCLUDED.reason, changed_by = EXCLUDED.changed_by, changed_at = now()`,

@@ -13,6 +13,7 @@ import { z } from "zod";
 import { config } from "../config.js";
 import { getAction, isPaused, runQueued } from "../actions/engine.js";
 import { runWorkflow } from "../orchestrator/engine.js";
+import { appendAuditEventNow } from "../audit/events.js";
 import { claimJobs, completeJob, deadLetterAbandoned, deferJob, failJob, type Job, type JobKind } from "./queue.js";
 
 type Outcome = { ok: true } | { defer: number };
@@ -55,6 +56,7 @@ export async function runOnce(opts: { owner?: string; limit?: number } = {}): Pr
       if (await completeJob(job)) report.done++; else report.lost++;
     } catch (error) {
       const r = await failJob(job, error instanceof Error ? error.message : "job failed");
+      if (r === "dead") await appendAuditEventNow(job.tenant_id, { category: "runtime", event: "job.dead", actor: { kind: "system", component: "runtime" }, subject_type: "job", subject_id: job.id, detail: { kind: job.kind, attempts: job.attempts } }).catch(() => {});
       report[r === "retry" ? "retried" : r]++;
     }
   }

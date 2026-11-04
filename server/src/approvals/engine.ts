@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { queryAll, queryOne, transaction } from "../db/pool.js";
 import type { ActorRef, RiskClass } from "../policy/types.js";
+import { appendAuditEvent } from "../audit/events.js";
 
 export const APPROVAL_TTL_MINUTES = { R1: 24 * 60, R2: 24 * 60, R3: 4 * 60, R4: 60 } as const satisfies Record<Exclude<RiskClass, "R0">, number>;
 
@@ -77,7 +78,12 @@ export async function createApproval(client: pg.PoolClient, tenantId: string, a:
     [tenantId, randomUUID(), a.subject_id, a.action_id, a.risk_class, a.action_digest, a.summary.slice(0, 500), JSON.stringify(a.requested_by),
       a.requested_by.kind === "human" ? a.requested_by.user_id : null, critical ? 2 : 1, critical, APPROVAL_TTL_MINUTES[a.risk_class]],
   );
-  return toApproval(r.rows[0]!);
+  const created = toApproval(r.rows[0]!);
+  await appendAuditEvent(client, tenantId, {
+    category: "approval", event: "approval.requested", actor: a.requested_by, subject_type: "approval_request", subject_id: created.id,
+    detail: { action_id: a.action_id, risk_class: a.risk_class, required_approvals: created.required_approvals, require_mfa: created.require_mfa, action_digest: a.action_digest },
+  });
+  return created;
 }
 
 /** Pending requests past their deadline become expired (this workspace only). */
@@ -142,6 +148,10 @@ export async function decide(tenantId: string, id: string, d: DecisionInput): Pr
       [tenantId, id, d.userId, d.decision, d.reason?.slice(0, 500) ?? null, d.mfaVerified],
     );
     if (!inserted.rowCount) throw new ApprovalError(409, "already_decided", "You already decided on this request");
+    await appendAuditEvent(client, tenantId, {
+      category: "approval", event: `approval.${d.decision}`, actor: { kind: "human", user_id: d.userId }, subject_type: "approval_request", subject_id: id,
+      detail: { action_id: a.action_id, risk_class: a.risk_class, mfa_verified: d.mfaVerified, action_digest: a.action_digest },
+    });
 
     let settled: "approved" | "rejected" | null = null;
     let updated: Row;
