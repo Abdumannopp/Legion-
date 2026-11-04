@@ -375,7 +375,7 @@ async function main() {
   console.log("▶ 12. billing / plan visibility");
   await page.goto(`${WEB}/billing`);
   await sees(page, "plan: free trial with days left and end date", "Free trial —");
-  await sees(page, "what the plan includes", "Real-time alerts from your security sensors");
+  await sees(page, "what the plan includes", "Your free trial includes everything in the Professional plan.");
   await shot(page, "billing");
 
   console.log("▶ 13. an error, explained");
