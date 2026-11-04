@@ -23,6 +23,7 @@
  *     blocks an hour and MAX_ACTIVE at once,
  *   - every block and unblock is audited, and an administrator can undo it.
  */
+import { shadowEvaluate } from "./policy/shadow.js";
 import { BlockList, isIP } from "node:net";
 import { randomUUID } from "node:crypto";
 import type { Campaign, CampaignRule } from "./campaigns.js";
@@ -268,6 +269,11 @@ export async function respondToCampaigns(tenantId: string, campaigns: Campaign[]
         reason: `Automatic: campaign ${c.id} (${c.rule.replace("_", " ")})`,
       });
       decisions.push({ campaign: c.id, ip, action: created ? "blocked" : "extended" });
+      // Policy Engine v0, shadow: what the engine would have decided about this automatic block.
+      shadowEvaluate(tenantId, {
+        call_site: "auto_response", action_id: "ip.block", actor: { kind: "system", component: "auto_response" }, origin: "system",
+        input: { ip, minutes: settings.minutes, campaign_id: c.id }, legacy_outcome: created ? "blocked" : "extended",
+      });
       await store.audit({
         tenant_id: tenantId, user_id: null, user_email: null, action: "security.auto_block", resource_type: "ip",
         resource_id: ip, detail: `campaign ${c.id} (${c.rule}), ${settings.minutes} min`, ip_address: null,

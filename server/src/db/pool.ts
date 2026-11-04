@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import type { ConnectionOptions } from "node:tls";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -199,7 +199,10 @@ export async function migrate(opts: { lockTimeout?: string; attempts?: number } 
     );
     const row = current.rows[0];
     // LEGION_FORCE_MIGRATE=1 re-applies anyway (e.g. after repairing a damaged schema by hand).
-    if (row && row.fingerprint === fingerprint && row.intact && process.env.LEGION_FORCE_MIGRATE !== "1") return;
+    if (row && row.fingerprint === fingerprint && row.intact && process.env.LEGION_FORCE_MIGRATE !== "1") {
+      await applyVersionedMigrations(client, lockTimeout);
+      return;
+    }
 
     for (let attempt = 1; ; attempt++) {
       try {
@@ -224,6 +227,7 @@ export async function migrate(opts: { lockTimeout?: string; attempts?: number } 
        ON CONFLICT (id) DO UPDATE SET fingerprint = EXCLUDED.fingerprint, applied_at = now()`,
       [fingerprint],
     );
+    await applyVersionedMigrations(client, lockTimeout);
   } finally {
     await client
       .query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY])
@@ -232,6 +236,62 @@ export async function migrate(opts: { lockTimeout?: string; attempts?: number } 
         // released (and reset) immediately below.
       });
     client.release();
+  }
+}
+
+/**
+ * Versioned migrations: `db/migrations/NNNN_name.sql`, applied once each, in
+ * order, after the base schema. Each runs in its own transaction together with
+ * the row that records it, so a failed migration leaves nothing half-applied.
+ *
+ * An applied migration is immutable: if its file changes afterwards (checksum
+ * mismatch) the server refuses to start instead of silently running a schema
+ * that differs from what the database holds. Fix forward with a new file.
+ * Numbers must be contiguous from 0001, so a missing or misnamed file is caught.
+ */
+export const MIGRATIONS_DIR = join(here, "migrations");
+
+export interface MigrationFile { version: number; name: string; sql: string; checksum: string }
+
+export function migrationFiles(dir = MIGRATIONS_DIR): MigrationFile[] {
+  if (!existsSync(dir)) return [];
+  const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
+  return files.map((file, i) => {
+    const m = /^(\d{4})_([a-z0-9_]+)\.sql$/.exec(file);
+    if (!m) throw new Error(`migration file name not allowed: ${file}`);
+    const version = Number(m[1]);
+    if (version !== i + 1) throw new Error(`migrations must be numbered contiguously from 0001: expected ${String(i + 1).padStart(4, "0")}, found ${file}`);
+    const sql = readFileSync(join(dir, file), "utf8");
+    return { version, name: m[2]!, sql, checksum: createHash("sha256").update(sql).digest("hex") };
+  });
+}
+
+async function applyVersionedMigrations(client: pg.PoolClient, lockTimeout: string, dir = MIGRATIONS_DIR): Promise<void> {
+  await client.query(
+    `CREATE TABLE IF NOT EXISTS legion_migrations (
+       version    int         PRIMARY KEY CHECK (version > 0),
+       name       text        NOT NULL,
+       checksum   text        NOT NULL CHECK (checksum ~ '^[0-9a-f]{64}$'),
+       applied_at timestamptz NOT NULL DEFAULT now()
+     )`,
+  );
+  const applied = new Map((await client.query<{ version: number; checksum: string }>("SELECT version, checksum FROM legion_migrations")).rows.map((r) => [r.version, r.checksum]));
+  for (const m of migrationFiles(dir)) {
+    const done = applied.get(m.version);
+    if (done !== undefined) {
+      if (done !== m.checksum) throw new Error(`migration ${String(m.version).padStart(4, "0")}_${m.name} was changed after it was applied; add a new migration instead`);
+      continue;
+    }
+    await client.query("BEGIN");
+    try {
+      await client.query(`SET LOCAL lock_timeout = '${lockTimeout}'`);
+      await client.query(m.sql);
+      await client.query("INSERT INTO legion_migrations (version, name, checksum) VALUES ($1, $2, $3)", [m.version, m.name, m.checksum]);
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    }
   }
 }
 

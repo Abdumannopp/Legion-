@@ -295,6 +295,13 @@ export const config = {
   retentionPaymentMonths: Math.max(0, Math.floor(Number(process.env.RETENTION_PAYMENT_MONTHS ?? 24)) || 0),
   /** Hosted only: after this many months the email and IP address in a workspace audit-log entry are removed (0 = keep). */
   retentionAgentLogMonths: Math.max(0, Math.floor(Number(process.env.RETENTION_AGENT_LOG_MONTHS ?? 24)) || 0),
+  /**
+   * Task 10 Policy Engine v0. "shadow" (default): every covered action is also
+   * evaluated by the policy engine and the would-be decision is recorded —
+   * the decision never changes what happens. "off": nothing is evaluated.
+   * There is deliberately no enforcing value yet.
+   */
+  policyEngineMode: (process.env.POLICY_ENGINE_MODE || "shadow") as "off" | "shadow",
   retentionAuditMonths: Math.max(0, Math.floor(Number(process.env.RETENTION_AUDIT_MONTHS ?? 24)) || 0),
   /** Audit P2-16: delivered alert emails (recipient + alert text) are kept this many days, then deleted. 0 = keep. */
   notifyRetentionDays: Math.max(0, Math.floor(Number(process.env.NOTIFY_RETENTION_DAYS ?? 30)) || 0),
@@ -459,6 +466,10 @@ const usingPlaceholderSecret = isWeakJwtSecret(config.jwtSecret);
 export const loopbackBind = ["127.0.0.1", "::1", "localhost"].includes(config.bindAddress);
 const explicitDevOrTest =
   process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test";
+
+if (config.policyEngineMode !== "off" && config.policyEngineMode !== "shadow") {
+  throw new Error("Refusing to start: POLICY_ENGINE_MODE must be \"off\" or \"shadow\" (enforcement is not available yet)");
+}
 
 // A malformed keyring is wrong in every mode: it would either fail every MFA
 // login or, worse, be "fixed" by someone generating a new key and orphaning

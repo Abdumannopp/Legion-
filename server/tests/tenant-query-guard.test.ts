@@ -12,15 +12,20 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const SRC = join(__dirname, "..", "src");
+// Recursive: code in src/policy/, src/integrations/, src/scripts/… is scanned too
+// (a query in a subdirectory used to be invisible to this guard).
 
 /** Tables that hold (or lead to) one organisation's data. */
 const TENANT_TABLES = [
   "alerts", "assets", "audit_log", "subscriptions", "webhook_credentials", "webhook_nonces",
   "notification_outbox", "users", "refresh_tokens", "mfa_recovery_codes", "mfa_used_counters", "tenants",
+  "attack_campaigns", "integration_connections", "ip_blocks", "payment_beneficiaries", "payment_checks", "tenant_deletions", "usage_counters", "workspace_memberships",
+  // Task 10 SOC core
+  "policy_documents", "policy_active", "policy_decisions",
 ];
 
 /** Tables whose rows are ALWAYS reached tenant-first by these functions; must never be read unscoped. */
-const MUST_SCOPE = new Set(["alerts", "assets", "audit_log"]);
+const MUST_SCOPE = new Set(["alerts", "assets", "audit_log", "policy_documents", "policy_active", "policy_decisions"]);
 
 interface Exception { file: string; table: string; match?: RegExp; reason: string }
 
@@ -65,13 +70,26 @@ const REVIEWED: Exception[] = [
   { file: "seed.ts", table: "tenants", reason: "demo seeding" },
   { file: "setup-token.ts", table: "tenants", reason: "first-run probe" },
   { file: "index.ts", table: "tenants", match: /^SELECT 1 FROM tenants LIMIT 1$/i, reason: "first-run probe" },
+  // --- found when the scan became recursive / the table list complete (Task 10, B-01)
+  { file: "ai-policy.ts", table: "usage_counters", match: /^DELETE FROM usage_counters WHERE meter IN \('ai\.requests', 'ai\.requests\.day'\)$/i,
+    reason: "resetAiQuota(): test/maintenance reset of the AI rate-limit meters; counters only, no tenant data is read" },
+  { file: "index.ts", table: "usage_counters", match: /^DELETE FROM usage_counters WHERE window_start < now\(\) - interval '1 day'$/i,
+    reason: "periodic sweep of expired rate-limit windows across all workspaces; deletes, returns nothing" },
+  { file: "workspaces.ts", table: "workspace_memberships", match: /WHERE user_id = \$1 AND status = 'active'$/i,
+    reason: "countForUser(userId): the signed-in person's own memberships (workspace-creation cap); returns a count only" },
+  { file: "integrations/connections.ts", table: "integration_connections", match: /WHERE id = \$1 AND lease_owner = \$2$/i,
+    reason: "poll worker bookkeeping on a row it claimed itself (fenced by lease_owner); the row carries its own tenant_id" },
+  { file: "scripts/plan.ts", table: "tenants", match: /^UPDATE tenants SET plan_override = (\$2|NULL) WHERE id = \$1$/i,
+    reason: "operator CLI (shell access to the server): sets one workspace's plan by its id, audited" },
+  { file: "scripts/tenant-data.ts", table: "tenants", match: /^UPDATE tenants SET legal_hold = \$2 WHERE id = \$1$/i,
+    reason: "operator CLI: legal hold of one workspace by its id, audited" },
 ];
 
 interface Stmt { file: string; line: number; sql: string; tables: string[] }
 
 function statements(): Stmt[] {
   const out: Stmt[] = [];
-  for (const file of readdirSync(SRC).filter((f) => f.endsWith(".ts"))) {
+  for (const file of (readdirSync(SRC, { recursive: true }) as string[]).filter((f) => f.endsWith(".ts"))) {
     const src = readFileSync(join(SRC, file), "utf8");
     for (const m of src.matchAll(/(["'`])(\s*(?:SELECT|UPDATE|INSERT|DELETE|WITH)\b[\s\S]*?)\1/g)) {
       const sql = m[2]!.replace(/\s+/g, " ").trim();

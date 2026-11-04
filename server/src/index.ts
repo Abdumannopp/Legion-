@@ -54,6 +54,8 @@ import * as mfa from "./mfa.js";
 import * as sessions from "./sessions.js";
 import * as realtime from "./realtime.js";
 import { createAgentLayer } from "./agents.js";
+import { registerSocRoutes } from "./soc-routes.js";
+import { shadowEvaluate } from "./policy/shadow.js";
 import type { AccessState, Alert, Role, Severity, Subscription, User } from "./types.js";
 
 export const app = express();
@@ -1372,6 +1374,7 @@ app.patch("/alerts/:id/status", requireRole("analyst"), async (req: AuthedReques
   const body = parse(z.object({ status: z.enum(["open", "investigating", "resolved"]) }), req.body, res); if (!body) return;
   const alert = await store.updateAlertStatus(req.user!.tenant_id, String(req.params.id), body.status);
   if (!alert) return res.status(404).json({ detail: "Alert not found" });
+  shadowEvaluate(req.user!.tenant_id, { call_site: "route:alert_status", action_id: "alert.set_status", actor: { kind: "human", user_id: req.user!.id, role: req.user!.role }, origin: "human", input: { alert_id: alert.id, status: body.status }, legacy_outcome: "updated" });
   await log(req, "alert.status_updated", "alert", alert.id, body.status);
   broadcast(alert.tenant_id, { type: "alert.status_updated", alert: outputAlert(alert) });
   return res.json(outputAlert(alert));
@@ -2221,6 +2224,7 @@ app.post("/security/blocks", requireRole("admin"), async (req: AuthedRequest, re
     const { block, created } = await blocklist.addBlock(req.user!.tenant_id, body.ip, {
       minutes: body.minutes ?? settings.minutes, reason: body.reason?.trim() || `Blocked by ${req.user!.email}`, userId: req.user!.id,
     });
+    shadowEvaluate(req.user!.tenant_id, { call_site: "route:manual_block", action_id: "ip.block", actor: { kind: "human", user_id: req.user!.id, role: req.user!.role }, origin: "human", input: { ip: block.ip, minutes: body.minutes ?? settings.minutes }, legacy_outcome: created ? "blocked" : "extended" });
     await log(req, "security.block", "ip", block.ip, `${body.minutes ?? settings.minutes} min`);
     res.status(created ? 201 : 200).json({ block });
   } catch (error) {
@@ -2233,6 +2237,7 @@ app.delete("/security/blocks/:ip", requireRole("admin"), async (req: AuthedReque
   try {
     const block = await blocklist.revokeBlock(req.user!.tenant_id, String(req.params.ip), req.user!.id);
     if (!block) return res.status(404).json({ detail: "That address is not blocked" });
+    shadowEvaluate(req.user!.tenant_id, { call_site: "route:manual_unblock", action_id: "ip.unblock", actor: { kind: "human", user_id: req.user!.id, role: req.user!.role }, origin: "human", input: { ip: block.ip }, legacy_outcome: "unblocked" });
     await log(req, "security.unblock", "ip", block.ip);
     res.json({ block });
   } catch (error) {
@@ -2374,6 +2379,7 @@ async function resolvePaymentRoute(req: AuthedRequest, res: express.Response, re
   if (!/^PAY-[0-9A-F]{16}$/.test(id)) return res.status(404).json({ detail: "No such payment on hold" });
   const check = await payments.resolvePayment(req.user!.tenant_id, id, req.user!.id, resolution);
   if (!check) return res.status(404).json({ detail: "No such payment on hold" });
+  shadowEvaluate(req.user!.tenant_id, { call_site: "route:payment_resolve", action_id: resolution === "released" ? "payment.release" : "payment.reject", actor: { kind: "human", user_id: req.user!.id, role: req.user!.role }, origin: "human", input: { payment_id: id }, legacy_outcome: resolution });
   await store.audit({
     tenant_id: req.user!.tenant_id, user_id: req.user!.id, user_email: req.user!.email, action: `security.payment_${resolution}`,
     resource_type: "payment", resource_id: id, detail: `${check.amount} ${check.currency} to ${check.beneficiary_hint}`, ip_address: req.ip ?? null,
@@ -2439,6 +2445,8 @@ app.delete("/integrations/:id", requireRole("admin"), async (req: AuthedRequest,
     throw error;
   }
 });
+
+registerSocRoutes(app, { requirePermission, parse, log });
 
 app.use((_req, res) => res.status(404).json({ detail: "Not found" }));
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
