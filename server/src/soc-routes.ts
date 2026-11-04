@@ -3,7 +3,7 @@
  * input parsing and auditing come from index.ts, so every route here follows
  * exactly the same rules as the rest of the API.
  */
-import type { Express, NextFunction, Request, Response } from "express";
+import type { Express, NextFunction, Request, RequestHandler, Response } from "express";
 import { z } from "zod";
 import type { Permission } from "./permissions.js";
 import type { User } from "./types.js";
@@ -12,6 +12,7 @@ import { DEFAULT_POLICY, parsePolicyDocument } from "./policy/document.js";
 import { ENGINE_VERSION, evaluatePolicy } from "./policy/evaluate.js";
 import { getActivePolicy, listDecisions, listPolicyVersions, PolicyConflict, PolicyInvalid, putPolicy, rollbackPolicy } from "./policy/store.js";
 import { AGENTS, ORIGINS } from "./policy/types.js";
+import { ApprovalError, decide, getApproval, listApprovals, type ApprovalStatus } from "./approvals/engine.js";
 
 type AuthedRequest = Request & { user?: User };
 type Middleware = (req: AuthedRequest, res: Response, next: NextFunction) => Promise<void>;
@@ -20,11 +21,17 @@ export interface SocRouteDeps {
   requirePermission: (p: Permission) => Middleware;
   parse: <T>(schema: z.ZodType<T>, value: unknown, res: Response) => T | null;
   log: (req: AuthedRequest, action: string, resourceType?: string | null, resourceId?: string | null, detail?: string | null) => Promise<void>;
+  /** True only for a current, unused TOTP code of a user who has two-factor sign-in on. */
+  verifyMfa: (user: User, code: string) => Promise<boolean>;
+  /** Counts failed attempts per signed-in user (wrong codes): brute-force brake. */
+  stepUp: RequestHandler;
 }
 
 const limitOf = (v: unknown, max = 200) => Math.min(max, Math.max(1, Math.floor(Number(v ?? 50)) || 50));
 
-export function registerSocRoutes(app: Express, { requirePermission, parse, log }: SocRouteDeps): void {
+const APPROVAL_STATUSES = ["pending", "approved", "rejected", "expired", "consumed", "cancelled"] as const;
+
+export function registerSocRoutes(app: Express, { requirePermission, parse, log, verifyMfa, stepUp }: SocRouteDeps): void {
   // --- Policy Engine v0 -------------------------------------------------------
 
   app.get("/policy", requirePermission("policy:read"), async (req: AuthedRequest, res) => {
@@ -110,5 +117,43 @@ export function registerSocRoutes(app: Express, { requirePermission, parse, log 
     if (raw !== undefined && (typeof raw !== "string" || !ACTION_IDS.includes(raw))) return res.status(422).json({ detail: "Unknown action" });
     const actionId = raw as string | undefined;
     res.json({ decisions: await listDecisions(req.user!.tenant_id, { limit: limitOf(req.query.limit), actionId }) });
+  });
+
+  // --- Approval Engine v0 -----------------------------------------------------
+  // Requests are created only by the action engine. People list, read, decide.
+
+  app.get("/approvals", requirePermission("approvals:read"), async (req: AuthedRequest, res) => {
+    const raw = req.query.status;
+    if (raw !== undefined && (typeof raw !== "string" || !(APPROVAL_STATUSES as readonly string[]).includes(raw))) return res.status(422).json({ detail: "Unknown status" });
+    res.json({ approvals: await listApprovals(req.user!.tenant_id, { status: raw as ApprovalStatus | undefined, limit: limitOf(req.query.limit) }) });
+  });
+
+  app.get("/approvals/:id", requirePermission("approvals:read"), async (req: AuthedRequest, res) => {
+    const a = await getApproval(req.user!.tenant_id, String(req.params.id));
+    return a ? res.json(a) : res.status(404).json({ detail: "No such approval request" });
+  });
+
+  app.post("/approvals/:id/decision", stepUp, requirePermission("approvals:decide"), async (req: AuthedRequest, res) => {
+    const body = parse(z.strictObject({
+      decision: z.enum(["approve", "reject"]),
+      action_digest: z.string().regex(/^[0-9a-f]{64}$/, "action_digest must be the 64-character digest shown with the request"),
+      reason: z.string().max(500).refine((s) => !/[\u0000-\u001f\u007f]/.test(s), "No control characters").optional(),
+      mfa_code: z.string().regex(/^\d{6,8}$/).optional(),
+    }), req.body, res); if (!body) return;
+    const user = req.user!;
+    // The second factor is checked here, for THIS decision; the engine only
+    // learns whether it was verified.
+    const mfaVerified = body.mfa_code !== undefined && user.mfa_enabled && (await verifyMfa(user, body.mfa_code));
+    try {
+      const out = await decide(user.tenant_id, String(req.params.id), {
+        userId: user.id, decision: body.decision, reason: body.reason, actionDigest: body.action_digest, mfaVerified,
+      });
+      const verb = out.settled ?? (body.decision === "approve" ? "approval_counted" : "rejected");
+      await log(req, `approval.${verb}`, "approval", out.approval.id, `${out.approval.action_id} ${out.approval.approvals}/${out.approval.required_approvals}`);
+      res.json(out);
+    } catch (error) {
+      if (error instanceof ApprovalError) return res.status(error.status).json({ detail: error.message, code: error.code });
+      throw error;
+    }
   });
 }

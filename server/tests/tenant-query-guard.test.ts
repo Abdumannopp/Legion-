@@ -21,11 +21,11 @@ const TENANT_TABLES = [
   "notification_outbox", "users", "refresh_tokens", "mfa_recovery_codes", "mfa_used_counters", "tenants",
   "attack_campaigns", "integration_connections", "ip_blocks", "payment_beneficiaries", "payment_checks", "tenant_deletions", "usage_counters", "workspace_memberships",
   // Task 10 SOC core
-  "policy_documents", "policy_active", "policy_decisions",
+  "policy_documents", "policy_active", "policy_decisions", "approval_requests", "approval_decisions",
 ];
 
 /** Tables whose rows are ALWAYS reached tenant-first by these functions; must never be read unscoped. */
-const MUST_SCOPE = new Set(["alerts", "assets", "audit_log", "policy_documents", "policy_active", "policy_decisions"]);
+const MUST_SCOPE = new Set(["alerts", "assets", "audit_log", "policy_documents", "policy_active", "policy_decisions", "approval_requests", "approval_decisions"]);
 
 interface Exception { file: string; table: string; match?: RegExp; reason: string }
 

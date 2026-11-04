@@ -2446,7 +2446,10 @@ app.delete("/integrations/:id", requireRole("admin"), async (req: AuthedRequest,
   }
 });
 
-registerSocRoutes(app, { requirePermission, parse, log });
+registerSocRoutes(app, {
+  requirePermission, parse, log, stepUp: stepUpLimiter,
+  verifyMfa: async (user, code) => user.mfa_enabled && (await checkTotp(user, code)) === "ok",
+});
 
 app.use((_req, res) => res.status(404).json({ detail: "Not found" }));
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
