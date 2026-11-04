@@ -625,7 +625,7 @@ as a proposal with `executed: false`.
 Every skill belongs to one of Legion's five agents (`agent` in its definition
 and in discovery; the registry refuses a skill without one). Sentinel
 watches, Hunter hunts, Guardian protects, Oracle explains and prioritises,
-Executor prepares the response. Even Executor's skills only recommend.
+Vanguard prepares the response. Even Vanguard's skills only recommend.
 
 | Skill | Agent | Purpose | Capabilities → permissions the agent must already hold |
 |---|---|---|---|
@@ -636,12 +636,12 @@ Executor prepares the response. Even Executor's skills only recommend.
 | `secret_exposure_check` | Guardian | Credentials, payment card numbers (Luhn-checked) and IBANs (mod-97-checked) that ended up in logs: kind, count, assets, advice. Never the value | `read:security_events` → `alerts:read` |
 | `sensitive_access_watch` | Sentinel | Who opens the data that matters (customers, payroll, contracts, keys, backups): an account opening 10+ distinct sensitive items or reaching them on 3+ machines | `read:security_events` → `alerts:read` |
 | `response_sla_review` | Oracle | Open alerts against response targets per severity (defaults 4 h / 24 h / 3 d / 7 d, adjustable): which are late and by how much, the share on time. Serious alerts are read first so a busy workspace cannot hide an old critical one | `read:security_events` → `alerts:read` |
-| `payment_fraud_review` | Executor | Legion's payment checks: allowed vs held, what still waits for a phone confirmation and for how long, and fraud patterns (repeated attempts, retry after rejection, one requester with several new accounts). Never an account number | `read:payments` → `payments:read` (tier 0) |
+| `payment_fraud_review` | Vanguard | Legion's payment checks: allowed vs held, what still waits for a phone confirmation and for how long, and fraud patterns (repeated attempts, retry after rejection, one requester with several new accounts). Never an account number | `read:payments` → `payments:read` (tier 0) |
 | `triage_priority` | Oracle | The open alerts in the order to handle them (now / today / this week), each score explained; resolved alerts excluded | `read:security_events`, `read:assets` → `alerts:read`, `assets:read` |
-| `containment_candidates` | Executor | Attacking public addresses worth blocking, with evidence; private and documentation addresses listed as not blockable; warns when many addresses attack one host. **Blocks nothing** | `read:security_events` → `alerts:read` |
+| `containment_candidates` | Vanguard | Attacking public addresses worth blocking, with evidence; private and documentation addresses listed as not blockable; warns when many addresses attack one host. **Blocks nothing** | `read:security_events` → `alerts:read` |
 | `threat_detection` | Sentinel | Analyse recent Wazuh alerts: suspicious patterns (brute force, success after failures, multi-stage activity, prompt-injection attempts), related-event groups, a risk level with reasons | `read:security_events` → `alerts:read` |
 | `alert_analysis` | Oracle | One alert in detail: summary, affected asset/user, likely attack type and stage, indicators, related events, investigation steps; optional model narrative | `read:security_events`, `read:assets` → `alerts:read`, `assets:read` |
-| `incident_response` | Executor | Response plan for a suspected or confirmed incident: containment, investigation and recovery steps. **Recommends only** | `read:security_events`, `read:assets` → `alerts:read`, `assets:read` |
+| `incident_response` | Vanguard | Response plan for a suspected or confirmed incident: containment, investigation and recovery steps. **Recommends only** | `read:security_events`, `read:assets` → `alerts:read`, `assets:read` |
 | `threat_intelligence` | Hunter | Classify IPs, domains, URLs, hashes, CVEs and email addresses as `known_malicious` / `suspicious` / `unknown` / `known_safe`, with Legion's own sightings as context | `read:threat_intel`, `read:security_events` → `intel:read`, `alerts:read` |
 | `attack_investigation` | Hunter | Link events into possible attack chains (failed login → login → process → connection → file change) with a timeline, stages, assets and confidence | `read:security_events`, `read:assets` → `alerts:read`, `assets:read` |
 | `vulnerability_analysis` | Guardian | Explain scanner findings: component, CVE, severity (CVSS or scanner), exposure, priority and remediation | `read:vulnerabilities`, `read:assets` → `vulnerabilities:read`, `assets:read` |

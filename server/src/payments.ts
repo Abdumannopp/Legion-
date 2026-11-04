@@ -181,7 +181,7 @@ export async function checkPayment(tenantId: string, input: PaymentCheckInput): 
     const alertId = `PAY-${createHmac("sha256", config.webhookSecret || "legion-payments").update(`${tenantId}:${hash}:${amount}:${currency}:${day}`).digest("hex").slice(0, 16).toUpperCase()}`;
     const who = input.beneficiary.name ? ` (${clip(input.beneficiary.name, 80)})` : "";
     await outbox.insertAlertAndNotify({
-      id: alertId, tenant_id: tenantId, status: "open", agent: "Executor",
+      id: alertId, tenant_id: tenantId, status: "open", agent: "Vanguard",
       severity: reasons.includes("account_under_attack") || reasons.includes("rejected_before") ? "critical" : "high",
       title: clip(`Payment held: ${money(amount, currency)} to ${accountHint(input.beneficiary.account)}${who}`, 300),
       summary: clip(`${reasons.map((r) => REASON_TEXT[r]).join(" ")}${input.requestedBy ? ` Requested by ${clip(input.requestedBy, 120)}.` : ""} ${VERIFY_ADVICE}`, 4000),

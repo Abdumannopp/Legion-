@@ -142,7 +142,7 @@ async function main() {
   await sees(page, "first step: connect a sensor", "Connect a security sensor");
   const t0 = await text(page);
   check("no misleading security score", !/Security score/i.test(t0));
-  check("no internal persona names on the first screen", !/Sentinel|Hunter|Guardian|Executor/.test(t0));
+  check("no internal persona names on the first screen", !/Sentinel|Hunter|Guardian|Vanguard/.test(t0));
   await shot(page, "dashboard-new");
 
   // ---------------------------------------------------------------------------
@@ -346,7 +346,7 @@ async function main() {
 
   console.log("▶ 8b. Legion's five agents: give one of their skills to this agent");
   await page.getByRole("tab", { name: "Skills" }).click();
-  for (const name of ["Sentinel", "Hunter", "Guardian", "Oracle", "Executor"]) await sees(page, `skills are grouped under ${name}`, name);
+  for (const name of ["Sentinel", "Hunter", "Guardian", "Oracle", "Vanguard"]) await sees(page, `skills are grouped under ${name}`, name);
   await page.getByLabel("Use this skill: Triage Priority").check();
   await sees(page, "choosing a skill is saved", "Saved");
   await sees(page, "the agent already holds what the skill reads with", "Ready to use");
@@ -361,7 +361,7 @@ async function main() {
   console.log("▶ 8c. the Legion team page");
   await page.goto(`${WEB}/team`);
   await sees(page, "team page is titled", "Legion team");
-  await sees(page, "Executor only prepares the response", "Prepares the response");
+  await sees(page, "Vanguard only prepares the response", "Prepares the response");
   await sees(page, "a skill is described in words", "Lists the attacking addresses worth blocking");
   await sees(page, "the page says skills never act", "Nothing here blocks, deletes or changes anything");
   await shot(page, "team");

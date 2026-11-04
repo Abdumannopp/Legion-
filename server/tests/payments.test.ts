@@ -60,7 +60,7 @@ describe("a payment to an account never confirmed is held, then allowed once a p
     await check(credA, pay()).expect(200);
     const alerts = (await query("SELECT * FROM alerts WHERE tenant_id = $1 AND source = 'legion-payments'", [tenantA])).rows;
     expect(alerts).toHaveLength(1);
-    expect(alerts[0]).toMatchObject({ agent: "Executor", severity: "high", mitre_technique: "T1657" });
+    expect(alerts[0]).toMatchObject({ agent: "Vanguard", severity: "high", mitre_technique: "T1657" });
     expect(alerts[0].title).toBe("Payment held: 12,500.00 EUR to …3000 (Acme Supplies Ltd)");
   });
 

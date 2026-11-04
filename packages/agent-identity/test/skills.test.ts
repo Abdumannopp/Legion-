@@ -31,9 +31,9 @@ describe("discovery and explicit assignment", () => {
       threat_detection: "Sentinel", account_activity_watch: "Sentinel",
       attack_investigation: "Hunter", threat_intelligence: "Hunter", data_exfiltration_hunt: "Hunter",
       vulnerability_analysis: "Guardian", ai_security_red_team: "Guardian", exposure_review: "Guardian", threat_coverage: "Guardian", secret_exposure_check: "Guardian",
-      sensitive_access_watch: "Sentinel", response_sla_review: "Oracle", payment_fraud_review: "Executor",
+      sensitive_access_watch: "Sentinel", response_sla_review: "Oracle", payment_fraud_review: "Vanguard",
       alert_analysis: "Oracle", security_reporting: "Oracle", triage_priority: "Oracle",
-      incident_response: "Executor", containment_candidates: "Executor",
+      incident_response: "Vanguard", containment_candidates: "Vanguard",
     });
     expect(byName.threat_detection).toMatchObject({ version: "1.0.0", requiredPermissions: ["alerts:read"], capabilities: [{ name: "read:security_events", permission: "alerts:read" }] });
     expect(byName.incident_response.requiredPermissions).toEqual(["alerts:read", "assets:read"]);

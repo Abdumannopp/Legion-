@@ -27,7 +27,7 @@ in substance, the version number rises and administrators are asked again. A sel
 | Rejected before | Someone has already rejected this exact payment. |
 
 A held payment appears in Dashboard → **Defense** → **Payments on hold**, and an
-alert is raised (the Executor agent, MITRE T1657).
+alert is raised (the Vanguard agent, MITRE T1657).
 
 ## What a person does
 

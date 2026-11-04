@@ -76,7 +76,7 @@ export const toMember = (r: any): User => {
 
 const toAlert = (r: any): Alert => ({
   id: r.id, tenant_id: r.tenant_id, title: r.title, severity: r.severity as Severity,
-  agent: r.agent, status: r.status as AlertStatus, summary: r.summary,
+  agent: r.agent === "Executor" ? "Vanguard" : r.agent, status: r.status as AlertStatus, summary: r.summary,
   confidence: Number(r.confidence), created_at: isoRequired(r.created_at),
   ai_explanation: r.ai_explanation, explained_at: iso(r.explained_at),
   ai_explanation_locale: isLocale(r.ai_explanation_locale) ? r.ai_explanation_locale : null,

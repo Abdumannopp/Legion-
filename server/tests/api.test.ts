@@ -161,6 +161,18 @@ describe("tenant isolation", () => {
   });
 });
 
+describe("the response agent was renamed from Executor to Vanguard", () => {
+  it("accepts the new name, still accepts the old one, and shows stored old alerts under the new one", async () => {
+    const make = (id: string, agent: string) => request(app).post("/alerts").set(...asUser(analystA))
+      .send({ id, title: "t", severity: "low", agent, summary: "s" });
+    expect((await make("RN-1", "Vanguard").expect(201)).body.agent).toBe("Vanguard");
+    expect((await make("RN-2", "Executor").expect(201)).body.agent).toBe("Vanguard");      // an older sensor or script
+    await make("RN-3", "Overlord").expect(422);
+    await query("UPDATE alerts SET agent = 'Executor' WHERE tenant_id = $1 AND id = 'RN-1'", [tenantA]);   // a row from before the rename
+    expect((await store.getAlert(tenantA, "RN-1"))!.agent).toBe("Vanguard");
+  });
+});
+
 describe("role-based access control", () => {
   it("blocks a viewer from creating alerts", async () => {
     await request(app)

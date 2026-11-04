@@ -1344,7 +1344,7 @@ app.get("/alerts/sync", auth, async (req: AuthedRequest, res) => {
 });
 
 app.post("/alerts", requireRole("analyst"), async (req: AuthedRequest, res) => {
-  const body = parse(z.object({ id: z.string().max(100).optional(), title: z.string().min(1).max(300), severity: z.enum(["critical", "high", "medium", "low"]), agent: z.enum(["Sentinel", "Hunter", "Guardian", "Oracle", "Executor"]), summary: z.string().min(1).max(4000), confidence: z.number().min(0).max(100).default(0), source_ip: z.string().nullable().optional(), target: z.string().nullable().optional(), mitre_technique: z.string().nullable().optional() }), req.body, res); if (!body) return;
+  const body = parse(z.object({ id: z.string().max(100).optional(), title: z.string().min(1).max(300), severity: z.enum(["critical", "high", "medium", "low"]), agent: z.enum(["Sentinel", "Hunter", "Guardian", "Oracle", "Vanguard", "Executor"]).transform((a) => (a === "Executor" ? "Vanguard" : a)), summary: z.string().min(1).max(4000), confidence: z.number().min(0).max(100).default(0), source_ip: z.string().nullable().optional(), target: z.string().nullable().optional(), mitre_technique: z.string().nullable().optional() }), req.body, res); if (!body) return;
   const id = body.id || `LGN-${randomBytes(8).toString("hex").toUpperCase()}`;
   const alert = await outbox.insertAlertAndNotify({
     ...body, id, tenant_id: req.user!.tenant_id, status: "open",

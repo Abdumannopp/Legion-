@@ -36,11 +36,11 @@ export function capabilityPermission(c: SkillCapability): Permission {
 
 /**
  * Legion's five agents. Every skill belongs to the agent whose job it serves.
- * Skills only read and recommend, so even Executor's skills propose actions:
+ * Skills only read and recommend, so even Vanguard's skills propose actions:
  * what Legion actually changes (a block, a credential reset) goes through the
  * normal guarded routes and a person's approval.
  */
-export const LEGION_AGENTS = ["Sentinel", "Hunter", "Guardian", "Oracle", "Executor"] as const;
+export const LEGION_AGENTS = ["Sentinel", "Hunter", "Guardian", "Oracle", "Vanguard"] as const;
 export type LegionAgent = (typeof LEGION_AGENTS)[number];
 
 /** Highest permission tier a skill capability may map to. Tier 2 (state changes) is never available to a skill. */

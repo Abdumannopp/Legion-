@@ -39,7 +39,7 @@ export interface Alert {
   id: string;
   title: string;
   severity: "critical" | "high" | "medium" | "low";
-  agent: "Sentinel" | "Hunter" | "Guardian" | "Oracle" | "Executor";
+  agent: "Sentinel" | "Hunter" | "Guardian" | "Oracle" | "Vanguard";
   status: "open" | "investigating" | "resolved";
   summary: string;
   confidence: number;
@@ -1025,7 +1025,7 @@ export function updateAutoResponse(patch: Partial<Omit<AutoResponseSettings, "ac
 
 
 // ---- Legion's five agents and their skills ---------------------------------
-export type LegionAgentName = "Sentinel" | "Hunter" | "Guardian" | "Oracle" | "Executor";
+export type LegionAgentName = "Sentinel" | "Hunter" | "Guardian" | "Oracle" | "Vanguard";
 export interface SkillInfo {
   name: string;
   agent: LegionAgentName;

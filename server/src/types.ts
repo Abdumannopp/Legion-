@@ -4,7 +4,8 @@ import type { AddonId, PlanId } from "./plans.js";
 export type Role = "admin" | "analyst" | "viewer";
 export type Severity = "critical" | "high" | "medium" | "low";
 export type AlertStatus = "open" | "investigating" | "resolved";
-export type Agent = "Sentinel" | "Hunter" | "Guardian" | "Oracle" | "Executor";
+/** "Vanguard" was called "Executor" until 2026-11; stored alerts may still say so (store.ts maps it on read). */
+export type Agent = "Sentinel" | "Hunter" | "Guardian" | "Oracle" | "Vanguard";
 
 /** `invited` users have no usable password yet and cannot authenticate.
  *  `disabled` users are kept for audit-log integrity but are locked out. */

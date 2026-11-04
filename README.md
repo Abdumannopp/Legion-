@@ -8,7 +8,7 @@ Legion runs on your own server. Your security data stays in your network unless 
 - Links separate events into one attack ("campaign"): brute force, account takeover, ransomware, mailbox takeover, phishing, supply-chain installs, slow intrusions, AI-driven attacks
 - Can block an attacker's IP automatically through Wazuh active response (off by default, with an allowlist, limits and expiry)
 - **Payment check:** your payment software asks Legion before paying, and a payment that looks like fraud is held until a person confirms it by phone
-- Five AI agents (Sentinel, Hunter, Guardian, Oracle, Executor) with read-only skills you can also give to your own AI agents
+- Five AI agents (Sentinel, Hunter, Guardian, Oracle, Vanguard) with read-only skills you can also give to your own AI agents
 - Security controls for AI agents: identity, permissions, prompt-injection detection and an audit trail for every tool call
 - Teams, roles (admin / analyst / viewer), two-factor sign-in (TOTP) and a full audit log
 - Self-hosted or run as a multi-tenant SaaS
