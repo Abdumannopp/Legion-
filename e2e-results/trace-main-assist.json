@@ -1,0 +1,143 @@
+{
+  "alert": {
+    "id": "SEC-B8E746222DFC3B2D",
+    "severity": "critical",
+    "title": "Suspicious command execution after login"
+  },
+  "investigation": {
+    "risk": "critical",
+    "conflict": {
+      "detected": true,
+      "reasons": [
+        "oracle=critical hunter=high sentinel=high"
+      ]
+    },
+    "sentinel": {
+      "patterns": [
+        "privilege_use",
+        "mitre:T1059"
+      ],
+      "score": 100
+    },
+    "hunter": {
+      "chains": 1,
+      "stages": [
+        "reconnaissance",
+        "credential_access",
+        "execution"
+      ],
+      "events": 7
+    },
+    "guardian": {
+      "findings": 1,
+      "exposure": "\"unknown\""
+    },
+    "oracle": {
+      "severity": "critical",
+      "summary": "critical alert \"Suspicious command execution after login\" on asset web-01 at 2026-11-04T23:33:53.529Z, source 45.155.205.12, user www-data. Likely activity: Malicious execution (process, script or malware)."
+    },
+    "candidate": {
+      "ip": "45.155.205.12",
+      "score": 100,
+      "reasons": [
+        "7 events from this public address against 1 asset.",
+        "It moved through 4 attack stages (reconnaissance, credential_access, execution, privilege_escalation).",
+        "Sensor severity critical.",
+        "MITRE T1059 (Command and scripting interpreter)."
+      ]
+    }
+  },
+  "steps": [
+    {
+      "n": 1,
+      "ms": 0.6,
+      "agent": "Legion",
+      "step": "wazuh event stored as alert",
+      "ok": true,
+      "summary": "SEC-B8E746222DFC3B2D [critical] Suspicious command execution after login"
+    },
+    {
+      "n": 2,
+      "ms": 122.3,
+      "agent": "Sentinel",
+      "step": "threat_detection",
+      "ok": true,
+      "summary": "1 finding(s); top patterns [\"privilege_use\",\"mitre:T1059\"]"
+    },
+    {
+      "n": 3,
+      "ms": 70.4,
+      "agent": "Hunter",
+      "step": "attack_investigation",
+      "ok": true,
+      "summary": "7 event(s), 1 chain(s)"
+    },
+    {
+      "n": 4,
+      "ms": 69.6,
+      "agent": "Guardian",
+      "step": "vulnerability_analysis",
+      "ok": true,
+      "summary": "1 vulnerability finding(s); evidence findings"
+    },
+    {
+      "n": 5,
+      "ms": 73.9,
+      "agent": "Guardian",
+      "step": "exposure_review",
+      "ok": true,
+      "summary": "1 asset(s) ranked"
+    },
+    {
+      "n": 6,
+      "ms": 69.8,
+      "agent": "Oracle",
+      "step": "alert_analysis",
+      "ok": true,
+      "summary": "severity critical; critical alert \"Suspicious command execution after login\" on asset web"
+    },
+    {
+      "n": 7,
+      "ms": 50.4,
+      "agent": "Vanguard",
+      "step": "containment_candidates",
+      "ok": true,
+      "summary": "1 candidate(s); cannot-block 0"
+    },
+    {
+      "n": 8,
+      "ms": 15.3,
+      "agent": "Vanguard",
+      "step": "propose ip.block",
+      "ok": true,
+      "summary": "awaiting_approval (policy REQUIRE_APPROVAL, simulation)"
+    },
+    {
+      "n": 9,
+      "ms": 51.7,
+      "agent": "Human",
+      "step": "approve (digest-bound)",
+      "ok": true,
+      "summary": "approved by admin@a.io; action now simulated"
+    },
+    {
+      "n": 10,
+      "ms": 3.9,
+      "agent": "Legion",
+      "step": "verify result",
+      "ok": true,
+      "summary": "status simulated; real blocks 0; transitions awaiting_approval>queued>running>simulated; audit chain valid (7)"
+    }
+  ],
+  "totalMs": 551.1,
+  "audit": [
+    "policy.activated",
+    "approval.requested",
+    "action.awaiting_approval",
+    "approval.approve",
+    "action.queued",
+    "action.running",
+    "action.simulated"
+  ],
+  "agentAuditRows": 24
+}

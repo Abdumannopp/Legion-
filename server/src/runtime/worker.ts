@@ -27,7 +27,8 @@ const HANDLERS: Record<JobKind, Handler> = {
     const { action_request_id } = z.strictObject({ action_request_id: uuid }).parse(job.payload);
     if (await isPaused(job.tenant_id)) return { defer: PAUSE_RECHECK_SECONDS };
     const before = await getAction(job.tenant_id, action_request_id);
-    if (!before || before.status !== "queued") return { ok: true }; // already handled (or cancelled)
+    // Already handled (or cancelled) → nothing to do. A `running` one is an abandoned attempt: runQueued reclaims it once stale.
+    if (!before || (before.status !== "queued" && before.status !== "running")) return { ok: true };
     await runQueued(job.tenant_id, action_request_id);
     return { ok: true };
   },

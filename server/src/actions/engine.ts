@@ -207,16 +207,22 @@ export async function syncWithApproval(tenantId: string, actionId: string, by: A
  * Simulates a queued action, at most once: the queued → running move is a
  * compare-and-set, so concurrent callers cannot both run it.
  */
+/** A `running` action untouched for this long was abandoned by a worker that died. */
+export const RUNNING_STALE_SECONDS = 300;
+
 export async function runQueued(tenantId: string, actionId: string): Promise<ActionRequest | null> {
   const system: ActorRef = { kind: "system", component: "action_engine" };
   const claimed = await transaction(async (client) => {
     if (await isPaused(tenantId, client)) return null;
     const r = (await client.query<Row>(
       `UPDATE action_requests SET status = 'running', attempts = attempts + 1, updated_at = now()
-        WHERE tenant_id = $1 AND id = $2 AND status = 'queued' AND execution_mode = 'simulation' RETURNING ${COLUMNS}`,
-      [tenantId, actionId],
+        WHERE tenant_id = $1 AND id = $2 AND execution_mode = 'simulation'
+          AND (status = 'queued' OR (status = 'running' AND updated_at < now() - make_interval(secs => $3)))
+      RETURNING ${COLUMNS}`,
+      [tenantId, actionId, RUNNING_STALE_SECONDS],
     )).rows[0];
-    if (r) await event(client, tenantId, actionId, "queued", "running", system);
+    // A simulation only reads, so re-running one whose worker died mid-way is safe.
+    if (r) await event(client, tenantId, actionId, r.attempts > 1 ? "running" : "queued", "running", system, r.attempts > 1 ? "recovered after a worker stopped" : undefined);
     return r ?? null;
   });
   if (!claimed) return getAction(tenantId, actionId);
