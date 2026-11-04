@@ -57,6 +57,7 @@ import { createAgentLayer } from "./agents.js";
 import { registerSocRoutes } from "./soc-routes.js";
 import { shadowEvaluate } from "./policy/shadow.js";
 import { startRuntime, stopRuntime } from "./runtime/worker.js";
+import { pruneExpiredMemory } from "./memory/store.js";
 import type { AccessState, Alert, Role, Severity, Subscription, User } from "./types.js";
 
 export const app = express();
@@ -2650,6 +2651,7 @@ if (process.env.NODE_ENV !== "test") {
       if (removed > 0) console.info(`Pruned ${removed} expired session token(s).`);
       // Shared counters older than a day are no longer consulted.
       await query("DELETE FROM usage_counters WHERE window_start < now() - interval '1 day'");
+      await pruneExpiredMemory();
       // Resolved alerts older than the plan keeps them (hosted only).
       const aged = await pruneAlertsByPlan();
       if (aged > 0) console.info(`Removed ${aged} resolved alert(s) older than their plan's retention.`);

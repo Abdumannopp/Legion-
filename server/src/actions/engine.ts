@@ -27,6 +27,7 @@ import { getActivePolicy, recordDecision } from "../policy/store.js";
 import type { ActorRef, Origin } from "../policy/types.js";
 import { simulate } from "./simulate.js";
 import { enqueueJob } from "../runtime/queue.js";
+import { recordSignal, type Signal } from "../memory/learning.js";
 
 export type ActionStatus = "denied" | "recorded" | "awaiting_approval" | "rejected" | "expired" | "cancelled" | "queued" | "running" | "simulated" | "failed";
 
@@ -190,6 +191,11 @@ export async function syncWithApproval(tenantId: string, actionId: string, by: A
     )).rows[0]!;
     await event(client, tenantId, actionId, "awaiting_approval", next, by, `approval ${approval?.status ?? "missing"}`);
     if (next === "queued") await enqueueJob(client, tenantId, "action.run", { action_request_id: actionId }, `action:${actionId}`);
+    // Learning: how people decided on a machine's proposal (a person's own requests are not counted).
+    if (row.actor.kind !== "human") {
+      const signal: Signal = approval?.status === "approved" ? "approved" : next === "rejected" ? "rejected" : next === "cancelled" ? "cancelled" : "expired";
+      await recordSignal(client, tenantId, row.action_id, signal);
+    }
     return toAction(updated);
   });
 }
@@ -237,6 +243,7 @@ export async function cancelAction(tenantId: string, actionId: string, by: Actor
       `UPDATE action_requests SET status = 'cancelled', updated_at = now() WHERE tenant_id = $1 AND id = $2 RETURNING ${COLUMNS}`, [tenantId, actionId],
     )).rows[0]!;
     await event(client, tenantId, actionId, row.status, "cancelled", by);
+    if (row.actor.kind !== "human") await recordSignal(client, tenantId, row.action_id, "cancelled");
     return toAction(updated);
   });
 }

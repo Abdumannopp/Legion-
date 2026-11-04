@@ -21,11 +21,11 @@ const TENANT_TABLES = [
   "notification_outbox", "users", "refresh_tokens", "mfa_recovery_codes", "mfa_used_counters", "tenants",
   "attack_campaigns", "integration_connections", "ip_blocks", "payment_beneficiaries", "payment_checks", "tenant_deletions", "usage_counters", "workspace_memberships",
   // Task 10 SOC core
-  "policy_documents", "policy_active", "policy_decisions", "approval_requests", "approval_decisions", "action_requests", "action_events", "soc_controls", "workflow_runs", "soc_jobs",
+  "policy_documents", "policy_active", "policy_decisions", "approval_requests", "approval_decisions", "action_requests", "action_events", "soc_controls", "workflow_runs", "soc_jobs", "soc_memory", "learning_signals",
 ];
 
 /** Tables whose rows are ALWAYS reached tenant-first by these functions; must never be read unscoped. */
-const MUST_SCOPE = new Set(["alerts", "assets", "audit_log", "policy_documents", "policy_active", "policy_decisions", "approval_requests", "approval_decisions", "action_requests", "action_events", "soc_controls", "workflow_runs"]);
+const MUST_SCOPE = new Set(["alerts", "assets", "audit_log", "policy_documents", "policy_active", "policy_decisions", "approval_requests", "approval_decisions", "action_requests", "action_events", "soc_controls", "workflow_runs", "learning_signals"]);
 
 interface Exception { file: string; table: string; match?: RegExp; reason: string }
 
@@ -73,6 +73,8 @@ const REVIEWED: Exception[] = [
   // --- Task 10 Background Runtime: the worker serves every workspace; each claimed row carries its tenant_id
   { file: "runtime/queue.ts", table: "soc_jobs", match: /^UPDATE soc_jobs SET status = 'dead', lease_owner = NULL, lease_until = NULL, finished_at = now\(\), updated_at = now\(\), last_error = 'worker stopped during the final attempt; outcome unknown' WHERE status = 'running' AND lease_until < now\(\) AND attempts >= max_attempts$/i,
     reason: "deadLetterAbandoned(): marks jobs whose worker died on their last attempt as dead, in every workspace; returns nothing" },
+  { file: "memory/store.ts", table: "soc_memory", match: /^DELETE FROM soc_memory WHERE expires_at <= now\(\)$/i,
+    reason: "pruneExpiredMemory(): retention sweep deleting expired entries in every workspace; returns a count only" },
   // --- found when the scan became recursive / the table list complete (Task 10, B-01)
   { file: "ai-policy.ts", table: "usage_counters", match: /^DELETE FROM usage_counters WHERE meter IN \('ai\.requests', 'ai\.requests\.day'\)$/i,
     reason: "resetAiQuota(): test/maintenance reset of the AI rate-limit meters; counters only, no tenant data is read" },

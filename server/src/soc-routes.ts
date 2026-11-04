@@ -20,6 +20,8 @@ import {
 import { getRun, listRuns, runWorkflow, workflowDefinitions, WorkflowError } from "./orchestrator/engine.js";
 import { listJobs, runtimeStatus } from "./runtime/queue.js";
 import { actionConnectors, connectedFor, connectorsFor } from "./integrations/action-connectors.js";
+import { addMemory, forget, listMemory, MAX_TTL_DAYS, MEMORY_KINDS, MemoryError, SUBJECT_TYPES, type SubjectType } from "./memory/store.js";
+import { learningSummary } from "./memory/learning.js";
 
 type AuthedRequest = Request & { user?: User };
 type Middleware = (req: AuthedRequest, res: Response, next: NextFunction) => Promise<void>;
@@ -238,6 +240,43 @@ export function registerSocRoutes(app: Express, { requirePermission, parse, log,
       connected: await connectedFor(tenantId, a.id),
     })));
     res.json({ connectors: actionConnectors(), actions, live_execution: false });
+  });
+
+  // --- Memory and Learning (foundation) ----------------------------------------
+  // People write memory (source is always the session's person here); models cannot.
+
+  app.get("/memory", requirePermission("memory:read"), async (req: AuthedRequest, res) => {
+    const type = req.query.subject_type;
+    if (type !== undefined && (typeof type !== "string" || !(SUBJECT_TYPES as readonly string[]).includes(type))) return res.status(422).json({ detail: "Unknown subject_type" });
+    const key = typeof req.query.subject_key === "string" ? req.query.subject_key.slice(0, 200) : undefined;
+    res.json({ memory: await listMemory(req.user!.tenant_id, { subject_type: type as SubjectType | undefined, subject_key: key, limit: limitOf(req.query.limit) }) });
+  });
+
+  app.post("/memory", requirePermission("memory:write"), async (req: AuthedRequest, res) => {
+    const body = parse(z.strictObject({
+      kind: z.enum(MEMORY_KINDS), subject_type: z.enum(SUBJECT_TYPES), subject_key: z.string().min(1).max(200),
+      content: z.string().min(1).max(2000), ttl_days: z.number().int().min(1).max(MAX_TTL_DAYS).default(90),
+    }), req.body, res); if (!body) return;
+    try {
+      const m = await addMemory(req.user!.tenant_id, { ...body, source: "human", created_by: req.user!.id });
+      await log(req, "memory.added", "memory", m.id, `${m.kind} ${m.subject_type}`);
+      res.status(201).json({ memory: m });
+    } catch (error) {
+      if (error instanceof MemoryError) return res.status(error.status).json({ detail: error.message });
+      throw error;
+    }
+  });
+
+  app.delete("/memory/:id", requirePermission("memory:write"), async (req: AuthedRequest, res) => {
+    const r = await forget(req.user!.tenant_id, String(req.params.id), { user_id: req.user!.id, role: req.user!.role });
+    if (r === "not_found") return res.status(404).json({ detail: "No such memory entry" });
+    if (r === "forbidden") return res.status(403).json({ detail: "Only its author or an administrator can remove it" });
+    await log(req, "memory.removed", "memory", String(req.params.id));
+    res.json({ deleted: true });
+  });
+
+  app.get("/learning", requirePermission("memory:read"), async (req: AuthedRequest, res) => {
+    res.json({ ...(await learningSummary(req.user!.tenant_id)), automatic_changes: false });
   });
 
   // --- Background Runtime -----------------------------------------------------

@@ -25,6 +25,7 @@ import * as store from "../store.js";
 import type { Agent, Alert } from "../types.js";
 import { ActionError, proposeAction, runQueued, type ActionRequest } from "../actions/engine.js";
 import type { ActorRef } from "../policy/types.js";
+import { recall, type Memory } from "../memory/store.js";
 
 export const MAX_STEPS = 10;
 
@@ -33,7 +34,7 @@ interface StepDefinition {
   agent: Agent;
   action_id: string;
   /** The step's input from the alert, or null when the step does not apply. */
-  input: (alert: Alert, previous: StepResult[]) => Record<string, unknown> | null;
+  input: (alert: Alert, previous: StepResult[], memory: Memory[]) => Record<string, unknown> | null | { skip: string };
 }
 
 export interface WorkflowDefinition { name: string; summary: string; trigger: "alert"; steps: readonly StepDefinition[] }
@@ -57,9 +58,12 @@ const WORKFLOWS: readonly WorkflowDefinition[] = [
       { name: "triage", agent: "Oracle", action_id: "alert.triage", input: (a) => ({ alert_id: a.id }) },
       {
         name: "contain_source", agent: "Vanguard", action_id: "ip.block",
-        input: (a) => (a.source_ip && isPublicAddress(a.source_ip) && (a.severity === "high" || a.severity === "critical")
-          ? { ip: a.source_ip, minutes: 60, reason: `Prepared by Vanguard for alert ${a.id}` }
-          : null),
+        input: (a, _prev, memory) => {
+          if (!(a.source_ip && isPublicAddress(a.source_ip) && (a.severity === "high" || a.severity === "critical"))) return null;
+          // A person said this address is harmless: do not even propose blocking it.
+          if (memory.some((m) => m.subject_type === "ip" && (m.kind === "false_positive" || m.kind === "known_benign"))) return { skip: "a person marked this address as harmless (memory)" };
+          return { ip: a.source_ip, minutes: 60, reason: `Prepared by Vanguard for alert ${a.id}` };
+        },
       },
       {
         name: "notify", agent: "Sentinel", action_id: "notify.admins",
@@ -112,13 +116,16 @@ export async function runWorkflow(tenantId: string, name: string, alertId: strin
   }
 
   const results: StepResult[] = [];
+  const memory = await recall(tenantId, [{ type: "ip", key: alert.source_ip }, { type: "host", key: alert.target }]);
   let status: "completed" | "failed" = "completed";
   let error: string | null = null;
   try {
     for (const step of wf.steps) {
-      const input = step.input(alert, results);
+      const derived = step.input(alert, results, memory);
       const base = { name: step.name, agent: step.agent, action_id: step.action_id };
-      if (!input) { results.push({ ...base, outcome: "skipped", action_request_id: null, action_status: null, note: "does not apply to this alert" }); continue; }
+      if (!derived) { results.push({ ...base, outcome: "skipped", action_request_id: null, action_status: null, note: "does not apply to this alert" }); continue; }
+      if ("skip" in derived && typeof derived.skip === "string") { results.push({ ...base, outcome: "skipped", action_request_id: null, action_status: null, note: derived.skip }); continue; }
+      const input = derived as Record<string, unknown>;
       try {
         const { action } = await proposeAction(tenantId, {
           action_id: step.action_id, input, mode,
