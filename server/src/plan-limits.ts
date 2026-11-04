@@ -174,7 +174,7 @@ export async function adminSeatFree(tenantId: string, excludeUserId?: string): P
 export async function pruneAlertsByPlan(now = new Date()): Promise<number> {
   if (config.deploymentMode === "self-hosted") return 0;
   let removed = 0;
-  const tenants = await query<{ id: string }>("SELECT id FROM tenants");
+  const tenants = await query<{ id: string }>("SELECT id FROM tenants WHERE NOT legal_hold");
   for (const t of tenants.rows) {
     const plan = await resolvePlan(t.id);
     if (!plan.retentionDays) continue;

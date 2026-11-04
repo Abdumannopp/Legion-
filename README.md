@@ -77,6 +77,7 @@ Full guide for customers: [INSTALL.md](INSTALL.md).
 | AI providers and AI safety | [AI-PROVIDERS.md](AI-PROVIDERS.md) |
 | Proxies, origins, cookies and headers | [EDGE-SECURITY.md](EDGE-SECURITY.md) |
 | How organisations are kept apart (multi-tenant) | [TENANT-ISOLATION.md](TENANT-ISOLATION.md) |
+| Data retention, export and deletion | [DATA-RETENTION.md](DATA-RETENTION.md) · [LEGAL-DECISIONS.md](LEGAL-DECISIONS.md) |
 | Backup and disaster recovery | [RECOVERY.md](RECOVERY.md) · [BACKUP.md](BACKUP.md) |
 | Architecture decisions | [ADR.md](ADR.md) |
 | Questions for a lawyer before selling Legion | [LEGAL-QUESTIONS.md](LEGAL-QUESTIONS.md) |

@@ -68,6 +68,8 @@ const REQUIRED_SECURITY_TESTS = {
     "migrations", "access-log", "audit-append-only", "mock-provider", "deploy-supervision", "retention",
     // plans: prices, limits and what a plan refuses
     "plans", "plan-limits",
+    // data lifecycle: retention, export, legal hold, erasure with proof
+    "data-lifecycle", "tenant-deletion",
   ].map((n) => `tests/${n}.test.ts`),
   "packages/agent-identity": [
     "untrusted-content", "injection-regression", "suspension-immediate", "killswitch", "prompt-guard", "firewall",

@@ -127,6 +127,13 @@ CREATE INDEX IF NOT EXISTS principal_audit_resource
 CREATE OR REPLACE FUNCTION principal_audit_log_append_only() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
+  -- A whole workspace may be erased (offboarding, a deletion request): its
+  -- chain is dropped as a unit, so no integrity is lost. Only DELETE, only when
+  -- the transaction says so by itself (legion.audit_erasure, set by the
+  -- deletion tool). Rewriting a row (UPDATE) and TRUNCATE are never allowed.
+  IF TG_OP = 'DELETE' AND coalesce(current_setting('legion.audit_erasure', true), '') = 'on' THEN
+    RETURN OLD;
+  END IF;
   RAISE EXCEPTION 'principal_audit_log is append-only (% refused)', TG_OP;
 END $$;
 DROP TRIGGER IF EXISTS principal_audit_log_no_update ON principal_audit_log;

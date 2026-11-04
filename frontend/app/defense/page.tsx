@@ -30,6 +30,7 @@ export default function DefensePage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [settings, setSettings] = useState<AutoResponseSettings | null>(null);
   const [draft, setDraft] = useState<AutoResponseSettings | null>(null);
+  const [agreed, setAgreed] = useState(false);
   const [campaigns, setCampaigns] = useState<AttackCampaign[]>([]);
   const [blocks, setBlocks] = useState<IpBlock[]>([]);
   const [held, setHeld] = useState<PaymentCheck[]>([]);
@@ -74,7 +75,9 @@ export default function DefensePage() {
     if (!draft) return;
     setSaving(true); setError(null); setSaved(false);
     try {
-      const next = await updateAutoResponse(draft);
+      const { acknowledged: _known, ...rest } = draft; void _known;
+      const next = await updateAutoResponse(agreed ? { ...rest, acknowledge: true } : rest);
+      setAgreed(false);
       setSettings(next); setDraft(next); setSaved(true);
     } catch (err) { setError(err); } finally { setSaving(false); }
   }
@@ -106,6 +109,7 @@ export default function DefensePage() {
     } catch (err) { setError(err); }
   }
 
+  const needsAck = !!draft && !!settings && draft.mode === "auto" && !settings.acknowledged;
   const changed = draft && settings && (draft.mode !== settings.mode || draft.minutes !== settings.minutes || draft.allowlist !== settings.allowlist);
 
   return (
@@ -157,9 +161,18 @@ export default function DefensePage() {
                         <p className="text-ink-faint text-[11px] mt-1 leading-relaxed">{d.auto.allowlistHelp}</p>
                       </div>
                     </div>
+                    {needsAck && isAdmin && (
+                      <div className="border border-line rounded-lg p-3 text-xs text-ink-muted leading-relaxed space-y-2">
+                        <p>{d.auto.ackNotice}</p>
+                        <label className="flex items-start gap-2 text-ink cursor-pointer">
+                          <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} className="mt-0.5 accent-brand" />
+                          <span>{d.auto.ackLabel}</span>
+                        </label>
+                      </div>
+                    )}
                     <div className="flex flex-wrap items-center gap-3">
                       {isAdmin ? (
-                        <button onClick={save} disabled={!changed || saving} className="flex items-center gap-2 bg-brand hover:bg-brand-hover disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg">
+                        <button onClick={save} disabled={!changed || saving || (needsAck && !agreed)} className="flex items-center gap-2 bg-brand hover:bg-brand-hover disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg">
                           {saving && <Loader2 size={14} className="animate-spin" />}{d.auto.save}
                         </button>
                       ) : (

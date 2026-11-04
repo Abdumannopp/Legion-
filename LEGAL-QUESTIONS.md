@@ -89,7 +89,7 @@ first enterprise or EU customer · **C** = when convenient.
 |---|---|---|---|
 | 9 | Confirm our role: are we a **processor** for customer log data and a **controller** for our own users' account data? Are Paddle and the customer independent controllers of what they hold? | Decides which obligations apply and what the privacy text must say. | A |
 | 10 | Do we need a **data processing agreement** (DPA) for customers? If yes, who drafts it and is it accepted in the sign-up flow or signed separately for Enterprise? | Business customers will ask for it first. Today there is none. | A |
-| 11 | **Sub-processors.** The privacy page lists hosting, Paddle and an AI provider. It does not name the email provider or Cloudflare. Must each be listed by name? Do customers get notice and a right to object when we add one? | Probably an omission today. | A |
+| 11 | **Sub-processors.** The privacy page lists Paddle, the hosting provider, an email delivery provider and an AI provider, by category and not by name (Cloudflare was missing and has been added). Must each be listed by name? Do customers get notice and a right to object when we add one? | Names make the list checkable by the customer. | A |
 | 12 | International transfers: the AI provider, email provider and Paddle may be outside the customer's country. What transfer mechanism and wording do we need? | Needed before EU / UK customers. | B |
 | 13 | Do we need an EU/UK **representative**, a **data protection officer**, or registrations, given where we are established and who we sell to? | Obligations can attach to selling to EU residents even without an office there. | B |
 

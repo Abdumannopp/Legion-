@@ -193,7 +193,7 @@ describe("automatic blocking", () => {
 
   it("is OFF by default: the campaign is reported, nothing is blocked", async () => {
     expect((await request(app).get("/security/auto-response").set("Authorization", bearer(analystA)).expect(200)).body)
-      .toEqual({ mode: "off", minutes: 60, allowlist: "" });
+      .toEqual({ mode: "off", minutes: 60, allowlist: "", acknowledged: false });
     await attack();
     expect(await campaigns(tenantA)).toHaveLength(1);
     expect(await activeBlocks(tenantA)).toHaveLength(0);
@@ -201,7 +201,7 @@ describe("automatic blocking", () => {
   });
 
   it("when ON, blocks the attacking public address for the set time, audited, and the manager gets it", async () => {
-    await setAuto({ mode: "auto", minutes: 30 }).expect(200);
+    await setAuto({ acknowledge: true, mode: "auto", minutes: 30 }).expect(200);
     await attack();
     const [b] = await activeBlocks(tenantA);
     expect(b).toMatchObject({ ip: ATTACKER, created_by: null });
@@ -218,7 +218,7 @@ describe("automatic blocking", () => {
   });
 
   it("never blocks a private address, an allowlisted one, or for a swarm (the subject is your host)", async () => {
-    await setAuto({ mode: "auto", allowlist: `${OTHER}, 185.0.0.0/16` }).expect(200);
+    await setAuto({ acknowledge: true, mode: "auto", allowlist: `${OTHER}, 185.0.0.0/16` }).expect(200);
     await attack("10.20.30.40");
     await attack(OTHER);
     await attack("185.0.4.4");
@@ -228,7 +228,7 @@ describe("automatic blocking", () => {
   });
 
   it("stops after its hourly limit, so a flood of fake campaigns cannot block the internet", async () => {
-    await setAuto({ mode: "auto" }).expect(200);
+    await setAuto({ acknowledge: true, mode: "auto" }).expect(200);
     for (let i = 0; i < AUTO_PER_HOUR; i++) {
       await query("INSERT INTO ip_blocks (tenant_id, id, ip, reason, expires_at) VALUES ($1, $2, $3, 'earlier', now() + interval '1 hour')",
         [tenantA, randomUUID(), `77.88.${Math.floor(i / 250)}.${(i % 250) + 1}`]);
@@ -426,7 +426,7 @@ describe("the seven most dangerous attack types, as they reach Legion", () => {
   });
 
   it("automatic blocking never acts on these: they are about hosts and accounts, not one attacking address", async () => {
-    await setAuto({ mode: "auto" }).expect(200);
+    await setAuto({ acknowledge: true, mode: "auto" }).expect(200);
     await send(credA, event({ ip: ATTACKER, host: "fs-03", mitre: [], log: "vssadmin.exe delete shadows /all" }));
     expect((await campaigns(tenantA)).map((c) => c.rule)).toEqual(["ransomware"]);
     expect(await activeBlocks(tenantA)).toEqual([]);
@@ -529,7 +529,7 @@ describe("stopping unauthorized access", () => {
   });
 
   it("with automatic response on, both are STOPPED: the attacking address is blocked and the manager is told", async () => {
-    await setAuto({ mode: "auto" }).expect(200);
+    await setAuto({ acknowledge: true, mode: "auto" }).expect(200);
     for (let i = 0; i < 3; i++) await send(credA, login(false, "dana"));
     await send(credA, login(true, "dana"));
     const blocks = await activeBlocks(tenantA);
@@ -540,7 +540,7 @@ describe("stopping unauthorized access", () => {
   });
 
   it("the same account broken into again from ANOTHER address: that address is blocked too (the campaign already exists)", async () => {
-    await setAuto({ mode: "auto" }).expect(200);
+    await setAuto({ acknowledge: true, mode: "auto" }).expect(200);
     for (let i = 0; i < 3; i++) await send(credA, login(false, "dana"));
     await send(credA, login(true, "dana"));
     for (let i = 0; i < 3; i++) await send(credA, login(false, "dana", OTHER));
@@ -563,9 +563,33 @@ describe("stopping unauthorized access", () => {
   });
 
   it("from a private address it is reported, never blocked (it could be your own office)", async () => {
-    await setAuto({ mode: "auto" }).expect(200);
+    await setAuto({ acknowledge: true, mode: "auto" }).expect(200);
     for (let i = 0; i < 10; i++) await send(credA, login(false, "root", "10.0.0.7"));
     expect(await rulesOf()).toEqual(["credential_attack"]);
     expect(await activeBlocks(tenantA)).toEqual([]);
+  });
+});
+
+describe("written acknowledgement before automatic blocking", () => {
+  it("refuses auto mode until the notice is acknowledged, records it once, and re-asks on a new notice version", async () => {
+    const plain = () => request(app).patch("/security/auto-response").set("Authorization", bearer(adminA));
+    const refused = await plain().send({ mode: "auto" });
+    expect(refused.status).toBe(400);
+    expect(refused.body.code).toBe("acknowledgement_required");
+    expect((await plain().send({ mode: "off" })).status).toBe(200);
+
+    await plain().send({ mode: "auto", acknowledge: true }).expect(200);
+    const row = (await query("SELECT auto_block_ack_by, auto_block_ack_version, auto_block_ack_at FROM tenants WHERE id = $1", [tenantA])).rows[0] as Record<string, unknown>;
+    expect(row.auto_block_ack_by).toBeTruthy();
+    expect(row.auto_block_ack_version).toBe("1");
+    expect(row.auto_block_ack_at).toBeTruthy();
+    expect(Number((await query("SELECT count(*) AS n FROM audit_log WHERE tenant_id = $1 AND action = 'security.auto_block_acknowledged'", [tenantA])).rows[0]!.n)).toBe(1);
+
+    await plain().send({ mode: "off" }).expect(200);
+    await plain().send({ mode: "auto" }).expect(200);           // no second prompt
+
+    await query("UPDATE tenants SET auto_block_ack_version = '0' WHERE id = $1", [tenantA]);
+    await plain().send({ mode: "off" }).expect(200);
+    expect((await plain().send({ mode: "auto" })).status).toBe(400);   // the notice changed
   });
 });

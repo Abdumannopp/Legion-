@@ -99,8 +99,11 @@ Total hands-on time on a small database: minutes; the drill measures it.
    check the newest alert time; sign in as a 2FA user (proves the encryption keys are right; a wrong
    key gives *"Two-factor sign-in is temporarily unavailable"* and changes nothing — fix the key and retry);
    check that a sensor still delivers (`WAZUH.md`).
-9. **Re-arm backups:** re-install the timers, run `legion-backup.service` once, confirm `/health/backup` = 200.
-10. **Write down** what happened, the backup used, the time it took.
+9. **Re-apply deletions:** a restored backup brings back workspaces that were erased after it was taken.
+   Run `npm run tenant:data -- replay --ledger "$DELETION_LEDGER_FILE"` to list them, then add `--apply`
+   to erase them again. The ledger lives outside the database (see DATA-RETENTION.md).
+10. **Re-arm backups:** re-install the timers, run `legion-backup.service` once, confirm `/health/backup` = 200.
+11. **Write down** what happened, the backup used, the time it took.
 
 If the restore reports an error, **nothing was applied**. Try the next-older backup.
 

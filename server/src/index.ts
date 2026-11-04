@@ -32,6 +32,9 @@ import * as blocklist from "./blocklist.js";
 import * as payments from "./payments.js";
 import { rejectNul } from "./text.js";
 import { accessLog } from "./access-log.js";
+import { runRetention } from "./retention.js";
+import { autoDeleteExpired } from "./tenant-deletion.js";
+import { streamWorkspaceExport } from "./workspace-export.js";
 import { adminSeatFree, allows, classifyPrices, offeredPriceIds, planRefusal, pruneAlertsByPlan, resolvePlan, usageOf } from "./plan-limits.js";
 import { ADDON_IDS, ADDONS, PLAN_IDS, PLANS, SELF_HOSTED, SETUP_SERVICES } from "./plans.js";
 import * as webhookCredentials from "./webhook-credentials.js";
@@ -211,7 +214,7 @@ async function checkTotp(user: User, code: string): Promise<"ok" | "wrong" | "un
 // that cannot log in or open the billing portal can never start paying again.
 // /workspaces: a person whose trial ended in one workspace can still reach
 // their others (list, switch, accept, leave).
-const ACCESS_EXEMPT = /^\/(auth|billing|health|workspaces)(\/|$)/;
+const ACCESS_EXEMPT = /^\/(auth|billing|health|workspaces|workspace\/export)(\/|$)/;
 
 export const isSelfHosted = (): boolean => config.deploymentMode === "self-hosted";
 
@@ -1041,6 +1044,24 @@ app.get("/overview", auth, async (req: AuthedRequest, res) => {
 
 app.get("/agent-permissions", auth, async (req: AuthedRequest, res) => {
   res.json(await agentPermissionCatalogue(req.user!.tenant_id));
+});
+
+/**
+ * The workspace's data as one JSON file (workspace-export.ts). Administrators
+ * only, a few times an hour, and reachable even when the workspace is locked:
+ * leaving a subscription must not lock the customer away from their own data.
+ */
+app.get("/workspace/export", requireRole("admin"), async (req: AuthedRequest, res) => {
+  const tenantId = req.user!.tenant_id;
+  if ((await store.recentAuditCount(tenantId, "workspace.exported", 60)) >= 3) {
+    res.setHeader("Retry-After", "600");
+    return res.status(429).json({ detail: "Too many exports. Try again later." });
+  }
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="legion-workspace-${new Date().toISOString().slice(0, 10)}.json"`);
+  res.setHeader("Cache-Control", "no-store");
+  const counts = await streamWorkspaceExport(tenantId, res);
+  await log(req, "workspace.exported", "tenant", tenantId, Object.entries(counts).map(([k, v]) => `${k}=${v}`).join(" "));
 });
 
 app.get("/workspace/roles", auth, (_req, res) => {
@@ -2228,10 +2249,28 @@ app.patch("/security/auto-response", requireRole("admin"), async (req: AuthedReq
     mode: z.enum(["off", "auto"]).optional(),
     minutes: z.number().int().min(5).max(10_080).optional(),
     allowlist: z.string().max(10_000).optional(),
+    /** The administrator confirms they have read the notice (see blocklist.AUTO_BLOCK_NOTICE_VERSION). */
+    acknowledge: z.boolean().optional(),
   }), req.body, res); if (!body) return;
   // Turning automatic blocking ON needs a plan with policy-based blocking. Turning it off, or changing the allowlist, never does.
   if (body.mode === "auto" && !(await planAllows(req.user!.tenant_id, "autoBlocking", res))) return;
-  const settings = await blocklist.updateSettings(req.user!.tenant_id, body);
+  // …and a written acknowledgement: Legion will act on the customer's systems on its own, so a person says they understand how.
+  if (body.mode === "auto") {
+    const current = await blocklist.getSettings(req.user!.tenant_id);
+    if (!current.acknowledged && body.acknowledge !== true) {
+      return res.status(400).json({
+        detail: "Read and confirm the notice before turning on automatic blocking.",
+        code: "acknowledgement_required", notice_version: blocklist.AUTO_BLOCK_NOTICE_VERSION,
+      });
+    }
+    if (body.acknowledge === true && !current.acknowledged) {
+      await blocklist.acknowledgeNotice(req.user!.tenant_id, req.user!.email);
+      await log(req, "security.auto_block_acknowledged", "tenant", req.user!.tenant_id, `notice v${blocklist.AUTO_BLOCK_NOTICE_VERSION}`);
+    }
+  }
+  const { acknowledge: _ack, ...patch } = body;
+  void _ack;
+  const settings = await blocklist.updateSettings(req.user!.tenant_id, patch);
   await log(req, "security.auto_response_changed", "tenant", req.user!.tenant_id,
     `mode=${settings.mode} minutes=${settings.minutes} allowlist=${settings.allowlist ? settings.allowlist.split(",").length : 0}`);
   res.json(settings);
@@ -2574,6 +2613,10 @@ if (process.env.NODE_ENV !== "test") {
       // Resolved alerts older than the plan keeps them (hosted only).
       const aged = await pruneAlertsByPlan();
       if (aged > 0) console.info(`Removed ${aged} resolved alert(s) older than their plan's retention.`);
+      const erased = await autoDeleteExpired();
+      if (erased.length) console.info(`Erased ${erased.length} workspace(s) locked for more than ${config.tenantAutoDeleteDays} days.`);
+      const kept = await runRetention();
+      if (kept.payments || kept.audit) console.info(`Retention: ${kept.payments} payment check(s) deleted, ${kept.audit} audit entr${kept.audit === 1 ? "y" : "ies"} anonymised.`);
     } catch (error) {
       console.error("Session prune failed:", error instanceof Error ? error.message : error);
     }

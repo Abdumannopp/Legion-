@@ -285,6 +285,14 @@ export const config = {
   notifyMaxAttempts: Math.max(1, Number(process.env.NOTIFY_MAX_ATTEMPTS || 8)),
   notifyRetryBaseSeconds: Math.max(1, Number(process.env.NOTIFY_RETRY_BASE_SECONDS || 30)),
   /** How often the background worker looks for due notifications. */
+  /** Hosted only, OFF by default: a workspace locked for more than this many days is erased (0 = never). Irreversible — see DATA-RETENTION.md before turning it on. */
+  tenantAutoDeleteDays: Math.max(0, Math.floor(Number(process.env.TENANT_AUTO_DELETE_DAYS ?? 0)) || 0),
+  /** A file outside the database that records each erased workspace, so a restored backup can replay the deletions. */
+  deletionLedgerFile: process.env.DELETION_LEDGER_FILE || "",
+  /** Hosted only: payment-check records are deleted after this many months (0 = keep). */
+  retentionPaymentMonths: Math.max(0, Math.floor(Number(process.env.RETENTION_PAYMENT_MONTHS ?? 24)) || 0),
+  /** Hosted only: after this many months the email and IP address in a workspace audit-log entry are removed (0 = keep). */
+  retentionAuditMonths: Math.max(0, Math.floor(Number(process.env.RETENTION_AUDIT_MONTHS ?? 24)) || 0),
   /** Audit P2-16: delivered alert emails (recipient + alert text) are kept this many days, then deleted. 0 = keep. */
   notifyRetentionDays: Math.max(0, Math.floor(Number(process.env.NOTIFY_RETENTION_DAYS ?? 30)) || 0),
   notifyPollSeconds: Math.max(1, Number(process.env.NOTIFY_POLL_SECONDS || 15)),

@@ -716,3 +716,28 @@ DO $$ BEGIN
       CHECK (plan IS NULL OR plan IN ('starter', 'professional', 'business', 'enterprise'));
   END IF;
 END $$;
+
+-- Legal hold: a workspace under a legal hold is skipped by every retention job
+-- and refused by the deletion tool, until the hold is lifted by the operator.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS legal_hold boolean NOT NULL DEFAULT false;
+
+-- Proof that a workspace was erased, with no personal data: the workspace id,
+-- when, by whom (an operator name or "auto"), and how many rows of each kind went.
+-- Kept after the workspace is gone; also appended to DELETION_LEDGER_FILE so a
+-- restored backup can replay the deletion.
+CREATE TABLE IF NOT EXISTS tenant_deletions (
+  id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id   uuid        NOT NULL,
+  deleted_at  timestamptz NOT NULL DEFAULT now(),
+  deleted_by  text        NOT NULL,
+  reason      text,
+  counts      jsonb       NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS tenant_deletions_tenant_idx ON tenant_deletions (tenant_id);
+
+-- Written acknowledgement before automatic blocking is switched on: who accepted
+-- which version of the notice, and when (the notice text is in the dashboard;
+-- the version changes when its meaning does).
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS auto_block_ack_at      timestamptz;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS auto_block_ack_by      text;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS auto_block_ack_version text;

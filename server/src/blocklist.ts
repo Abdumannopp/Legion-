@@ -55,7 +55,14 @@ export interface Block {
   active: boolean;
 }
 
-export interface AutoResponseSettings { mode: "off" | "auto"; minutes: number; allowlist: string }
+export interface AutoResponseSettings { mode: "off" | "auto"; minutes: number; allowlist: string; /** An administrator has accepted the current notice. */ acknowledged: boolean }
+
+/**
+ * The notice an administrator accepts before Legion may block addresses on their
+ * own (the text is shown in the dashboard). Bump the version when its meaning
+ * changes: everyone is asked again before turning automatic blocking on.
+ */
+export const AUTO_BLOCK_NOTICE_VERSION = "1";
 
 // --- which addresses may ever be blocked automatically ------------------------
 
@@ -116,13 +123,16 @@ function allowlisted(allowlist: string, ip: string): boolean {
 // --- settings -----------------------------------------------------------------
 
 export async function getSettings(tenantId: string): Promise<AutoResponseSettings> {
-  const row = await queryOne<{ auto_block_mode: "off" | "auto"; auto_block_minutes: number; block_allowlist: string }>(
-    "SELECT auto_block_mode, auto_block_minutes, block_allowlist FROM tenants WHERE id = $1", [tenantId],
+  const row = await queryOne<{ auto_block_mode: "off" | "auto"; auto_block_minutes: number; block_allowlist: string; auto_block_ack_version: string | null }>(
+    "SELECT auto_block_mode, auto_block_minutes, block_allowlist, auto_block_ack_version FROM tenants WHERE id = $1", [tenantId],
   );
-  return { mode: row?.auto_block_mode ?? "off", minutes: row?.auto_block_minutes ?? 60, allowlist: row?.block_allowlist ?? "" };
+  return {
+    mode: row?.auto_block_mode ?? "off", minutes: row?.auto_block_minutes ?? 60, allowlist: row?.block_allowlist ?? "",
+    acknowledged: row?.auto_block_ack_version === AUTO_BLOCK_NOTICE_VERSION,
+  };
 }
 
-export async function updateSettings(tenantId: string, patch: Partial<AutoResponseSettings>): Promise<AutoResponseSettings> {
+export async function updateSettings(tenantId: string, patch: Partial<Pick<AutoResponseSettings, "mode" | "minutes" | "allowlist">>): Promise<AutoResponseSettings> {
   if (patch.allowlist !== undefined) {
     const parsed = parseAllowlist(patch.allowlist);
     if (!parsed.ok) throw Object.assign(new Error(parsed.error), { status: 400, expose: true });
@@ -137,6 +147,14 @@ export async function updateSettings(tenantId: string, patch: Partial<AutoRespon
     [tenantId, patch.mode ?? null, patch.minutes ?? null, patch.allowlist ?? null],
   );
   return getSettings(tenantId);
+}
+
+/** Records that `by` accepted the current notice. */
+export async function acknowledgeNotice(tenantId: string, by: string): Promise<void> {
+  await queryOne(
+    "UPDATE tenants SET auto_block_ack_at = now(), auto_block_ack_by = $2, auto_block_ack_version = $3 WHERE id = $1",
+    [tenantId, by.slice(0, 254), AUTO_BLOCK_NOTICE_VERSION],
+  );
 }
 
 // --- the list -----------------------------------------------------------------

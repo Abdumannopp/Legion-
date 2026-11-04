@@ -223,7 +223,7 @@ describe("features by plan", () => {
     const starter = await tenant("starter"); const pro = await tenant("professional"); const biz = await tenant("business");
     const [s, p, b] = await Promise.all([user(starter, "admin"), user(pro, "admin"), user(biz, "admin")]);
     const block = (u: User) => request(app).post("/security/blocks").set(...asUser(u)).send({ ip: "203.0.113.50" });
-    const auto = (u: User) => request(app).patch("/security/auto-response").set(...asUser(u)).send({ mode: "auto" });
+    const auto = (u: User) => request(app).patch("/security/auto-response").set(...asUser(u)).send({ mode: "auto", acknowledge: true });
     expect((await block(s)).status).toBe(403);
     expect((await block(p)).status).toBe(201);
     expect((await auto(p)).status).toBe(403);                                   // a person stays in the loop
@@ -233,7 +233,7 @@ describe("features by plan", () => {
 
   it("a plan that is downgraded keeps detection but loses the automatic block", async () => {
     const t = await tenant("business"); const admin = await user(t, "admin");
-    await request(app).patch("/security/auto-response").set(...asUser(admin)).send({ mode: "auto" }).expect(200);
+    await request(app).patch("/security/auto-response").set(...asUser(admin)).send({ mode: "auto", acknowledge: true }).expect(200);
     await store.applySubscriptionEvent({ tenant_id: t, status: "active", paddle_customer_id: "c", paddle_subscription_id: `sub_${t.slice(0, 8)}`, paddle_price_id: null, current_period_end: null, cancel_at_period_end: false, last_event_at: new Date(Date.now() + 1000).toISOString(), plan: "professional", addons: [] });
     const { respondToCampaigns } = await import("../src/blocklist.js");
     const out = await respondToCampaigns(t, [{ id: "CMP-1", rule: "credential_attack", subject: "198.51.100.7", sources: ["198.51.100.7"] } as never]);

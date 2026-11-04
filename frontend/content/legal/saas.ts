@@ -141,6 +141,7 @@ export const saasPrivacy: Record<Locale, LegalDoc> = {
           "Our hosting provider, which runs the servers your workspace is stored on, located in {dataLocation}.",
           "Our email delivery provider, which sends account emails (confirmation, password reset, invitations) and the alert notifications you enable. It receives the recipient address and the message content.",
           "An AI provider, only when AI analysis is switched on for the service: alert titles, descriptions, hostnames and IP addresses are then sent to it to produce explanations. When it is off, explanations are generated on our own servers and nothing is sent.",
+          "Cloudflare, which may sit in front of the service to filter attacks and, on sign-in pages, to check that a visitor is a person. It sees the traffic to and from the service.",
           "Each of these processes data only to provide its part of the service.",
         ],
       },
@@ -153,7 +154,9 @@ export const saasPrivacy: Record<Locale, LegalDoc> = {
       {
         heading: "5. How Long We Keep It",
         body: [
-          "Account and workspace data are kept while your account exists. After a subscription ends the workspace is locked but kept, so you can return; ask us to delete it and we will do so within 30 days. Deleted data can remain in backups for up to 14 days before those backups expire.",
+          "Account and workspace data are kept while your account exists. Resolved alerts are deleted automatically once they are older than your plan's alert history (30, 90, 180 or 365 days); open alerts are kept until they are resolved. After a subscription ends the workspace is locked but kept, so you can return; ask us to delete it and we will do so within 30 days.",
+          "We keep encrypted backups for up to 12 months. Data you delete can remain in a backup until that backup expires; it is not used for anything else, and if a backup is ever restored, deletions made since then are applied again.",
+          "The workspace audit log records who did what. After 24 months the email address and IP address in an entry are removed, leaving only an anonymous user identifier. Payment-check records are deleted after 24 months.",
           "Billing and tax records are kept by Paddle and by us for as long as the law requires.",
         ],
       },

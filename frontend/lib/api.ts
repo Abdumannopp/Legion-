@@ -170,6 +170,20 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return res.json();
 }
 
+/** The workspace's data as a JSON file (administrators). Returned as a Blob so a large workspace is not parsed in memory. */
+export async function downloadWorkspaceExport(): Promise<{ blob: Blob; filename: string }> {
+  let res = await send("/workspace/export", {});
+  if (res.status === 401 && (await refreshSession())) res = await send("/workspace/export", {});
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { const body = await res.json(); detail = body.detail || detail; } catch { /* not JSON */ }
+    const retry = Number(res.headers.get("retry-after"));
+    throw new ApiError(detail, res.status, undefined, undefined, Number.isFinite(retry) && retry > 0 ? retry : undefined);
+  }
+  const named = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "");
+  return { blob: await res.blob(), filename: named?.[1] ?? "legion-workspace.json" };
+}
+
 export type DeploymentMode = "self-hosted" | "saas";
 
 /** `setup_required`: a self-hosted install with no administrator yet.
@@ -979,7 +993,7 @@ export interface IpBlock {
   active: boolean;
 }
 
-export interface AutoResponseSettings { mode: "off" | "auto"; minutes: number; allowlist: string }
+export interface AutoResponseSettings { mode: "off" | "auto"; minutes: number; allowlist: string; acknowledged: boolean }
 
 export async function getCampaigns(): Promise<AttackCampaign[]> {
   return (await request<{ campaigns: AttackCampaign[] }>("/security/campaigns")).campaigns;
@@ -1003,7 +1017,7 @@ export function getAutoResponse(): Promise<AutoResponseSettings> {
   return request<AutoResponseSettings>("/security/auto-response");
 }
 
-export function updateAutoResponse(patch: Partial<AutoResponseSettings>): Promise<AutoResponseSettings> {
+export function updateAutoResponse(patch: Partial<Omit<AutoResponseSettings, "acknowledged">> & { acknowledge?: boolean }): Promise<AutoResponseSettings> {
   return request<AutoResponseSettings>("/security/auto-response", { method: "PATCH", body: JSON.stringify(patch) });
 }
 
