@@ -19,6 +19,7 @@ import {
 } from "./actions/engine.js";
 import { getRun, listRuns, runWorkflow, workflowDefinitions, WorkflowError } from "./orchestrator/engine.js";
 import { listJobs, runtimeStatus } from "./runtime/queue.js";
+import { actionConnectors, connectedFor, connectorsFor } from "./integrations/action-connectors.js";
 
 type AuthedRequest = Request & { user?: User };
 type Middleware = (req: AuthedRequest, res: Response, next: NextFunction) => Promise<void>;
@@ -225,6 +226,18 @@ export function registerSocRoutes(app: Express, { requirePermission, parse, log,
       if (error instanceof WorkflowError) return res.status(error.status).json({ detail: error.message, code: error.code });
       throw error;
     }
+  });
+
+  // --- Universal Integration Layer (foundation) --------------------------------
+
+  app.get("/integrations/capabilities", requirePermission("integrations:read"), async (req: AuthedRequest, res) => {
+    const tenantId = req.user!.tenant_id;
+    const actions = await Promise.all(catalogList().filter((a) => a.effect === "write").map(async (a) => ({
+      action_id: a.id, class: a.class, mode: "simulation_only" as const,
+      connectors: connectorsFor(a.id).map((c) => c.manifest.kind),
+      connected: await connectedFor(tenantId, a.id),
+    })));
+    res.json({ connectors: actionConnectors(), actions, live_execution: false });
   });
 
   // --- Background Runtime -----------------------------------------------------

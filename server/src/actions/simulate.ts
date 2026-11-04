@@ -7,6 +7,7 @@ import { queryOne } from "../db/pool.js";
 import * as blocklist from "../blocklist.js";
 import { allows, resolvePlan } from "../plan-limits.js";
 import * as store from "../store.js";
+import { connectedFor, previews } from "../integrations/action-connectors.js";
 
 export type SimulationResult = Record<string, unknown> & { would: string; side_effects: "none" };
 
@@ -50,9 +51,15 @@ const SIMULATORS: Record<string, Simulator> = {
   },
   "payment.release": async (t, i) => paymentSim(t, String(i.payment_id), "release"),
   "payment.reject": async (t, i) => paymentSim(t, String(i.payment_id), "reject"),
-  "account.disable": async (_t, i) => ({ would: "call_connector", connector: String(i.system), connector_available: false, account: String(i.account) }),
-  "host.isolate": async (_t, i) => ({ would: "call_connector", connector: "edr", connector_available: false, host: String(i.host) }),
+  "account.disable": async (t, i) => connectorSim(t, "account.disable", i),
+  "host.isolate": async (t, i) => connectorSim(t, "host.isolate", i),
 };
+
+/** What a connected system would be asked to do (integrations/action-connectors.ts). Nothing is sent. */
+async function connectorSim(tenantId: string, actionId: string, input: Record<string, unknown>) {
+  const connected = await connectedFor(tenantId, actionId);
+  return { would: "call_connector", connector_available: connected.length > 0, connected, previews: previews(actionId, input) };
+}
 
 async function paymentSim(tenantId: string, id: string, verb: "release" | "reject") {
   const row = await queryOne<{ amount: string; currency: string; beneficiary_hint: string }>(
