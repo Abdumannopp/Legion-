@@ -32,7 +32,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import { z } from "zod";
 import { clip } from "./ai-safety.js";
 import { config } from "./config.js";
-import { queryAll, queryOne } from "./db/pool.js";
+import { query, queryAll, queryOne } from "./db/pool.js";
 import * as outbox from "./outbox.js";
 import * as store from "./store.js";
 
@@ -253,4 +253,48 @@ export async function listPaymentsForSkills(tenantId: string, q: { since?: strin
     amount: Number(r.amount), currency: r.currency, requestedBy: r.requested_by, decision: r.decision, reasons: r.reasons,
     resolution: r.resolution, resolvedAt: r.resolved_at ? new Date(r.resolved_at).toISOString() : null,
   }));
+}
+
+// --- the notice an administrator confirms --------------------------------------
+
+/** Bump when the notice text changes in substance (frontend/lib/i18n/ns/defense.ts `payments.consent`). */
+export const PAYMENT_NOTICE_VERSION = "1";
+
+export interface PaymentConsent {
+  /** Hosted workspaces only: a self-hosted operator is the customer and the operator at once. */
+  applicable: boolean;
+  /** An administrator confirmed the current version of the notice. */
+  acknowledged: boolean;
+  /**
+   * The check refuses to answer (the payment software then does not pay on its own).
+   * Only for a workspace with no earlier checks: one that already relies on the check is
+   * asked to confirm, but is not cut off.
+   */
+  required: boolean;
+  notice_version: string;
+  acknowledged_at: string | null;
+  acknowledged_by: string | null;
+}
+
+export async function paymentConsent(tenantId: string): Promise<PaymentConsent> {
+  const t = await queryOne<{ payment_ack_at: Date | null; payment_ack_by: string | null; payment_ack_version: string | null }>(
+    "SELECT payment_ack_at, payment_ack_by, payment_ack_version FROM tenants WHERE id = $1", [tenantId]);
+  const applicable = config.deploymentMode !== "self-hosted";
+  const acknowledged = t?.payment_ack_version === PAYMENT_NOTICE_VERSION;
+  let required = false;
+  if (applicable && !acknowledged) {
+    const used = await queryOne<{ n: number }>("SELECT count(*)::int AS n FROM (SELECT 1 FROM payment_checks WHERE tenant_id = $1 LIMIT 1) x", [tenantId]);
+    required = (used?.n ?? 0) === 0;
+  }
+  return {
+    applicable, acknowledged, required, notice_version: PAYMENT_NOTICE_VERSION,
+    acknowledged_at: t?.payment_ack_at ? t.payment_ack_at.toISOString() : null, acknowledged_by: t?.payment_ack_by ?? null,
+  };
+}
+
+/** Records that `by` confirmed the current notice. */
+export async function acknowledgePaymentNotice(tenantId: string, by: string): Promise<void> {
+  await query(
+    "UPDATE tenants SET payment_ack_at = now(), payment_ack_by = $2, payment_ack_version = $3 WHERE id = $1",
+    [tenantId, by.slice(0, 254), PAYMENT_NOTICE_VERSION]);
 }

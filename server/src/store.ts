@@ -38,7 +38,7 @@ const toTenant = (r: any): Tenant => ({
   notification_locale: isLocale(r.notification_locale) ? r.notification_locale : "en",
   trial_ends_at: iso(r.trial_ends_at), plan_override: isPlanId(r.plan_override) ? r.plan_override : null, created_at: isoRequired(r.created_at),
   ai_enabled: typeof r.ai_enabled === "boolean" ? r.ai_enabled : null,
-  ai_data_mode: r.ai_data_mode === "strict" ? "strict" : "standard",
+  ai_data_mode: r.ai_data_mode === "strict" ? "strict" : r.ai_data_mode === "standard" ? "standard" : null,
   region: r.region ?? null, timezone: r.timezone ?? "UTC", locale: r.locale ?? "en", currency: r.currency ?? "USD",
   date_format: r.date_format ?? "locale", time_format: r.time_format ?? "locale",
 });

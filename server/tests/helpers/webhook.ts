@@ -5,12 +5,16 @@
 import request from "supertest";
 import type { Application } from "express";
 import { randomBytes } from "node:crypto";
+import { query } from "../../src/db/pool.js";
 import { createCredential } from "../../src/webhook-credentials.js";
 import { signWebhook } from "../../src/webhook-auth.js";
 
 export interface TestCredential { keyId: string; secret: string; apiKey: string }
 
 export async function issueCredential(tenantId: string, label = "test"): Promise<TestCredential> {
+  // Most suites use the payment check as a plain signed endpoint; the notice gate has its own tests
+  // (payments.test.ts), which clear this first.
+  await query("UPDATE tenants SET payment_ack_at = now(), payment_ack_by = 'test', payment_ack_version = '1' WHERE id = $1", [tenantId]);
   const c = await createCredential(tenantId, { label });
   return { keyId: c.id, secret: c.secret, apiKey: c.api_key };
 }

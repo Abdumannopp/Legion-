@@ -1472,6 +1472,7 @@ async function aiSettingsView(tenantId: string) {
     // Names the third party that would receive alert text.
     provider: policy.provider,
     data_mode: policy.dataMode,
+    data_mode_is_default: policy.dataModeIsDefault,
     reason: policy.reason,
     circuit: aiCircuit().state,
     advisory: true,
@@ -2326,6 +2327,15 @@ app.post(payments.PAYMENT_CHECK_PATH,
   // makes the client exit 1: the payment software must not pay on its own.
   const checkPlan = await resolvePlan(authResult.tenantId);
   if (!allows(checkPlan, "paymentCheck")) return res.status(403).json(planRefusal("paymentCheck", checkPlan.plan));
+  // A new hosted workspace may use the check only after an administrator confirmed the notice
+  // (what a "hold" is, who decides, what Legion does not do). Refusing makes the client exit 1.
+  const consent = await payments.paymentConsent(authResult.tenantId);
+  if (consent.required) {
+    return res.status(403).json({
+      code: "acknowledgement_required", notice_version: consent.notice_version,
+      detail: "An administrator must read and confirm the payment-check notice in the dashboard (Defense → Payments on hold) before the first check.",
+    });
+  }
   let result;
   try { result = await payments.checkPayment(authResult.tenantId, parsed.data); }
   catch (err) {
@@ -2338,6 +2348,22 @@ app.post(payments.PAYMENT_CHECK_PATH,
   res.setHeader("Cache-Control", "no-store");
   res.json({ id: result.check.id, decision: result.check.decision, reasons: result.reasons, verify: result.verify });
   });
+
+app.get("/security/payments/consent", auth, async (req: AuthedRequest, res) => {
+  res.json(await payments.paymentConsent(req.user!.tenant_id));
+});
+
+// Administrators confirm the notice in writing: who, when, and which version of the text.
+app.post("/security/payments/consent", requireRole("admin"), async (req: AuthedRequest, res) => {
+  const body = parse(z.strictObject({ acknowledge: z.literal(true) }), req.body ?? {}, res); if (!body) return;
+  const before = await payments.paymentConsent(req.user!.tenant_id);
+  if (!before.applicable) return res.status(400).json({ detail: "This installation does not need the payment-check notice." });
+  if (!before.acknowledged) {
+    await payments.acknowledgePaymentNotice(req.user!.tenant_id, req.user!.email);
+    await log(req, "security.payment_notice_acknowledged", "tenant", req.user!.tenant_id, `notice v${payments.PAYMENT_NOTICE_VERSION}`);
+  }
+  res.json(await payments.paymentConsent(req.user!.tenant_id));
+});
 
 app.get("/security/payments", auth, async (req: AuthedRequest, res) => {
   res.json({ payments: await payments.listPayments(req.user!.tenant_id, { heldOnly: req.query.held === "true" }) });

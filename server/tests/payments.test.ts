@@ -209,3 +209,54 @@ describe("Legion's own payment alerts are not evidence for coverage", () => {
     expect(by.bec).toBe("blind");
   });
 });
+
+describe("the payment-check notice: a new hosted workspace confirms it in writing before the first check", () => {
+  const consentOf = (u: User) => request(app).get("/security/payments/consent").set("Authorization", bearer(u));
+  const confirm = (u: User) => request(app).post("/security/payments/consent").set("Authorization", bearer(u)).send({ acknowledge: true });
+  const unconfirm = (t: string) => query("UPDATE tenants SET payment_ack_at = NULL, payment_ack_by = NULL, payment_ack_version = NULL WHERE id = $1", [t]);
+  beforeEach(async () => { config.deploymentMode = "saas"; await unconfirm(tenantA); await unconfirm(tenantB); });
+
+  it("refuses the first check with a reason the payment software cannot mistake, until an administrator confirms", async () => {
+    expect((await consentOf(analystA).expect(200)).body).toMatchObject({ applicable: true, acknowledged: false, required: true, notice_version: "1" });
+    const refused = await check(credA, pay());
+    expect(refused.status).toBe(403);
+    expect(refused.body).toMatchObject({ code: "acknowledgement_required", notice_version: "1" });
+    expect((await query("SELECT count(*)::int AS n FROM payment_checks WHERE tenant_id = $1", [tenantA])).rows[0].n).toBe(0);   // nothing was decided
+    await confirm(adminA).expect(200);
+    await check(credA, pay()).expect(200);
+    // Another workspace is unaffected by A's confirmation.
+    expect((await check(credB, pay())).status).toBe(403);
+  });
+
+  it("only an administrator can confirm, it is recorded once (who, when, which version) and audited", async () => {
+    await confirm(analystA).expect(403);
+    await request(app).post("/security/payments/consent").set("Authorization", bearer(adminA)).send({}).expect(422);
+    const done = await confirm(adminA).expect(200);
+    expect(done.body).toMatchObject({ acknowledged: true, required: false, acknowledged_by: "admin@a.io" });
+    await confirm(adminA).expect(200);                                                       // again: nothing new is recorded
+    expect((await query("SELECT count(*)::int AS n FROM audit_log WHERE tenant_id = $1 AND action = 'security.payment_notice_acknowledged'", [tenantA])).rows[0].n).toBe(1);
+    expect((await query("SELECT payment_ack_version FROM tenants WHERE id = $1", [tenantA])).rows[0].payment_ack_version).toBe("1");
+  });
+
+  it("a workspace that already relies on the check is asked, but not cut off", async () => {
+    await query(
+      `INSERT INTO payment_checks (tenant_id, id, beneficiary_hash, beneficiary_hint, amount, currency, decision, reasons)
+       VALUES ($1, 'PAY-0000000000000001', $2, '3000', 5, 'EUR', 'allow', '{}')`, [tenantA, "c".repeat(64)]);
+    expect((await consentOf(adminA).expect(200)).body).toMatchObject({ applicable: true, acknowledged: false, required: false });
+    await check(credA, pay()).expect(200);
+  });
+
+  it("an older version of the notice no longer counts, and a self-hosted installation is not asked", async () => {
+    await confirm(adminA).expect(200);
+    await query("UPDATE tenants SET payment_ack_version = '0' WHERE id = $1", [tenantA]);
+    expect((await consentOf(adminA)).body).toMatchObject({ acknowledged: false, required: true });
+    config.deploymentMode = "self-hosted";
+    expect((await consentOf(adminA)).body).toMatchObject({ applicable: false, required: false });
+    await check(credA, pay()).expect(200);
+    await confirm(adminA).expect(400);
+  });
+
+  it("is checked after authentication and the plan: an unsigned request is still 401", async () => {
+    await request(app).post("/security-events/payment-check").set("content-type", "application/json").send(pay()).expect(401);
+  });
+});

@@ -83,8 +83,10 @@ export default function AiSettingsSection({ isAdmin }: { isAdmin: boolean }) {
             <span>
               {t.ai.settings.strict}
               <span className="block text-ink-faint text-[11px]">{t.ai.settings.strictHint}</span>
+              {s.data_mode === "strict" && s.data_mode_is_default && <span className="block text-ink-faint text-[11px]">{t.ai.settings.strictDefault}</span>}
             </span>
           </label>
+          {s.data_mode === "standard" && s.provider && <p className="text-amber-300 text-xs">{t.ai.settings.standardWarning}</p>}
 
           {!isAdmin && <p className="text-ink-faint text-[11px]">{t.ai.settings.adminOnly}</p>}
           {message && <p className="text-ink-muted text-xs">{message}</p>}

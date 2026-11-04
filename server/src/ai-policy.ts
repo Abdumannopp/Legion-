@@ -24,6 +24,8 @@ export interface AiPolicy {
   tenantSetting: boolean | null;
   /** What "never chosen" means on this deployment. */
   defaultEnabled: boolean;
+  /** True when the data mode is the deployment's default, not the organisation's choice. */
+  dataModeIsDefault: boolean;
 }
 
 /** AI_TENANT_DEFAULT wins; otherwise a self-hosted operator who configured a
@@ -34,6 +36,16 @@ export function aiDefaultEnabled(): boolean {
   return config.deploymentMode === "self-hosted";
 }
 
+/**
+ * The data mode of a workspace that never chose one. A hosted workspace starts
+ * STRICT: identifiers are replaced before anything is sent to a third party, and
+ * an administrator has to choose to send real values. A self-hosted operator owns
+ * the data and the provider, so "standard" stays their default.
+ */
+export function defaultDataMode(): DataMode {
+  return config.deploymentMode === "self-hosted" ? "standard" : "strict";
+}
+
 /** Pure, so the rule can be tested without a database. */
 export function decidePolicy(tenant: Pick<Tenant, "ai_enabled" | "ai_data_mode"> | null): AiPolicy {
   const provider = aiProviderName();
@@ -41,7 +53,8 @@ export function decidePolicy(tenant: Pick<Tenant, "ai_enabled" | "ai_data_mode">
   const tenantSetting = tenant?.ai_enabled ?? null;
   const enabled = tenant ? (tenantSetting ?? defaultEnabled) : false;
   const reason: PolicyReason = !provider ? "no_provider" : !enabled ? "tenant_disabled" : "ok";
-  return { allowed: reason === "ok", reason, dataMode: tenant?.ai_data_mode ?? "standard", provider, tenantSetting, defaultEnabled };
+  const chosenMode = tenant?.ai_data_mode ?? null;
+  return { allowed: reason === "ok", reason, dataMode: chosenMode ?? defaultDataMode(), provider, tenantSetting, defaultEnabled, dataModeIsDefault: chosenMode === null };
 }
 
 export async function aiPolicy(tenantId: string): Promise<AiPolicy> {

@@ -575,6 +575,8 @@ export interface AiSettings {
   provider_configured: boolean;
   provider: string | null;
   data_mode: "standard" | "strict";
+  /** True when nobody chose the mode: the deployment's starting setting applies. */
+  data_mode_is_default: boolean;
   circuit: "closed" | "open";
   advisory: true;
 }
@@ -1074,6 +1076,25 @@ export interface PaymentCheck {
   resolution: "released" | "rejected" | null;
   resolved_at: string | null;
 }
+export interface PaymentConsent {
+  /** Hosted workspaces only. */
+  applicable: boolean;
+  acknowledged: boolean;
+  /** The payment check refuses to answer until an administrator confirms (a new workspace). */
+  required: boolean;
+  notice_version: string;
+  acknowledged_at: string | null;
+  acknowledged_by: string | null;
+}
+
+export function getPaymentConsent(): Promise<PaymentConsent> {
+  return request<PaymentConsent>("/security/payments/consent");
+}
+
+export function acknowledgePaymentNotice(): Promise<PaymentConsent> {
+  return request<PaymentConsent>("/security/payments/consent", { method: "POST", body: JSON.stringify({ acknowledge: true }) });
+}
+
 export function getHeldPayments(): Promise<{ payments: PaymentCheck[] }> {
   return request("/security/payments?held=true");
 }

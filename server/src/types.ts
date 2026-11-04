@@ -33,7 +33,8 @@ export interface Tenant {
   ai_enabled: boolean | null;
   /** "strict" swaps IPs, e-mail addresses and hostnames for placeholders
    *  before anything reaches the provider. */
-  ai_data_mode: "standard" | "strict";
+  /** null = never chosen: the deployment decides (strict when hosted, standard when self-hosted). */
+  ai_data_mode: "standard" | "strict" | null;
   /** Where this workspace's data lives (null: created before regions — this deployment's). */
   region: string | null;
   timezone: string;

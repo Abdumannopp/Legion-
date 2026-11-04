@@ -12,8 +12,8 @@ import { Ban, Banknote, Eye, EyeOff, Loader2, Radar, ShieldAlert, ShieldCheck, T
 import Sidebar from "@/components/Sidebar";
 import ErrorNotice from "@/components/ErrorNotice";
 import {
-  ApiError, AttackCampaign, AutoResponseSettings, IpBlock, PaymentCheck, ThreatCoverage,
-  blockAddress, getAutoResponse, getBlocks, getCampaigns, getCoverage, getHeldPayments, rejectPayment, releasePayment, getMe, isLoggedIn, unblockAddress, updateAutoResponse,
+  ApiError, AttackCampaign, AutoResponseSettings, IpBlock, PaymentCheck, PaymentConsent, ThreatCoverage,
+  acknowledgePaymentNotice, blockAddress, getAutoResponse, getPaymentConsent, getBlocks, getCampaigns, getCoverage, getHeldPayments, rejectPayment, releasePayment, getMe, isLoggedIn, unblockAddress, updateAutoResponse,
 } from "@/lib/api";
 import { palette } from "@/lib/theme";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
@@ -35,6 +35,8 @@ export default function DefensePage() {
   const [blocks, setBlocks] = useState<IpBlock[]>([]);
   const [held, setHeld] = useState<PaymentCheck[]>([]);
   const [paymentNotice, setPaymentNotice] = useState<string | null>(null);
+  const [consent, setConsent] = useState<PaymentConsent | null>(null);
+  const [consentAgreed, setConsentAgreed] = useState(false);
   const [coverage, setCoverage] = useState<{ windowDays: number; threats: ThreatCoverage[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -50,6 +52,7 @@ export default function DefensePage() {
       setSettings(s); setDraft(s); setCampaigns(c); setBlocks(b);
       // Coverage is extra: the page still works if it cannot be read.
       getCoverage().then(setCoverage).catch(() => {});
+      getPaymentConsent().then(setConsent).catch(() => {});
       getHeldPayments().then((r) => setHeld(r.payments)).catch(() => {});
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) { router.push("/login"); return; }
@@ -80,6 +83,15 @@ export default function DefensePage() {
       setAgreed(false);
       setSettings(next); setDraft(next); setSaved(true);
     } catch (err) { setError(err); } finally { setSaving(false); }
+  }
+
+  async function confirmPaymentNotice() {
+    setError(null);
+    try {
+      setConsent(await acknowledgePaymentNotice());
+      setConsentAgreed(false);
+      setPaymentNotice(d.payments.consent.confirmed);
+    } catch (err) { setError(err); }
   }
 
   async function unblock(ip: string) {
@@ -190,6 +202,24 @@ export default function DefensePage() {
                 <h2 className="text-ink font-medium flex items-center gap-2 mb-1"><Banknote size={16} color={palette.warning} />{d.payments.title}</h2>
                 <p className="text-ink-faint text-xs mb-3 leading-relaxed">{d.payments.intro}</p>
                 {paymentNotice && <p role="status" className="text-xs text-success mb-2 flex items-center gap-1"><ShieldCheck size={13} />{paymentNotice}</p>}
+                {consent && consent.applicable && !consent.acknowledged && (
+                  <div className="border border-line rounded-lg p-3 mb-3 text-xs text-ink-muted leading-relaxed space-y-2" data-testid="payment-consent">
+                    <p className="text-ink font-medium">{d.payments.consent.title}</p>
+                    <p className={consent.required ? "text-warning" : ""}>{consent.required ? d.payments.consent.requiredNow : d.payments.consent.askedNow}</p>
+                    <p>{d.payments.consent.notice}</p>
+                    {isAdmin ? (
+                      <>
+                        <label className="flex items-start gap-2 text-ink cursor-pointer">
+                          <input type="checkbox" checked={consentAgreed} onChange={(e) => setConsentAgreed(e.target.checked)} className="mt-0.5 accent-brand" />
+                          <span>{d.payments.consent.label}</span>
+                        </label>
+                        <button type="button" onClick={confirmPaymentNotice} disabled={!consentAgreed} className="text-xs font-medium px-3 py-1.5 rounded-lg bg-brand hover:bg-brand-hover disabled:opacity-50 text-white">{d.payments.consent.confirm}</button>
+                      </>
+                    ) : (
+                      <p className="text-ink-faint">{d.payments.consent.adminOnly}</p>
+                    )}
+                  </div>
+                )}
                 {held.length === 0 ? (
                   <p className="text-ink-faint text-sm">{d.payments.empty}</p>
                 ) : (

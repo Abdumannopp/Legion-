@@ -76,6 +76,9 @@ beforeEach(async () => {
   resetAiCircuit(); await resetAiQuota();
   tenant = randomUUID(); other = randomUUID();
   await query("INSERT INTO tenants (id, name, trial_ends_at) VALUES ($1, 'A', now() + interval '14 days'), ($2, 'B', now() + interval '14 days')", [tenant, other]);
+  // Most tests here exercise the "standard" path (real values reach the model); a workspace that never chose
+  // is STRICT by default (see "a hosted workspace starts in strict mode" below), so these two chose.
+  await query("UPDATE tenants SET ai_data_mode = 'standard' WHERE id = ANY($1::uuid[])", [[tenant, other]]);
   const hash = await bcrypt.hash("password123", 4);
   admin = await store.insertUser({ email: "admin@a.io", password_hash: hash, tenant_id: tenant, role: "admin", status: "active" });
   analyst = await store.insertUser({ email: "analyst@a.io", password_hash: hash, tenant_id: tenant, role: "analyst", status: "active" });
@@ -615,7 +618,64 @@ describe("unauthorized action attempts", () => {
 
   it("GET /ai/settings tells everyone which third party would see their data, without secrets", async () => {
     const res = await request(app).get("/ai/settings").set(...bearer(viewer)).expect(200);
-    expect(res.body).toMatchObject({ enabled: true, provider: "openrouter", advisory: true, data_mode: "standard" });
+    expect(res.body).toMatchObject({ enabled: true, provider: "openrouter", advisory: true, data_mode: "standard", data_mode_is_default: false });
     expect(JSON.stringify(res.body)).not.toContain(PROVIDER_KEY);
+  });
+});
+
+describe("a hosted workspace starts in strict mode", () => {
+  const saved = config.deploymentMode;
+  afterEach(() => { config.deploymentMode = saved; });
+
+  it("never chosen = strict when hosted, standard when self-hosted; a choice always wins", () => {
+    config.deploymentMode = "saas";
+    expect(decidePolicy({ ai_enabled: true, ai_data_mode: null })).toMatchObject({ dataMode: "strict", dataModeIsDefault: true });
+    expect(decidePolicy({ ai_enabled: true, ai_data_mode: "standard" })).toMatchObject({ dataMode: "standard", dataModeIsDefault: false });
+    expect(decidePolicy({ ai_enabled: true, ai_data_mode: "strict" })).toMatchObject({ dataMode: "strict", dataModeIsDefault: false });
+    config.deploymentMode = "self-hosted";
+    expect(decidePolicy({ ai_enabled: true, ai_data_mode: null })).toMatchObject({ dataMode: "standard", dataModeIsDefault: true });
+  });
+
+  it("a new workspace that turns AI on sends placeholders, not real host names, until an administrator chooses otherwise", async () => {
+    await query("UPDATE tenants SET ai_data_mode = NULL WHERE id = $1", [tenant]);
+    await request(app).patch("/ai/settings").set(...bearer(admin)).send({ enabled: true }).expect(200);
+    const view = await request(app).get("/ai/settings").set(...bearer(viewer)).expect(200);
+    expect(view.body).toMatchObject({ data_mode: "strict", data_mode_is_default: true });
+    const summary = "Failed login for dana@acme.example from 203.0.113.9";
+    await alert("S-1", { summary });
+    await explain(analyst, "S-1").expect(200);
+    expect(sent).toHaveLength(1);
+    expect(userMsgs(sent[0]!)).not.toMatch(/dana@acme\.example|203\.0\.113\.9/);   // the real e-mail and address did not leave
+    await request(app).patch("/ai/settings").set(...bearer(admin)).send({ data_mode: "standard" }).expect(200);
+    expect((await request(app).get("/ai/settings").set(...bearer(viewer))).body).toMatchObject({ data_mode: "standard", data_mode_is_default: false });
+    await alert("S-2", { summary });
+    await explain(analyst, "S-2").expect(200);
+    expect(userMsgs(sent.at(-1)!)).toContain("203.0.113.9");                     // the administrator's choice is honoured
+  });
+
+  it("the one-time migration makes only the never-chosen workspaces 'unchosen'; a choice is kept; it runs once", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const sql = readFileSync(join(process.cwd(), "src/db/schema.sql"), "utf8");
+    const block = /DO \$\$\s*BEGIN\s*IF EXISTS \(SELECT 1 FROM information_schema\.columns[\s\S]*?ai_data_mode[\s\S]*?END \$\$;/.exec(sql)![0];
+    // The database as it was before: NOT NULL with a default of 'standard'.
+    await query("UPDATE tenants SET ai_data_mode = 'standard' WHERE ai_data_mode IS NULL");
+    await query("ALTER TABLE tenants ALTER COLUMN ai_data_mode SET DEFAULT 'standard'");
+    await query("ALTER TABLE tenants ALTER COLUMN ai_data_mode SET NOT NULL");
+    const mk = async (enabled: boolean | null, mode: string) => {
+      const id = randomUUID();
+      await query("INSERT INTO tenants (id, name, ai_enabled, ai_data_mode) VALUES ($1, 'm', $2, $3)", [id, enabled, mode]);
+      return id;
+    };
+    const never = await mk(null, "standard"), optedIn = await mk(true, "standard"), strict = await mk(null, "strict");
+    await query(block);
+    const mode = async (id: string) => (await query("SELECT ai_data_mode FROM tenants WHERE id = $1", [id])).rows[0].ai_data_mode;
+    expect(await mode(never)).toBeNull();
+    expect(await mode(optedIn)).toBe("standard");
+    expect(await mode(strict)).toBe("strict");
+    // A second run (every boot) changes nothing: a later explicit 'standard' is not undone.
+    await query("UPDATE tenants SET ai_data_mode = 'standard' WHERE id = $1", [never]);
+    await query(block);
+    expect(await mode(never)).toBe("standard");
   });
 });

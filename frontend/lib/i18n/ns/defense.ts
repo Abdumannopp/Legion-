@@ -79,6 +79,16 @@ export const defense = defineMessages({
     payments: {
       title: "Payments on hold",
       intro: "Your payment software asks Legion before it pays. A payment that looks like fraud waits here until someone confirms it by phone. Setup: PAYMENT-CHECK.md.",
+      consent: {
+        title: "Confirm how the payment check works",
+        notice: "The payment check answers “allow” or “hold” when your payment software asks. Legion never moves money and never sees your bank. A payment is stopped only if your payment software honours a “hold”. A held payment stays held until a person in your organisation confirms it by calling a phone number you already had, and then releases it here. Legion's answers are not financial, legal or fraud-prevention advice and can be wrong in both directions: a genuine payment can be held, and a fraudulent one can be allowed. You are responsible for the payments you make, and the check does not replace your bank's controls.",
+        label: "I have read this notice and I want my payment software to use the payment check.",
+        confirm: "Confirm",
+        confirmed: "Confirmed.",
+        requiredNow: "The payment check does not answer until an administrator confirms this. Until then your payment software is told not to pay automatically.",
+        askedNow: "Please confirm this notice. The payment check keeps working in the meantime.",
+        adminOnly: "An administrator must confirm this notice.",
+      },
       empty: "No payment is waiting.",
       to: (amount: string, currency: string, hint: string) => `${amount} ${currency} to account ${hint}`,
       requestedBy: (who: string) => `requested by ${who}`,

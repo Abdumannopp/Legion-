@@ -5,6 +5,18 @@ end the same way: money is sent to the attacker's account. Legion is not in the
 payment path, so **your payment software (ERP, bank connector, accounting) asks
 Legion before sending money**. Legion answers "allow" or "hold".
 
+## Before the first check (hosted workspaces)
+
+An administrator must first read and confirm the notice in Dashboard → **Defense** → **Payments on hold**:
+what a "hold" is, that a person decides, that Legion's answers are not financial advice and can be wrong, and that
+the customer remains responsible for payments. Who confirmed, when, and which version of the text are recorded
+and written to the audit log.
+
+Until it is confirmed, a **new** workspace's check answers `403` (`acknowledgement_required`), so the client exits
+with `1` and **your payment software must not pay automatically**: nothing is decided, nothing is stored. A
+workspace that was already using the check is asked to confirm but is not cut off. If the text of the notice changes
+in substance, the version number rises and administrators are asked again. A self-hosted installation is not asked.
+
 ## When a payment is held
 
 | Reason | Meaning |

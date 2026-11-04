@@ -239,6 +239,22 @@ async function main() {
   const askPayment = () => spawnSync("python3", [join(REPO, "integrations", "custom-legion.py"), "--payment-check", apiKey ?? "", `${API}/security-events/webhook`, paymentFile], {
     env: { ...process.env, LEGION_INTEGRATION_LOG: join(WORK, "integrations.log") }, encoding: "utf8", timeout: 30_000,
   });
+  const refusedFirst = askPayment();
+  check("a new workspace's first check is refused until an administrator confirms the notice (exit 1: do not pay)", refusedFirst.status === 1, `${refusedFirst.status} ${refusedFirst.stdout} ${refusedFirst.stderr}`);
+  await page.goto(`${WEB}/defense`);
+  await sees(page, "the payment-check notice is shown to the administrator", "Confirm how the payment check works");
+  await sees(page, "and says the check does not answer yet", "The payment check does not answer until an administrator confirms this");
+  const confirmButton = page.getByRole("button", { name: "Confirm", exact: true });
+  check("Confirm stays disabled until the box is ticked", await confirmButton.isDisabled());
+  await page.getByLabel("I have read this notice and I want my payment software to use the payment check.").check();
+  await confirmButton.click();
+  await sees(page, "the confirmation is accepted", "Confirmed.");
+  const paymentAck = await sql(DB, "SELECT payment_ack_by, payment_ack_version FROM tenants WHERE payment_ack_at IS NOT NULL");
+  check("who confirmed, and which version of the notice, is recorded", paymentAck.length === 1 && !!paymentAck[0].payment_ack_by && paymentAck[0].payment_ack_version === "1", JSON.stringify(paymentAck));
+  const [{ n: payAudit }] = await sql(DB, "SELECT count(*)::int AS n FROM audit_log WHERE action = 'security.payment_notice_acknowledged'");
+  check("the confirmation is in the audit log", payAudit === 1, String(payAudit));
+  await page.reload();
+  check("once confirmed, the notice is not shown again", !(await text(page)).includes("Confirm how the payment check works"));
   const first = askPayment();
   check("the payment software is told to HOLD a payment to a new account (exit 3)", first.status === 3 && /"decision": "hold"/.test(first.stdout), `${first.status} ${first.stdout} ${first.stderr}`);
   await page.reload();

@@ -747,3 +747,24 @@ ALTER TABLE tenants ADD COLUMN IF NOT EXISTS auto_block_ack_version text;
 -- are cleared if the workspace stops being locked (subscribed again, legal hold).
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS deletion_notice_at timestamptz;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS deletion_scheduled_for timestamptz;
+
+-- AI data mode: NULL means "never chosen". What that means depends on the
+-- deployment (ai-policy.ts): a hosted workspace starts in 'strict' (identifiers are
+-- replaced before anything leaves), a self-hosted one in 'standard'. Done once, when
+-- the column is still NOT NULL: workspaces that never turned AI on and only carry
+-- the old default become "never chosen"; anyone who chose a mode keeps it.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_schema = 'public' AND table_name = 'tenants' AND column_name = 'ai_data_mode' AND is_nullable = 'NO') THEN
+    ALTER TABLE tenants ALTER COLUMN ai_data_mode DROP NOT NULL;
+    ALTER TABLE tenants ALTER COLUMN ai_data_mode DROP DEFAULT;
+    UPDATE tenants SET ai_data_mode = NULL WHERE ai_enabled IS NULL AND ai_data_mode = 'standard';
+  END IF;
+END $$;
+
+-- Payment check: the notice an administrator confirmed before the check is used (who, when, which
+-- version of the text). A hosted workspace with no earlier checks cannot use it until then.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS payment_ack_at timestamptz;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS payment_ack_by text;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS payment_ack_version text;
