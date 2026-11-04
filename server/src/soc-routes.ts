@@ -18,6 +18,7 @@ import {
   type ActionRequest, type ActionStatus,
 } from "./actions/engine.js";
 import { getRun, listRuns, runWorkflow, workflowDefinitions, WorkflowError } from "./orchestrator/engine.js";
+import { listJobs, runtimeStatus } from "./runtime/queue.js";
 
 type AuthedRequest = Request & { user?: User };
 type Middleware = (req: AuthedRequest, res: Response, next: NextFunction) => Promise<void>;
@@ -224,6 +225,14 @@ export function registerSocRoutes(app: Express, { requirePermission, parse, log,
       if (error instanceof WorkflowError) return res.status(error.status).json({ detail: error.message, code: error.code });
       throw error;
     }
+  });
+
+  // --- Background Runtime -----------------------------------------------------
+
+  app.get("/runtime/status", requirePermission("runtime:read"), async (req: AuthedRequest, res) => {
+    const tenantId = req.user!.tenant_id;
+    const status = typeof req.query.status === "string" && ["queued", "running", "done", "dead"].includes(req.query.status) ? req.query.status : undefined;
+    res.json({ ...(await runtimeStatus(tenantId)), jobs: await listJobs(tenantId, { status, limit: limitOf(req.query.limit, 100) }) });
   });
 
   // --- Approval Engine v0 -----------------------------------------------------

@@ -33,6 +33,7 @@
  * A row whose worker died during its FINAL attempt is dead-lettered rather
  * than reclaimed forever — a message that crashes the process cannot loop.
  */
+import { enqueueJob } from "./runtime/queue.js";
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { config } from "./config.js";
@@ -167,6 +168,9 @@ export async function insertAlertAndNotify(alert: NewAlert, opts: IngestOptions 
     }
     await enqueueAlertEmail(client, inserted);
     if (opts.realtime) await enqueueRealtime(client, inserted, opts.realtime(inserted));
+    if (config.orchestratorAutoMode === "shadow") {
+      await enqueueJob(client, inserted.tenant_id, "workflow.run", { workflow: "alert_response", alert_id: inserted.id, mode: "shadow" }, `alert_response:${inserted.id}:shadow`);
+    }
     return inserted;
   });
   if (stored) kick();

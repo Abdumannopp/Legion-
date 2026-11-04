@@ -21,7 +21,7 @@ const TENANT_TABLES = [
   "notification_outbox", "users", "refresh_tokens", "mfa_recovery_codes", "mfa_used_counters", "tenants",
   "attack_campaigns", "integration_connections", "ip_blocks", "payment_beneficiaries", "payment_checks", "tenant_deletions", "usage_counters", "workspace_memberships",
   // Task 10 SOC core
-  "policy_documents", "policy_active", "policy_decisions", "approval_requests", "approval_decisions", "action_requests", "action_events", "soc_controls", "workflow_runs",
+  "policy_documents", "policy_active", "policy_decisions", "approval_requests", "approval_decisions", "action_requests", "action_events", "soc_controls", "workflow_runs", "soc_jobs",
 ];
 
 /** Tables whose rows are ALWAYS reached tenant-first by these functions; must never be read unscoped. */
@@ -70,6 +70,9 @@ const REVIEWED: Exception[] = [
   { file: "seed.ts", table: "tenants", reason: "demo seeding" },
   { file: "setup-token.ts", table: "tenants", reason: "first-run probe" },
   { file: "index.ts", table: "tenants", match: /^SELECT 1 FROM tenants LIMIT 1$/i, reason: "first-run probe" },
+  // --- Task 10 Background Runtime: the worker serves every workspace; each claimed row carries its tenant_id
+  { file: "runtime/queue.ts", table: "soc_jobs", match: /^UPDATE soc_jobs SET status = 'dead', lease_owner = NULL, lease_until = NULL, finished_at = now\(\), updated_at = now\(\), last_error = 'worker stopped during the final attempt; outcome unknown' WHERE status = 'running' AND lease_until < now\(\) AND attempts >= max_attempts$/i,
+    reason: "deadLetterAbandoned(): marks jobs whose worker died on their last attempt as dead, in every workspace; returns nothing" },
   // --- found when the scan became recursive / the table list complete (Task 10, B-01)
   { file: "ai-policy.ts", table: "usage_counters", match: /^DELETE FROM usage_counters WHERE meter IN \('ai\.requests', 'ai\.requests\.day'\)$/i,
     reason: "resetAiQuota(): test/maintenance reset of the AI rate-limit meters; counters only, no tenant data is read" },

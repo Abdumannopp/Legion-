@@ -302,6 +302,15 @@ export const config = {
    * There is deliberately no enforcing value yet.
    */
   policyEngineMode: (process.env.POLICY_ENGINE_MODE || "shadow") as "off" | "shadow",
+  /** Task 10 Background Runtime: this process claims and runs SOC jobs ("off" for an API-only replica). */
+  runtimeWorker: (process.env.RUNTIME_WORKER || "on") !== "off",
+  runtimePollSeconds: Math.min(300, Math.max(1, Math.floor(Number(process.env.RUNTIME_POLL_SECONDS ?? 5)) || 5)),
+  /**
+   * Task 10 Orchestrator: run the alert workflow for every NEW alert, in the
+   * background. "off" (default) or "shadow" (decisions recorded, no approval
+   * requests, nothing done). Simulation and live are not offered here.
+   */
+  orchestratorAutoMode: (process.env.ORCHESTRATOR_AUTO_MODE || "off") as "off" | "shadow",
   retentionAuditMonths: Math.max(0, Math.floor(Number(process.env.RETENTION_AUDIT_MONTHS ?? 24)) || 0),
   /** Audit P2-16: delivered alert emails (recipient + alert text) are kept this many days, then deleted. 0 = keep. */
   notifyRetentionDays: Math.max(0, Math.floor(Number(process.env.NOTIFY_RETENTION_DAYS ?? 30)) || 0),
@@ -467,6 +476,9 @@ export const loopbackBind = ["127.0.0.1", "::1", "localhost"].includes(config.bi
 const explicitDevOrTest =
   process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test";
 
+if (config.orchestratorAutoMode !== "off" && config.orchestratorAutoMode !== "shadow") {
+  throw new Error("Refusing to start: ORCHESTRATOR_AUTO_MODE must be \"off\" or \"shadow\"");
+}
 if (config.policyEngineMode !== "off" && config.policyEngineMode !== "shadow") {
   throw new Error("Refusing to start: POLICY_ENGINE_MODE must be \"off\" or \"shadow\" (enforcement is not available yet)");
 }

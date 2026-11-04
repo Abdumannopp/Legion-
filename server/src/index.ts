@@ -56,6 +56,7 @@ import * as realtime from "./realtime.js";
 import { createAgentLayer } from "./agents.js";
 import { registerSocRoutes } from "./soc-routes.js";
 import { shadowEvaluate } from "./policy/shadow.js";
+import { startRuntime, stopRuntime } from "./runtime/worker.js";
 import type { AccessState, Alert, Role, Severity, Subscription, User } from "./types.js";
 
 export const app = express();
@@ -2624,6 +2625,8 @@ if (process.env.NODE_ENV !== "test") {
 
   // Delivers queued alert emails and retries failed ones (outbox.ts).
   outbox.startOutboxWorker();
+  // SOC core jobs: queued action simulations, background workflow runs (runtime/worker.ts).
+  startRuntime();
   // "Wazuh went quiet" becomes an alert of its own (sensor-monitor.ts).
   startSensorMonitor(5 * 60_000, newAlertFrame);
   // Several instances need shared state for realtime fan-out and rate limits
@@ -2693,6 +2696,7 @@ if (process.env.NODE_ENV !== "test") {
       shuttingDown = true;
       console.info(`${signal} received — draining connections.`);
       outbox.stopOutboxWorker(); // undelivered rows stay queued for the next start
+      stopRuntime(); // a job in flight keeps its lease; another instance takes it over when the lease ends
       stopSensorMonitor();
       connections.stopIntegrationWorker();
       realtime.stopHeartbeat();

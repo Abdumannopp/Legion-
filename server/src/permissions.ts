@@ -34,6 +34,7 @@ export const PERMISSIONS = {
   "actions:control": "admin",
   "workflows:read": "analyst",
   "workflows:run": "analyst",
+  "runtime:read": "admin",
 } as const satisfies Record<string, Role>;
 
 export type Permission = keyof typeof PERMISSIONS;

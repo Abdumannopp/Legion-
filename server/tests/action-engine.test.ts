@@ -271,9 +271,13 @@ describe("v0 has no path to a side effect", () => {
   it("the action engine's code does not import anything that changes state outside its own tables", () => {
     const dir = join(__dirname, "..", "src", "actions");
     const code = readdirSync(dir).map((f) => readFileSync(join(dir, f), "utf8")).join("\n");
-    for (const forbidden of [/\baddBlock\b/, /\brevokeBlock\b/, /\bresolvePayment\b/, /\bupdateAlertStatus\b/, /\bsendMail\b/, /\benqueue\w*\(/, /\bfetch\(/, /mailer\.js/, /outbox\.js/, /child_process/]) {
+    for (const forbidden of [/\baddBlock\b/, /\brevokeBlock\b/, /\bresolvePayment\b/, /\bupdateAlertStatus\b/, /\bsendMail\b/, /\benqueue(?!Job\()\w*\(/, /\bfetch\(/, /mailer\.js/, /outbox\.js/, /child_process/]) {
       expect(code, String(forbidden)).not.toMatch(forbidden);
     }
+    // The only job the engine may queue is the simulation of its own action (runtime/worker.ts "action.run").
+    const kinds = [...code.matchAll(/enqueueJob\([^,]+,[^,]+,\s*"([^"]+)"/g)].map((m) => m[1]);
+    expect(kinds.length).toBeGreaterThan(0);
+    expect(new Set(kinds)).toEqual(new Set(["action.run"]));
     const sim = readFileSync(join(dir, "simulate.ts"), "utf8");
     expect(sim).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/);
   });

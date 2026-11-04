@@ -26,6 +26,7 @@ import { evaluatePolicy, type PolicyOutcome } from "../policy/evaluate.js";
 import { getActivePolicy, recordDecision } from "../policy/store.js";
 import type { ActorRef, Origin } from "../policy/types.js";
 import { simulate } from "./simulate.js";
+import { enqueueJob } from "../runtime/queue.js";
 
 export type ActionStatus = "denied" | "recorded" | "awaiting_approval" | "rejected" | "expired" | "cancelled" | "queued" | "running" | "simulated" | "failed";
 
@@ -147,6 +148,8 @@ export async function proposeAction(tenantId: string, p: Proposal): Promise<{ ac
           JSON.stringify(p.actor), p.origin, p.mode, status, outcome.decision, decisionId, approval?.id ?? null],
       )).rows[0]!;
       await event(client, tenantId, id, null, status, p.actor, outcome.reason_codes.join(","));
+      // Durable: if nothing runs it inline (crash after commit), the runtime will.
+      if (status === "queued") await enqueueJob(client, tenantId, "action.run", { action_request_id: id }, `action:${id}`);
       return toAction(row);
     });
     return { action, replayed: false };
@@ -186,6 +189,7 @@ export async function syncWithApproval(tenantId: string, actionId: string, by: A
       `UPDATE action_requests SET status = $3, updated_at = now() WHERE tenant_id = $1 AND id = $2 RETURNING ${COLUMNS}`, [tenantId, actionId, next],
     )).rows[0]!;
     await event(client, tenantId, actionId, "awaiting_approval", next, by, `approval ${approval?.status ?? "missing"}`);
+    if (next === "queued") await enqueueJob(client, tenantId, "action.run", { action_request_id: actionId }, `action:${actionId}`);
     return toAction(updated);
   });
 }
