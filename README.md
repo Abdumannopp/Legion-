@@ -79,6 +79,7 @@ Full guide for customers: [INSTALL.md](INSTALL.md).
 | How organisations are kept apart (multi-tenant) | [TENANT-ISOLATION.md](TENANT-ISOLATION.md) |
 | Backup and disaster recovery | [RECOVERY.md](RECOVERY.md) · [BACKUP.md](BACKUP.md) |
 | Architecture decisions | [ADR.md](ADR.md) |
+| Questions for a lawyer before selling Legion | [LEGAL-QUESTIONS.md](LEGAL-QUESTIONS.md) |
 | Security re-audit: the real status of every finding | [REAUDIT-2026-11.md](REAUDIT-2026-11.md) |
 | CI and the release security gate | [.github/CI.md](.github/CI.md) |
 
