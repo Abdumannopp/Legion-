@@ -251,6 +251,53 @@ async function main() {
   const second = askPayment();
   check("the payment software is now allowed (exit 0)", second.status === 0 && /"decision": "allow"/.test(second.stdout), `${second.status} ${second.stdout} ${second.stderr}`);
 
+  console.log("▶ 6d. automatic blocking needs a written acknowledgement first");
+  const ON = "On — block attacking addresses automatically";
+  const OFF = "Off — detect and report only";
+  const ACK = "I have read this notice and I turn on automatic blocking for my workspace.";
+  const NOTICE = "Automatic blocking acts without a person approving each block";
+  const save = page.getByRole("button", { name: "Save", exact: true });
+  await page.goto(`${WEB}/defense`);
+  await sees(page, "the automatic response settings are shown", "Automatic response");
+  await page.getByText(ON, { exact: true }).click();
+  await sees(page, "choosing 'On' shows the notice", NOTICE);
+  check("Save stays disabled until the notice is acknowledged", await save.isDisabled());
+  // The trial is the Professional plan, which keeps a person in the loop: the plan says so.
+  await page.getByLabel(ACK).check();
+  check("ticking the acknowledgement enables Save", await save.isEnabled());
+  await save.click();
+  await sees(page, "on the Professional plan, automatic blocking is refused and the upgrade is named", "not included in the Professional plan");
+  await shot(page, "auto-block-plan-refused");
+  const [{ n: acknowledgedEarly }] = await sql(DB, "SELECT count(*)::int AS n FROM tenants WHERE auto_block_ack_at IS NOT NULL");
+  check("a refused change records no acknowledgement", acknowledgedEarly === 0, String(acknowledgedEarly));
+
+  await sql(DB, "UPDATE tenants SET plan_override = 'business'");
+  await page.goto(`${WEB}/defense`);
+  await page.getByText(ON, { exact: true }).click();
+  await sees(page, "on a plan that allows it, the notice is shown", NOTICE);
+  check("Save is still disabled before the acknowledgement", await save.isDisabled());
+  await page.getByLabel(ACK).check();
+  await save.click();
+  await sees(page, "the setting is saved", "Saved");
+  await shot(page, "auto-block-acknowledged");
+  const ack = await sql(DB, "SELECT auto_block_mode, auto_block_ack_by, auto_block_ack_version FROM tenants WHERE auto_block_ack_at IS NOT NULL");
+  check("who acknowledged, and which version of the notice, is recorded", ack.length === 1 && ack[0].auto_block_mode === "auto" && !!ack[0].auto_block_ack_by && ack[0].auto_block_ack_version === "1", JSON.stringify(ack));
+  const [{ n: ackAudit }] = await sql(DB, "SELECT count(*)::int AS n FROM audit_log WHERE action = 'security.auto_block_acknowledged'");
+  check("the acknowledgement is in the audit log", ackAudit === 1, String(ackAudit));
+
+  await page.goto(`${WEB}/defense`);
+  await page.getByText(OFF, { exact: true }).click();
+  await save.click();
+  await sees(page, "turning it off needs no acknowledgement", "Saved");
+  await page.getByText(ON, { exact: true }).click();
+  check("once acknowledged, the notice is not asked again", !(await text(page)).includes(NOTICE));
+  check("and Save is enabled at once", await save.isEnabled());
+  await page.getByText(OFF, { exact: true }).click();   // back to what is saved: nothing to save
+  check("changing nothing leaves Save disabled", await save.isDisabled());
+  const [{ auto_block_mode: finalMode }] = await sql(DB, "SELECT auto_block_mode FROM tenants WHERE auto_block_ack_at IS NOT NULL");
+  check("automatic blocking is left off for the rest of the journey", finalMode === "off", finalMode);
+  await sql(DB, "UPDATE tenants SET plan_override = NULL");
+
   console.log("▶ 7. first AI agent");
   await page.goto(`${WEB}/agents`);
   await sees(page, "agents page explains what Legion does for agents", "Legion checks every action your AI agents take");
