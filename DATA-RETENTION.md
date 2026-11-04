@@ -8,7 +8,7 @@ a self-hosted installation keeps its data for as long as its owner likes.
 | Resolved alerts | By plan: Starter 30 days … Enterprise 365 | `pruneAlertsByPlan` (open alerts are never deleted) |
 | Payment checks | 24 months (`RETENTION_PAYMENT_MONTHS`) | `prunePaymentChecks` |
 | Audit log: e-mail, IP, e-mail-like text in `detail` | 24 months (`RETENTION_AUDIT_MONTHS`), then removed. The entry itself stays | `pseudonymiseAudit` |
-| Backups | Up to 12 months | Backup rotation; deletions are re-applied after a restore (below) |
+| Backups | Up to 12 months | Local: `prune-backups.sh` (14 daily, 8 weekly, 12 monthly). **Off-server: the storage's lifecycle rule, which you must set to 12 months.** Deletions are re-applied after a restore (below) |
 
 All jobs skip a workspace on a **legal hold** (`tenants.legal_hold`).
 

@@ -60,7 +60,10 @@ DATABASE_URL=... ./ops/restore.sh <dump> --yes    # restore OVER the existing da
 
 Variables: `DATABASE_URL` (required — exactly the value your server uses),
 `DATABASE_ADMIN_URL` (optional, only for `verify-backup.sh`), `BACKUP_DIR`
-(default `./backups`), `RETENTION_DAYS` (default 14).
+(default `./backups`), `BACKUP_KEEP_DAILY` / `BACKUP_KEEP_WEEKLY` / `BACKUP_KEEP_MONTHLY`
+(default 14 / 8 / 12; the old `RETENTION_DAYS` is ignored). The privacy text promises
+backups "up to 12 months": local copies follow this rule, but **off-server copies are kept as long
+as the storage keeps them**, so set its lifecycle rule to 12 months (RECOVERY.md).
 
 Test: `DATABASE_URL=... bash ops/tests/test-backup-restore.sh` — on a real
 PostgreSQL: backup → drop a table → restore, refusing broken and modified
