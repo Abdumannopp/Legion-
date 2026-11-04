@@ -1,4 +1,4 @@
-import { PERMISSION_TIERS, roleAllows, type Permission } from "../permissions.js";
+import { PERMISSION_TIERS, roleAllows, roleCanDelegate, type Permission } from "../permissions.js";
 import type { HumanRole, MachinePrincipal } from "../types.js";
 import { classifyUrl } from "./destinations.js";
 import { checkFilePath } from "./paths.js";
@@ -308,7 +308,7 @@ export function evaluateRules(input: RuleInputs): RuleOutput {
   if (d.state === "valid") {
     add("acting for a person", 5);
     if (delegated && !d.permissions.includes(delegated)) hard("delegation.not_granted", `${d.userId} did not delegate ${delegated}.`);
-    else if (delegated && !roleAllows(d.userRole, delegated)) hard("delegation.exceeds_user", `${d.userId}'s role does not allow ${delegated}.`);
+    else if (delegated && !roleCanDelegate(d.userRole, delegated)) hard("delegation.exceeds_user", `${d.userId}'s role does not allow delegating ${delegated}.`);
     if (req.surface === "agent_message" && !d.inherited && !d.redelegable) {
       hard("a2a.redelegation_not_allowed", `${d.userId} delegated to this agent only; passing their authority to another agent needs a re-delegable grant.`);
     }

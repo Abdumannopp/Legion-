@@ -4,7 +4,8 @@ import type { ConnectionOptions } from "node:tls";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
-import { migrateAgentSchema } from "@legion/agent-identity";
+import { AGENT_SCHEMA_SQL, migrateAgentSchema } from "@legion/agent-identity";
+import { createHash } from "node:crypto";
 import { config } from "../config.js";
 
 const { Pool, types } = pg;
@@ -147,25 +148,82 @@ const here = dirname(fileURLToPath(import.meta.url));
 const MIGRATION_LOCK_KEY = 728_401_337;
 
 /**
- * Applies the schema. Every statement is IF NOT EXISTS, so this runs safely on
- * every boot.
+ * How long a schema statement may wait for a table lock before giving up. A
+ * migration that queues behind a long query would otherwise make every request
+ * touching that table queue behind IT — a full outage on every restart.
+ */
+export const MIGRATION_LOCK_TIMEOUT = "5s";
+const MIGRATION_ATTEMPTS = 5;
+
+/** What the database's schema was last built from: both schema files. */
+export function schemaFingerprint(sql: string): string {
+  return createHash("sha256").update(sql).update("\0").update(AGENT_SCHEMA_SQL).digest("hex");
+}
+
+/**
+ * Applies the schema. Every statement is IF NOT EXISTS, so it is safe to run
+ * again — but some statements (constraint re-creation, triggers) take
+ * ACCESS EXCLUSIVE locks on hot tables. So:
+ *
+ *  - The fingerprint of the schema files is recorded in legion_schema_state.
+ *    When it matches (an ordinary restart, every replica of a rolling deploy
+ *    after the first), nothing is run and no table is locked.
+ *  - When it differs, the schema is applied with a lock timeout and retried a
+ *    few times, instead of queueing every request behind a waiting ALTER.
  *
  * The advisory lock serialises instances that start at the same moment:
- * concurrent CREATE INDEX statements on the same table can otherwise deadlock
- * against each other, which would crash a deploy that rolls several pods at
- * once.
+ * concurrent CREATE INDEX statements on the same table can otherwise deadlock.
  */
-export async function migrate(): Promise<void> {
+export async function migrate(opts: { lockTimeout?: string; attempts?: number } = {}): Promise<void> {
+  const lockTimeout = opts.lockTimeout ?? MIGRATION_LOCK_TIMEOUT;
+  const attempts = opts.attempts ?? MIGRATION_ATTEMPTS;
+  if (!/^\d+(ms|s)$/.test(lockTimeout)) throw new Error("invalid lock timeout");
   // The .sql file sits next to the compiled output; tsc doesn't copy it, so the
   // build script does (see package.json).
   const sql = await readFile(join(here, "schema.sql"), "utf8");
+  const fingerprint = schemaFingerprint(sql);
   const client = await pool.connect();
   try {
     await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_KEY]);
-    await client.query(sql);
+    await client.query(
+      `CREATE TABLE IF NOT EXISTS legion_schema_state (
+         id          int         PRIMARY KEY CHECK (id = 1),
+         fingerprint text        NOT NULL,
+         applied_at  timestamptz NOT NULL DEFAULT now()
+       )`,
+    );
+    const current = await client.query<{ fingerprint: string; intact: boolean }>(
+      `SELECT fingerprint,
+              to_regclass('public.tenants') IS NOT NULL AND to_regclass('public.alerts') IS NOT NULL AS intact
+         FROM legion_schema_state WHERE id = 1`,
+    );
+    const row = current.rows[0];
+    // LEGION_FORCE_MIGRATE=1 re-applies anyway (e.g. after repairing a damaged schema by hand).
+    if (row && row.fingerprint === fingerprint && row.intact && process.env.LEGION_FORCE_MIGRATE !== "1") return;
+
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await client.query(`SET lock_timeout = '${lockTimeout}'`);
+        await client.query(sql);
+        break;
+      } catch (err) {
+        const code = (err as { code?: string }).code;
+        // 55P03 lock_not_available, 40P01 deadlock_detected: a busy table. The
+        // whole file ran as one implicit transaction, so nothing was applied.
+        if (attempt >= attempts || (code !== "55P03" && code !== "40P01")) throw err;
+        await new Promise((r) => setTimeout(r, 500 * attempt));
+      } finally {
+        await client.query("RESET lock_timeout").catch(() => {});
+      }
+    }
     // The AI-agent tables (identities, firewall, audit, skills…), from
-    // packages/agent-identity. Idempotent like schema.sql.
+    // packages/agent-identity. Idempotent, with its own lock timeout.
     await migrateAgentSchema(pool);
+    await client.query(
+      `INSERT INTO legion_schema_state (id, fingerprint) VALUES (1, $1)
+       ON CONFLICT (id) DO UPDATE SET fingerprint = EXCLUDED.fingerprint, applied_at = now()`,
+      [fingerprint],
+    );
   } finally {
     await client
       .query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY])

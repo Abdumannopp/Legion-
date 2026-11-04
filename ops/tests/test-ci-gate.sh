@@ -31,6 +31,19 @@ expect 1 "release not depending on the gate is refused" node .github/scripts/che
 sed 's/ --require-clean//' "$wf" > "$tmp/lax.yml"
 expect 1 "dropping provenance checks from validation is refused" node .github/scripts/check-ci-gate.mjs "$tmp/lax.yml"
 
+# A regression test silently dropped from the security suite is refused.
+mkdir -p "$tmp/root/server/tests" "$tmp/root/packages/agent-identity/test"
+cp -r server/tests/. "$tmp/root/server/tests/"
+cp -r packages/agent-identity/test/. "$tmp/root/packages/agent-identity/test/"
+cp packages/agent-identity/package.json "$tmp/root/packages/agent-identity/package.json"
+sed 's# tests/audit-append-only.test.ts##' server/package.json > "$tmp/root/server/package.json"
+expect 1 "dropping a security regression test from test:security is refused" env CI_GATE_ROOT="$tmp/root" node .github/scripts/check-ci-gate.mjs "$wf"
+cp server/package.json "$tmp/root/server/package.json"
+rm "$tmp/root/server/tests/migrations.test.ts"
+expect 1 "deleting a security regression test file is refused" env CI_GATE_ROOT="$tmp/root" node .github/scripts/check-ci-gate.mjs "$wf"
+sed 's/npm run test:security -w server/npm test -w server -- tests\/mfa.test.ts/' "$wf" > "$tmp/nosec.yml"
+expect 1 "the security job not running the security suite is refused" node .github/scripts/check-ci-gate.mjs "$tmp/nosec.yml"
+
 echo "release-gate.mjs"
 all='{"deploy-scripts":{"result":"success"},"dependencies":{"result":"success"},"agent-identity":{"result":"success"},"app":{"result":"success"},"security-assessment":{"result":"success"}}'
 expect 0 "all jobs succeeded → release allowed" env NEEDS="$all" node .github/scripts/release-gate.mjs

@@ -5,7 +5,8 @@
 // off. This script fails CI if that happens.
 //
 //   node .github/scripts/check-ci-gate.mjs [path/to/ci.yml]
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const file = process.argv[2] ?? ".github/workflows/ci.yml";
 const text = readFileSync(file, "utf8");
@@ -53,6 +54,37 @@ if (jobs.release && !jobs.release.needs.includes("release-gate")) problems.push(
 if (!/provenance\.mjs validate[^\n]*--require-clean[^\n]*--expect-commit/.test(text)) {
   problems.push("the security job no longer validates the assessment run with --require-clean and --expect-commit");
 }
+
+// 3. The security suites keep every regression test for a fixed finding.
+//    Dropping one from `test:security` (or deleting its file) quietly removes
+//    the guard against that finding coming back.
+const REQUIRED_SECURITY_TESTS = {
+  server: [
+    "first-admin", "webhook-auth", "webhook-constant-time", "tenant-isolation-sweep", "tenant-query-guard",
+    "cross-tenant-attacks", "ai-output-is-data", "ai-hardening", "ai-safety", "config-safety", "secret-placeholders",
+    "secrets-at-rest", "sessions", "session-token-hardening", "auth-hardening", "authorization-hardening", "mfa",
+    "db-app-role", "agent-security", "saas-signup-billing", "payments", "text-safety", "turnstile",
+    // audit 2026-09-29 fixes, re-audit 2026-11
+    "migrations", "access-log", "audit-append-only", "mock-provider", "deploy-supervision", "retention",
+  ].map((n) => `tests/${n}.test.ts`),
+  "packages/agent-identity": [
+    "untrusted-content", "injection-regression", "suspension-immediate", "killswitch", "prompt-guard", "firewall",
+    "db-least-privilege", "tools-database-executor", "policy-responses", "principal", "a2a",
+  ].map((n) => `test/${n}.test.ts`),
+};
+const root = process.env.CI_GATE_ROOT ?? ".";
+for (const [dir, required] of Object.entries(REQUIRED_SECURITY_TESTS)) {
+  let script = "";
+  try { script = JSON.parse(readFileSync(join(root, dir, "package.json"), "utf8")).scripts?.["test:security"] ?? ""; } catch { /* reported below */ }
+  if (!script) { problems.push(`${dir}: no test:security script`); continue; }
+  const listed = new Set(script.split(/\s+/));
+  for (const f of required) {
+    if (!listed.has(f)) problems.push(`${dir}: test:security no longer runs ${f}`);
+    if (!existsSync(join(root, dir, f))) problems.push(`${dir}: ${f} is missing`);
+  }
+}
+if (!/npm run test:security -w server/.test(text)) problems.push("the security job no longer runs the server security tests");
+if (!/working-directory: packages\/agent-identity[\s\S]{0,120}npm run test:security/.test(text)) problems.push("the security job no longer runs the agent security tests");
 
 for (const p of problems) console.error(`✗ ${p}`);
 console.log(problems.length ? `CI gate check: FAILED (${problems.length})` : `CI gate check: OK (${Object.keys(jobs).length} jobs)`);

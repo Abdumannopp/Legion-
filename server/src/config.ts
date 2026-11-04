@@ -199,7 +199,11 @@ export const config = {
   aiBreakerThreshold: Math.max(1, Math.floor(Number(process.env.AI_BREAKER_THRESHOLD || 5)) || 5),
   aiBreakerCooldownSeconds: Math.max(5, Math.floor(Number(process.env.AI_BREAKER_COOLDOWN_SECONDS || 60)) || 60),
   /** Provider calls one organisation may trigger per minute (per instance). */
+  /** One JSON line per HTTP request on stdout (route pattern, status, latency, request id). ACCESS_LOG=off disables; off by default under NODE_ENV=test. */
+  accessLog: process.env.ACCESS_LOG === "on" || (process.env.ACCESS_LOG !== "off" && process.env.NODE_ENV !== "test"),
   aiRateLimitPerMinute: Math.max(1, Math.floor(Number(process.env.AI_RATE_LIMIT_PER_MINUTE || 30)) || 30),
+  /** Audit P1-7: a per-workspace daily budget on top of the per-minute rate (0 = no daily cap). */
+  aiDailyLimit: Math.max(0, Math.floor(Number(process.env.AI_DAILY_LIMIT ?? 1000)) || 0),
   /**
    * Whether an organisation that has never chosen gets AI. "on" / "off";
    * empty = by deployment: a self-hosted operator who configured a provider
@@ -264,6 +268,8 @@ export const config = {
   notifyMaxAttempts: Math.max(1, Number(process.env.NOTIFY_MAX_ATTEMPTS || 8)),
   notifyRetryBaseSeconds: Math.max(1, Number(process.env.NOTIFY_RETRY_BASE_SECONDS || 30)),
   /** How often the background worker looks for due notifications. */
+  /** Audit P2-16: delivered alert emails (recipient + alert text) are kept this many days, then deleted. 0 = keep. */
+  notifyRetentionDays: Math.max(0, Math.floor(Number(process.env.NOTIFY_RETENTION_DAYS ?? 30)) || 0),
   notifyPollSeconds: Math.max(1, Number(process.env.NOTIFY_POLL_SECONDS || 15)),
   // The realtime "new alert" frame goes through the same outbox, so a Redis
   // outage delays it instead of dropping it. A dashboard frame is only worth

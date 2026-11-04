@@ -1,6 +1,6 @@
 import request from "supertest";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { agentWithToken, as, auditRows, bearer, makeApp, resetDb, TENANT_A, type TestApp } from "./helpers.js";
+import { agentWithToken, as, auditRows, bearer, makeApp, resetDb, TENANT_A, WEBHOOK_TEST_SECRET, type TestApp } from "./helpers.js";
 
 let t: TestApp;
 
@@ -35,9 +35,31 @@ describe("every request is exactly one of four principal types", () => {
 
   it("external_system: anonymous callers and named integrations", async () => {
     expect((await request(t.app).get("/whoami")).body.principal).toMatchObject({ type: "external_system", id: "anonymous" });
-    await request(t.app).post("/webhooks/wazuh").send({});
+    await request(t.app).post("/webhooks/wazuh").set("x-test-webhook-secret", WEBHOOK_TEST_SECRET).send({}).expect(202);
     const [row] = await auditRows(t.pool, "action = 'alert.ingest' AND outcome = 'attempt'");
     expect(row).toMatchObject({ principal_type: "external_system", principal_id: "wazuh-webhook" });
+  });
+
+  it("assessment IMP-5: a named external system is labelled only after its sender is verified", async () => {
+    const before = (await auditRows(t.pool, "action = 'alert.ingest'")).length;
+    const unsigned = await request(t.app).post("/webhooks/wazuh").send({ alert: "from anyone" });
+    expect(unsigned.status).toBe(401);
+    expect(unsigned.body.error.code).toBe("unverified_source");
+    const wrong = await request(t.app).post("/webhooks/wazuh").set("x-test-webhook-secret", "guess").send({});
+    expect(wrong.status).toBe(401);
+    // Nothing was recorded as coming from "wazuh-webhook".
+    expect((await auditRows(t.pool, "action = 'alert.ingest'")).length).toBe(before);
+  });
+
+  it("a route that forgets to say how to verify its sender refuses everything", async () => {
+    const express = (await import("express")).default;
+    const app = express();
+    app.use(t.identity.principal);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    app.post("/x", t.identity.guards.externalSystem("forgot", undefined as never), (_req, res) => { res.json({ ok: true }); });
+    const res = await request(app).post("/x").send({});
+    errors.mockRestore();
+    expect(res.status).toBe(401);
   });
 
   it("every response carries a request id that the audit trail also records", async () => {

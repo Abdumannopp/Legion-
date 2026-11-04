@@ -61,7 +61,7 @@ const windows = new Map<string, number[]>();
  * If the database cannot be reached the check falls back to counting in this
  * process: a smaller guarantee, never "no limit".
  */
-export async function consumeAiQuota(tenantId: string, now = Date.now()): Promise<{ ok: boolean; retryAfterSeconds: number }> {
+export async function consumeAiQuota(tenantId: string, now = Date.now()): Promise<{ ok: boolean; retryAfterSeconds: number; limit?: "minute" | "day" }> {
   const retryAfterSeconds = Math.max(1, 60 - Math.floor((now % 60_000) / 1000));
   try {
     const r = await query(
@@ -72,7 +72,25 @@ export async function consumeAiQuota(tenantId: string, now = Date.now()): Promis
        RETURNING count`,
       [tenantId, config.aiRateLimitPerMinute, now],
     );
-    return r.rowCount ? { ok: true, retryAfterSeconds: 0 } : { ok: false, retryAfterSeconds };
+    if (!r.rowCount) return { ok: false, retryAfterSeconds, limit: "minute" };
+    // Then the daily budget (audit P1-7): a workspace that keeps under the
+    // per-minute rate all day still has a ceiling on what it can spend. Only
+    // calls the per-minute rate let through are counted against it.
+    if (config.aiDailyLimit > 0) {
+      const day = await query(
+        `INSERT INTO usage_counters (tenant_id, meter, window_start, count)
+         VALUES ($1, 'ai.requests.day', date_trunc('day', to_timestamp($3 / 1000.0) AT TIME ZONE 'UTC') AT TIME ZONE 'UTC', 1)
+         ON CONFLICT (tenant_id, meter, window_start) DO UPDATE SET count = usage_counters.count + 1
+           WHERE usage_counters.count < $2
+         RETURNING count`,
+        [tenantId, config.aiDailyLimit, now],
+      );
+      if (!day.rowCount) {
+        const untilMidnight = Math.max(1, Math.ceil((86_400_000 - (now % 86_400_000)) / 1000));
+        return { ok: false, retryAfterSeconds: untilMidnight, limit: "day" };
+      }
+    }
+    return { ok: true, retryAfterSeconds: 0 };
   } catch {
     return consumeLocalAiQuota(tenantId, now);
   }
@@ -91,7 +109,7 @@ export function consumeLocalAiQuota(tenantId: string, now = Date.now()): { ok: b
 }
 export async function resetAiQuota(): Promise<void> {
   windows.clear();
-  await query("DELETE FROM usage_counters WHERE meter = 'ai.requests'").catch(() => {});
+  await query("DELETE FROM usage_counters WHERE meter IN ('ai.requests', 'ai.requests.day')").catch(() => {});
 }
 
 // --- audit -------------------------------------------------------------------

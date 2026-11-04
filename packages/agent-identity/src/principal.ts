@@ -149,7 +149,9 @@ export function createPrincipalResolver(deps: {
   }
 
   return async function resolvePrincipal(req: Request, res: Response, next: NextFunction) {
-    req.requestId = randomUUID();
+    // The host may already have assigned one (Legion's access log does); keep it,
+    // so the log line and the agent audit record carry the same id.
+    req.requestId ??= randomUUID();
     res.setHeader("x-request-id", req.requestId);
 
     if (options.exemptPaths.includes(req.path)) {

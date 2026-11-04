@@ -3,7 +3,7 @@ import cookieParser from "cookie-parser";
 import { apiLimiter, authLimiter, closeRateLimitStore, initRateLimitStore, redisConnected, loginAccountLimiter, mailPerAddressLimiter, makeMfaLimiter, makeStepUpLimiter } from "./ratelimit.js";
 import { hashForComparison, notifyAccountOwner, networkOf, recentLoginFailures, rememberLoginDevice } from "./account-security.js";
 import { backupHealthReport } from "./backup-health.js";
-import { applyTrustedProxies, checkWebSocketOrigin, limitSilentConnections, clientAddress, corsMiddleware, originGuard, securityHeaders, upgradeRateLimited } from "./edge.js";
+import { applyTrustedProxies, checkWebSocketOrigin, limitSilentConnections, KEEP_ALIVE_TIMEOUT_MS, clientAddress, corsMiddleware, originGuard, securityHeaders, upgradeRateLimited } from "./edge.js";
 import { signToken, verifyLegacyCheckoutToken, verifyTokenOf } from "./auth-jwt.js";
 import { comparePassword, hashPassword, HashingBusyError } from "./passwords.js";
 import { captchaEnabled, requireHuman } from "./turnstile.js";
@@ -31,6 +31,7 @@ import { listCampaigns, threatCoverage } from "./campaigns.js";
 import * as blocklist from "./blocklist.js";
 import * as payments from "./payments.js";
 import { rejectNul } from "./text.js";
+import { accessLog } from "./access-log.js";
 import * as webhookCredentials from "./webhook-credentials.js";
 import { hashOneTimeToken, newOneTimeToken } from "./auth-tokens.js";
 import { describeReport, migrateSecretsAtRest } from "./secrets-migration.js";
@@ -60,6 +61,8 @@ const now = () => new Date().toISOString();
 // who is not a named proxy is ignored.
 export const trustedProxies = applyTrustedProxies(app);
 app.disable("x-powered-by");
+// A request ID on every response and one JSON access-log line per request (audit P1-10).
+app.use(accessLog(() => config.accessLog));
 app.use(securityHeaders());
 app.use(corsMiddleware());
 // Machine endpoints authenticated by signature; they are not browsers.
@@ -1792,6 +1795,9 @@ interface PaddleSubscriptionData {
   custom_data?: Record<string, unknown> | null;
 }
 
+/** Statuses that let a workspace in (past_due: read-only, still not locked out). */
+const GRANTS_ACCESS = new Set<Subscription["status"]>(["active", "trialing", "past_due"]);
+
 const subscriptionStatuses = new Set<Subscription["status"]>([
   "trialing", "active", "past_due", "paused", "canceled",
 ]);
@@ -1851,10 +1857,40 @@ app.post("/billing/webhook", async (req, res) => {
   }
 
   const status = payload.status as Subscription["status"] | undefined;
-  const resolved: Subscription["status"] =
+  let resolved: Subscription["status"] =
     eventType === "subscription.canceled" ? "canceled"
       : status && subscriptionStatuses.has(status) ? status
         : existing?.status || "trialing";
+
+  // Audit P1-4: the browser opens the checkout, so it could pick any price in
+  // the vendor's catalogue (a cheaper plan, a test price). Only the prices the
+  // server offers (PADDLE_PRICE_IDS) grant access; anything else is recorded
+  // but kept blocked, and the operator is told.
+  const priceIds = (payload.items ?? []).map((i) => i?.price?.id).filter((x): x is string => typeof x === "string");
+  const offered = new Set(Object.values(config.paddlePriceIds));
+  if (offered.size && GRANTS_ACCESS.has(resolved) && (!priceIds.length || priceIds.some((p) => !offered.has(p)))) {
+    console.error(`Paddle ${eventType} for subscription ${payload.id}: price ${priceIds.join(",") || "(none)"} is not one Legion offers — access not granted.`);
+    resolved = "paused";
+    await store.audit({
+      tenant_id: tenantId, user_id: null, user_email: null, action: "billing.unrecognised_price",
+      resource_type: "subscription", resource_id: payload.id, detail: priceIds.join(",").slice(0, 200) || "(none)", ip_address: req.ip || null,
+    });
+  }
+
+  // Audit P1-5: one subscription row per workspace. A late event for an OLDER
+  // subscription (cancelled when the customer bought a new one) must not
+  // overwrite the subscription that is paying now.
+  if (!existing) {
+    const current = await store.getSubscription(tenantId);
+    if (current?.paddle_subscription_id && current.paddle_subscription_id !== payload.id
+        && GRANTS_ACCESS.has(current.status) && !GRANTS_ACCESS.has(resolved)) {
+      await store.audit({
+        tenant_id: tenantId, user_id: null, user_email: null, action: "billing.superseded_event",
+        resource_type: "subscription", resource_id: payload.id, detail: `${eventType} ignored; current ${current.paddle_subscription_id} is ${current.status}`.slice(0, 300), ip_address: req.ip || null,
+      });
+      return res.status(202).json({ status: "skipped", reason: "another subscription is current" });
+    }
+  }
 
   // Ordering is enforced inside the statement — Paddle does not guarantee
   // delivery order, and a stale retry must not overwrite newer state.
@@ -1959,7 +1995,14 @@ app.post("/security-events/test", requireRole("admin"), async (req: AuthedReques
   return res.status(201).json({ alert_id: report.ingested[0] });
 });
 
+// A development aid that fabricates a HIGH-severity alert (and its email).
+// Audit P2-15: on a real installation that is a fake incident in a security
+// product, so it exists only under NODE_ENV=development or test. The real way
+// to see a sample alert is POST /security-events/test (labelled, low severity).
+const MOCK_PROVIDER_ENABLED = () => process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test";
+
 app.post("/security-events/sync", requireRole("admin"), async (req: AuthedRequest, res) => {
+  if (!MOCK_PROVIDER_ENABLED()) return res.status(404).json({ detail: "Not found" });
   const id = `SEC-${randomBytes(8).toString("hex").toUpperCase()}`;
   const alert = await outbox.insertAlertAndNotify({
     id, tenant_id: req.user!.tenant_id, title: "Mock provider: suspicious authentication burst",
@@ -2460,6 +2503,7 @@ if (process.env.NODE_ENV !== "test") {
     console.warn("Legion: WARNING — WS_ALLOW_MISSING_ORIGIN=true lets non-browser WebSocket clients connect without an Origin.");
   }
   // Slow-loris bounds. Generous for a 256 KB body limit; response streaming is unaffected.
+  httpServer.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
   httpServer.headersTimeout = 30_000;
   httpServer.requestTimeout = 60_000;
   // A connection that opens and sends nothing has no Node timeout of its own.

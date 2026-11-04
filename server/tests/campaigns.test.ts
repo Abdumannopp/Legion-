@@ -442,6 +442,9 @@ describe("the seven most dangerous attack types, as they reach Legion", () => {
     await query("ALTER TABLE attack_campaigns DROP CONSTRAINT IF EXISTS attack_campaigns_rule_check");
     await query("ALTER TABLE attack_campaigns ADD CONSTRAINT attack_campaigns_rule_check CHECK (rule IN ('rapid_chain','wide_sweep','swarm','velocity','ai_manipulation'))");
     await expect(query("INSERT INTO attack_campaigns (tenant_id, id, rule, subject) VALUES ($1, 'CMP-OLD', 'ransomware', 'x')", [tenantA])).rejects.toThrow();
+    // An older installation's schema was built from older schema files: its
+    // recorded fingerprint differs from the current one (migrations.test.ts).
+    await query("UPDATE legion_schema_state SET fingerprint = 'from-an-older-release' WHERE id = 1");
     await migrate();
     await query("INSERT INTO attack_campaigns (tenant_id, id, rule, subject) VALUES ($1, 'CMP-NEW', 'ransomware', 'x')", [tenantA]);
     await expect(query("INSERT INTO attack_campaigns (tenant_id, id, rule, subject) VALUES ($1, 'CMP-BAD', 'made_up', 'x')", [tenantA])).rejects.toThrow();

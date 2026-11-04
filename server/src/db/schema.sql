@@ -678,3 +678,23 @@ CREATE TABLE IF NOT EXISTS payment_checks (
 );
 CREATE INDEX IF NOT EXISTS payment_checks_tenant_created_idx ON payment_checks (tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS payment_checks_lookup_idx ON payment_checks (tenant_id, beneficiary_hash, amount, currency) WHERE resolution IS NOT NULL;
+
+-- Audit P2-12: the audit log is append-only. An UPDATE or DELETE — a bug, or SQL
+-- injection reaching DML — is refused by the database itself. A deliberate,
+-- documented erasure (GDPR, tenant offboarding) must set
+-- legion.audit_erasure = 'on' in its own transaction, so it cannot happen by
+-- accident. TRUNCATE stays available to the owner for test and recovery tooling;
+-- an attacker able to run DDL as the owner is out of this trigger's reach
+-- (see audit P1-11: role split).
+CREATE OR REPLACE FUNCTION audit_log_append_only() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF coalesce(current_setting('legion.audit_erasure', true), '') = 'on' THEN
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+  END IF;
+  RAISE EXCEPTION 'audit_log is append-only (% refused)', TG_OP USING ERRCODE = 'insufficient_privilege';
+END $$;
+DROP TRIGGER IF EXISTS audit_log_append_only ON audit_log;
+CREATE TRIGGER audit_log_append_only
+  BEFORE UPDATE OR DELETE ON audit_log
+  FOR EACH ROW EXECUTE FUNCTION audit_log_append_only();

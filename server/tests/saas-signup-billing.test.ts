@@ -256,6 +256,58 @@ describe("Paddle turns a payment into access", () => {
     expect((await store.getSubscription(payer.user.tenant_id))?.status).toBe("canceled");
   });
 
+  it("audit P1-4: a subscription for a price Legion does not offer is recorded but grants no access", async () => {
+    const saved = config.paddlePriceIds;
+    (config as { paddlePriceIds: Record<string, string> }).paddlePriceIds = { USD: "pri_01test" };
+    try {
+      const payer = await verifiedAdmin("cheap@acme.example");
+      const ctx = await request(app).post("/billing/checkout-context").set("Authorization", payer.bearer).expect(200);
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      const res = await paddleEvent(subscriptionEvent("subscription.created", {
+        id: "sub_cheap", items: [{ price: { id: "pri_99cheaper" } }], custom_data: { checkout_token: ctx.body.checkout_token },
+      }));
+      errors.mockRestore();
+      expect(res.body.subscription_status).toBe("paused");
+      expect((await store.getSubscription(payer.user.tenant_id))?.status).toBe("paused");
+      const audit = await query("SELECT detail FROM audit_log WHERE tenant_id = $1 AND action = 'billing.unrecognised_price'", [payer.user.tenant_id]);
+      expect(audit.rows[0]?.detail).toBe("pri_99cheaper");
+
+      // The price Legion does offer still works.
+      const ok = await paddleEvent(subscriptionEvent("subscription.created", {
+        id: "sub_right", items: [{ price: { id: "pri_01test" } }], custom_data: { checkout_token: ctx.body.checkout_token },
+      }));
+      expect(ok.body.subscription_status).toBe("active");
+      // An extra item at an unknown price (e.g. a second product) also blocks.
+      const mixed = await paddleEvent(subscriptionEvent("subscription.updated", {
+        id: "sub_right", items: [{ price: { id: "pri_01test" } }, { price: { id: "pri_other" } }],
+      }, new Date(Date.now() + 1000).toISOString()));
+      errors.mockRestore();
+      expect(mixed.body.subscription_status).toBe("paused");
+    } finally {
+      (config as { paddlePriceIds: Record<string, string> }).paddlePriceIds = saved;
+    }
+  });
+
+  it("audit P1-5: a late cancellation of an OLD subscription does not lock a workspace paying through a new one", async () => {
+    const payer = await verifiedAdmin("switch@acme.example");
+    const ctx = await request(app).post("/billing/checkout-context").set("Authorization", payer.bearer).expect(200);
+    const t0 = Date.now();
+    await paddleEvent(subscriptionEvent("subscription.created", { id: "sub_A", custom_data: { checkout_token: ctx.body.checkout_token } }, new Date(t0).toISOString()));
+    await paddleEvent(subscriptionEvent("subscription.created", { id: "sub_B", custom_data: { checkout_token: ctx.body.checkout_token } }, new Date(t0 + 1000).toISOString()));
+    expect((await store.getSubscription(payer.user.tenant_id))?.paddle_subscription_id).toBe("sub_B");
+
+    const late = await paddleEvent(subscriptionEvent("subscription.canceled", { id: "sub_A", status: "canceled", custom_data: { checkout_token: ctx.body.checkout_token } }, new Date(t0 + 5000).toISOString()));
+    expect(late.body.status).toBe("skipped");
+    const sub = await store.getSubscription(payer.user.tenant_id);
+    expect(sub).toMatchObject({ paddle_subscription_id: "sub_B", status: "active" });
+    await request(app).get("/alerts").set("Authorization", payer.bearer).expect(200);
+    expect((await query("SELECT 1 FROM audit_log WHERE tenant_id = $1 AND action = 'billing.superseded_event'", [payer.user.tenant_id])).rowCount).toBe(1);
+
+    // The current subscription's own cancellation still locks it.
+    await paddleEvent(subscriptionEvent("subscription.canceled", { id: "sub_B", status: "canceled" }, new Date(t0 + 6000).toISOString()));
+    expect((await store.getSubscription(payer.user.tenant_id))?.status).toBe("canceled");
+  });
+
   it("when the trial runs out without a subscription, the workspace locks", async () => {
     const payer = await verifiedAdmin("trial@acme.example");
     await request(app).get("/alerts").set("Authorization", payer.bearer).expect(200);

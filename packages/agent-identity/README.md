@@ -31,7 +31,7 @@ Every request is resolved to exactly one of these and stored on `req.principal`:
 | `human` | A person | Legion's existing cookie login (called through `HostAdapter`, never reimplemented) |
 | `ai_agent` | An AI system acting on its own | Access token `lgt_…` obtained with an agent credential `lga_…` |
 | `service_account` | A non-AI machine (script, integration) | Access token `lgt_…` obtained with a service credential `lgs_…` |
-| `external_system` | Everything else: sensor webhooks, anonymous traffic | Nothing, or its own scheme; labelled by name with `guards.externalSystem("wazuh-webhook")` |
+| `external_system` | Everything else: sensor webhooks, anonymous traffic | Its own scheme, which the route must prove: `guards.externalSystem("wazuh-webhook", { verify })` labels the caller only after `verify(req)` succeeds (a signature or shared secret); without `verify` every request is refused (401 `unverified_source`) |
 
 Rules enforced on every request:
 
@@ -154,7 +154,7 @@ written, or the policy can't be read, the answer is BLOCK.
 |---|---|
 | Agent identity | The authenticated token (status, risk, credential) |
 | Tenant | Agent's tenant vs. the target's tenant |
-| User delegation | `x-legion-on-behalf-of: <userId>`, checked against a grant **that person** created (`POST /firewall/delegations`), their current role, and the agent's grants |
+| User delegation | `x-legion-on-behalf-of: <userId>`, checked against a grant **that person** created (`POST /firewall/delegations`), their current role, and the agent's grants. Write/execute (tier 2) authority can be delegated by an **administrator** only — checked when the grant is made and again at every use |
 | Requested action & permission | The route or executor. For tools, the policy's permission for the tool wins over the caller's claim |
 | Target resource | Type, id and owning tenant |
 | Sensitivity | `public` < `internal` < `confidential` < `restricted`. The policy can raise a resource type's level, never lower it. Data leaving Legion is at least `confidential`; `restricted` is never reachable |

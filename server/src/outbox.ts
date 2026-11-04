@@ -427,6 +427,21 @@ export async function pruneDeliveredRealtime(): Promise<number> {
 }
 
 /**
+ * Audit P2-16: a delivered alert email holds the recipient's address and the
+ * alert's text. Once sent it has done its job; keeping it forever only grows
+ * what a leak could expose. Only 'sent' rows go — pending, retrying and dead
+ * ones (still owed, or waiting for a person) are never touched.
+ */
+export async function pruneDeliveredEmails(days = config.notifyRetentionDays): Promise<number> {
+  if (!(days > 0)) return 0;
+  const res = await query(
+    "DELETE FROM notification_outbox WHERE kind = 'alert_email' AND status = 'sent' AND sent_at < now() - make_interval(days => $1)",
+    [Math.floor(days)],
+  );
+  return res.rowCount ?? 0;
+}
+
+/**
  * Puts an organisation's dead-lettered jobs back in the queue — after the mail
  * server outage that exhausted their retries is over, say. Each gets a fresh
  * set of attempts. With `id`, just that job. Only 'dead' rows move: a job that
@@ -491,6 +506,7 @@ async function tick(): Promise<void> {
     if (Date.now() - lastPrune > 3_600_000) {
       lastPrune = Date.now();
       await pruneDeliveredRealtime();
+      await pruneDeliveredEmails();
     }
   } catch (error) {
     console.error("Legion: notification worker failed:", error instanceof Error ? error.message : "unknown error");
