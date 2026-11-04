@@ -11,6 +11,7 @@ import type { PoolClient } from "pg";
 import { config } from "./config.js";
 import { query, queryAll, queryOne, transaction } from "./db/pool.js";
 import { isLocale, type Locale } from "./i18n.js";
+import { isAddonId, isPlanId } from "./plans.js";
 import type {
   Alert, AlertStatus, Asset, AuditLog, Role, Severity,
   Subscription, Tenant, User, UserStatus,
@@ -35,7 +36,7 @@ const toTenant = (r: any): Tenant => ({
   id: r.id, name: r.name, notification_email: r.notification_email,
   notification_email_pending: r.notification_email_pending ?? null,
   notification_locale: isLocale(r.notification_locale) ? r.notification_locale : "en",
-  trial_ends_at: iso(r.trial_ends_at), created_at: isoRequired(r.created_at),
+  trial_ends_at: iso(r.trial_ends_at), plan_override: isPlanId(r.plan_override) ? r.plan_override : null, created_at: isoRequired(r.created_at),
   ai_enabled: typeof r.ai_enabled === "boolean" ? r.ai_enabled : null,
   ai_data_mode: r.ai_data_mode === "strict" ? "strict" : "standard",
   region: r.region ?? null, timezone: r.timezone ?? "UTC", locale: r.locale ?? "en", currency: r.currency ?? "USD",
@@ -101,6 +102,8 @@ const toSubscription = (r: any): Subscription => ({
   paddle_subscription_id: r.paddle_subscription_id, paddle_price_id: r.paddle_price_id,
   current_period_end: iso(r.current_period_end),
   cancel_at_period_end: r.cancel_at_period_end, last_event_at: iso(r.last_event_at),
+  plan: isPlanId(r.plan) ? r.plan : null,
+  addons: Array.isArray(r.addons) ? r.addons.filter(isAddonId) : [],
 });
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
@@ -863,8 +866,8 @@ export async function applySubscriptionEvent(
 ): Promise<Subscription | null> {
   const row = await queryOne(
     `INSERT INTO subscriptions (tenant_id, status, paddle_customer_id, paddle_subscription_id,
-                                paddle_price_id, current_period_end, cancel_at_period_end, last_event_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                                paddle_price_id, current_period_end, cancel_at_period_end, last_event_at, plan, addons)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
      ON CONFLICT (tenant_id) DO UPDATE SET
        status                 = EXCLUDED.status,
        paddle_customer_id     = COALESCE(NULLIF(EXCLUDED.paddle_customer_id, ''), subscriptions.paddle_customer_id),
@@ -872,13 +875,16 @@ export async function applySubscriptionEvent(
        paddle_price_id        = COALESCE(EXCLUDED.paddle_price_id, subscriptions.paddle_price_id),
        current_period_end     = EXCLUDED.current_period_end,
        cancel_at_period_end   = EXCLUDED.cancel_at_period_end,
-       last_event_at          = EXCLUDED.last_event_at
+       last_event_at          = EXCLUDED.last_event_at,
+       plan                   = COALESCE(EXCLUDED.plan, subscriptions.plan),
+       addons                 = EXCLUDED.addons
      WHERE subscriptions.last_event_at IS NULL
         OR EXCLUDED.last_event_at >= subscriptions.last_event_at
      RETURNING *`,
     [
       sub.tenant_id, sub.status, sub.paddle_customer_id, sub.paddle_subscription_id,
       sub.paddle_price_id, sub.current_period_end, sub.cancel_at_period_end, sub.last_event_at,
+      sub.plan ?? null, sub.addons ?? [],
     ]
   );
   return row ? toSubscription(row) : null;

@@ -1,4 +1,5 @@
 import type { Locale } from "./i18n/core";
+import type { AddonId, Entitlements, PlanId } from "./plans";
 import { translations } from "./i18n/translations";
 import { createRefresher, type LockManagerLike } from "./session-refresh";
 import { setDisplaySettings, type DateFormat, type TimeFormat } from "./i18n/format";
@@ -622,8 +623,43 @@ export function openBillingPortal(): Promise<{ url: string }> {
   return request<{ url: string }>("/billing/portal", { method: "POST" });
 }
 
-export function getCheckoutContext(): Promise<{ checkout_token: string; currency?: string; price_id?: string | null }> {
-  return request<{ checkout_token: string; currency?: string; price_id?: string | null }>("/billing/checkout-context", { method: "POST" });
+/** What the server enforces for this workspace: its plan, add-ons and how much of each limit is used. */
+export interface PlanEntitlements extends Entitlements {
+  plan: PlanId;
+  addons: AddonId[];
+  source: "self-hosted" | "override" | "subscription" | "legacy" | "trial";
+  usage: {
+    endpoints: { used: number; limit: number | null; over: boolean };
+    admins: { used: number; limit: number | null; over: boolean };
+  };
+}
+
+export function getEntitlements(): Promise<PlanEntitlements> {
+  return request<PlanEntitlements>("/billing/entitlements");
+}
+
+/** The price list as the server has it, with which plans and add-ons can be bought online. */
+export interface PlanCatalog {
+  plans: Array<{ id: PlanId; buy: { month: boolean; year: boolean } }>;
+  addons: Array<{ id: AddonId; buy: boolean }>;
+}
+
+export function getPlans(): Promise<PlanCatalog> {
+  return request<PlanCatalog>("/billing/plans");
+}
+
+export interface CheckoutContext {
+  checkout_token: string;
+  currency?: string;
+  /** Without a plan: the workspace's single price (the old call). */
+  price_id?: string | null;
+  /** With a plan: what to put in the checkout. */
+  items?: Array<{ priceId: string; quantity: number }>;
+}
+
+/** The server maps a plan (and add-ons) to Paddle prices; the browser never names one. */
+export function getCheckoutContext(choice?: { plan: PlanId; interval: "month" | "year"; addons?: AddonId[] }): Promise<CheckoutContext> {
+  return request<CheckoutContext>("/billing/checkout-context", { method: "POST", body: choice ? JSON.stringify(choice) : undefined });
 }
 
 // ---------- Users / RBAC ----------

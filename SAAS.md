@@ -75,7 +75,6 @@ the same.
 NEXT_PUBLIC_OPERATOR_NAME=First Last          # your legal name (or company name), as on your ID
 NEXT_PUBLIC_SUPPORT_EMAIL=support@yourdomain.com
 NEXT_PUBLIC_DATA_LOCATION=Germany (Hetzner)   # the country of your server — shown in the privacy policy
-NEXT_PUBLIC_PRICE_LABEL=49 USD                # optional; do not use the "$" sign
 ```
 
 Paddle's domain review requires the **seller's real name** in the terms — that is
@@ -92,9 +91,24 @@ Paddle has two separate environments: **sandbox** (fake cards, no money) and
 ### 4a. Sandbox
 
 1. Sign up at <https://sandbox-login.paddle.com/signup>.
-2. **Catalog → Products → New product**: name `Legion`. Inside it,
-   **New price**: e.g. 49 USD, **recurring, monthly**. Save and copy the price
-   ID (`pri_…`).
+2. **Catalog → Products → New product**: one product, `Legion`. Inside it create
+   these **recurring** prices (USD) — the full price list is in [PRICING.md](PRICING.md):
+
+   | Price | Amount | Billing | Goes in `PADDLE_PLAN_PRICES` as |
+   |---|---|---|---|
+   | Starter, monthly | 49 | monthly | `starter.month` |
+   | Starter, yearly | 490 | yearly | `starter.year` |
+   | Professional, monthly | 149 | monthly | `professional.month` |
+   | Professional, yearly | 1,490 | yearly | `professional.year` |
+   | Business, monthly | 399 | monthly | `business.month` |
+   | Business, yearly | 3,990 | yearly | `business.year` |
+
+   Add-ons are separate **monthly** prices (49 / 79 / 99 / 25 / 39) that go in
+   `PADDLE_ADDON_PRICES` as `agent_security`, `payment_fraud`, `threat_intel`,
+   `endpoints_100`, `ai_credits_5000`. Enterprise has no price: it is by
+   agreement (see PRICING.md, "Enterprise").
+
+   Copy each price ID (`pri_…`).
 3. **Developer tools → Authentication**:
    - create an **API key** → `PADDLE_API_KEY` (server, secret);
    - create a **Client-side token** → `NEXT_PUBLIC_PADDLE_CLIENT_TOKEN` (web page).
@@ -112,14 +126,19 @@ Paddle has two separate environments: **sandbox** (fake cards, no money) and
    PADDLE_ENVIRONMENT=sandbox
    PADDLE_API_KEY=…
    PADDLE_WEBHOOK_SECRET=…
+   PADDLE_PLAN_PRICES=starter.month=pri_…,starter.year=pri_…,professional.month=pri_…,professional.year=pri_…,business.month=pri_…,business.year=pri_…
+   PADDLE_ADDON_PRICES=agent_security=pri_…,payment_fraud=pri_…
    ```
 
    `frontend/.env.local`:
    ```env
    NEXT_PUBLIC_PADDLE_ENVIRONMENT=sandbox
    NEXT_PUBLIC_PADDLE_CLIENT_TOKEN=…
-   NEXT_PUBLIC_PADDLE_PRICE_ID=pri_…
    ```
+
+   The browser never names a price: it asks for a plan, a period and add-ons, and
+   the server picks the Paddle prices. A subscription whose price is not in these
+   lists grants no access.
 
 7. Build and restart:
 
@@ -132,7 +151,7 @@ Paddle has two separate environments: **sandbox** (fake cards, no money) and
 
 1. `https://legion.yourdomain.com` → **Start free trial** → sign up.
 2. Click **Confirm email** in the email → sign in. The dashboard opens.
-3. **Billing → Subscribe now** → the Paddle window. Test card:
+3. **Billing → Choose Starter** (or another plan) → the Paddle window. Test card:
    `4242 4242 4242 4242`, any future date, any CVC.
 4. After a few seconds the Billing page shows **Active**.
 5. **Manage subscription** → cancel → at the end of the period the workspace
@@ -195,4 +214,5 @@ If these five steps work, everything is connected correctly.
 | Emails land in spam | Check that the `_dmarc` TXT record and all of Resend's DNS records are added |
 | Billing shows "Paddle isn't configured" | The Paddle values in `frontend/.env.local` are empty, or it was not rebuilt |
 | Paid, but it did not become "Active" | Paddle → Notifications → destination → check the response in the logs; check the URL `/api/billing/webhook` and the secret. Server log: `journalctl -u legion \| grep Paddle` |
-| The price shows "—" | `NEXT_PUBLIC_PADDLE_PRICE_ID` or the client token is missing, or `PRICE_LABEL` uses `$` |
+| A plan button is disabled | That plan's price is not in `PADDLE_PLAN_PRICES`, or `NEXT_PUBLIC_PADDLE_CLIENT_TOKEN` is missing |
+| Paid, but access stays blocked | The price is not in `PADDLE_PLAN_PRICES` / `PADDLE_ADDON_PRICES` (the audit log says `billing.unrecognised_price` or `billing.no_plan`) |

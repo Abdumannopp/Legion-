@@ -1,23 +1,116 @@
-import { defineMessages, plural } from "../core";
+import { defineMessages } from "../core";
 
-/** The public /pricing page (the plan card itself is in site.pricingCard). */
-
+/** The public /pricing page and the plan grid shown on the landing page and in Billing. */
 
 export const pricing = defineMessages({
   en: {
     metaTitle: "Pricing | Legion Cyber Intelligence",
     eyebrow: "Pricing",
-    title: "One plan, everything included",
-    subtitle: (days: number) => `Start free for ${days} days. Pay only if you keep it.`,
+    title: "Plans for every size of team",
+    subtitle: (days: number) => `Start free for ${days} days, no card needed. Pay only if you keep it.`,
+    monthly: "Monthly",
+    annual: "Annual",
+    annualBadge: "2 months free",
+    perMonth: "/ month",
+    perYear: "/ year",
+    from: "from",
+    byAgreement: "By agreement",
+    billedYearly: (monthly: number) => `Billed yearly — about $${monthly} a month`,
+    savePercent: (percent: number) => `Save ${percent}%`,
+    recommended: "Recommended",
+    startTrial: "Start free trial",
+    contactSales: "Contact us",
+    seeComparison: "Compare all plans",
+    taxNote: "Prices are in US dollars. Tax is added at checkout where it applies. Billed through Paddle.com.",
+    audience: {
+      starter: "Small business",
+      professional: "Growing company",
+      business: "Large IT / SOC team",
+      enterprise: "Large organisation",
+    },
+    headline: {
+      endpoints: (n: number | null) => (n === null ? "1,000+ endpoints" : `Up to ${n} endpoints`),
+      admins: (n: number | null) => (n === null ? "Administrators by agreement" : `${n} administrators`),
+      history: (days: number) => `${days} days of alert history`,
+    },
+    compare: {
+      title: "Compare plans",
+      feature: "Feature",
+      rows: {
+        endpoints: "Endpoints",
+        admins: "Administrators",
+        retention: "Alert history",
+        aiAnalysis: "AI analysis",
+        aiAgents: "The five Legion agents",
+        agentSecurity: "AI Agent Security",
+        paymentCheck: "Payment fraud check",
+        ipBlocking: "Blocking attacker addresses",
+        api: "API and integrations",
+        support: "Support",
+      },
+      endpoints: (n: number | null) => (n === null ? "1,000+" : `Up to ${n}`),
+      admins: (n: number | null) => (n === null ? "By agreement" : String(n)),
+      retention: (days: number) => `${days} days`,
+      aiAnalysis: { basic: "Basic", extended: "Extended", custom: "Custom" },
+      yes: "Included",
+      no: "—",
+      addon: "Add-on",
+      paymentCheck: { addon: "Add-on", included: "Included" },
+      ipBlocking: { none: "—", approval: "With your approval", policy: "By policy", custom: "Custom policy" },
+      api: { none: "—", basic: "Basic", extended: "Extended", custom: "Custom" },
+      support: { email: "Email", priority_email: "Fast email", priority: "Priority", sla: "SLA" },
+    },
+    addons: {
+      title: "Add-ons",
+      intro: "Billed monthly with a monthly plan.",
+      perMonth: "/ month",
+      names: {
+        agent_security: "AI Agent Security",
+        payment_fraud: "Payment Fraud Protection",
+        threat_intel: "Advanced Threat Intelligence",
+        endpoints_100: "Extra 100 endpoints",
+        ai_credits_5000: "Extra 5,000 AI credits",
+      },
+      help: {
+        agent_security: "Identities, permissions and the policy firewall for your own AI agents. Included from Professional.",
+        payment_fraud: "Your payment software asks Legion before paying; a payment that looks like fraud is held for a phone check. Included from Professional.",
+        threat_intel: "Extra threat-intelligence sources.",
+        endpoints_100: "Raises your endpoint limit by 100.",
+        ai_credits_5000: "More AI requests for explanations and the assistant.",
+      },
+    },
+    selfHosted: {
+      title: "Self-hosted",
+      intro: "Run Legion on your own infrastructure. The yearly licence includes updates and your plan's support. You run the server and Wazuh.",
+      plan: "Plan",
+      endpoints: "Endpoints",
+      licence: "Yearly licence",
+      note: "Enterprise deployment and a custom SLA are set in the contract.",
+    },
+    setup: {
+      title: "Setup and integration",
+      intro: "We can set Legion up with you.",
+      names: { basic: "Basic Setup", professional: "Professional Setup", enterprise: "Enterprise Integration" },
+      help: {
+        basic: "Workspace, first sensor and first alerts.",
+        professional: "Sensors, team, alert routing and the payment check.",
+        enterprise: "Custom integration, single sign-on planning and rollout.",
+      },
+      range: (from: number, to: number | null) => (to === null ? `$${from.toLocaleString("en-US")}+` : `$${from.toLocaleString("en-US")} – $${to.toLocaleString("en-US")}`),
+    },
     faq: {
       afterTrial: {
         q: "What happens after the trial?",
         a: (days: number) =>
-          `For ${days} days everything is free and no card is needed. To keep using Legion, subscribe from Billing inside the app. If you don't, the workspace is locked — your data is kept, and subscribing later unlocks it.`,
+          `For ${days} days everything in the Professional plan is free and no card is needed. To keep using Legion, choose a plan from Billing inside the app. If you don't, the workspace is locked — your data is kept, and subscribing later unlocks it.`,
+      },
+      limits: {
+        q: "What happens if I go over my endpoint limit?",
+        a: "Nothing is dropped. Legion keeps recording every event and shows you that you are over the limit, so you can move to a bigger plan or add endpoints. We would rather you see an alert than miss one.",
       },
       cancel: {
-        q: "Can I cancel?",
-        a: "Yes, at any time, from Billing → Manage subscription. You keep access until the end of the period you paid for.",
+        q: "Can I cancel or change plan?",
+        a: "Yes, at any time, from Billing → Manage subscription. You keep access until the end of the period you paid for. To change plan, contact support and we will switch you without losing data.",
       },
       refunds: {
         q: "Refunds?",

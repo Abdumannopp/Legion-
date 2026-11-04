@@ -29,6 +29,7 @@ export { userFromLog };
 import { alertForBehaviorChange, alertForFirewallDecision, alertForSecurityEvent } from "./agent-alerts.js";
 import { chatSafe } from "./ai.js";
 import { aiPolicy, consumeAiQuota } from "./ai-policy.js";
+import { allows, planRefusal, resolvePlan } from "./plan-limits.js";
 import { Pseudonymizer } from "./ai-safety.js";
 import { pool, withLeaderLock } from "./db/pool.js";
 import { mailEnabled, sendMail } from "./mailer.js";
@@ -247,6 +248,8 @@ const STOP_ACTIONS: Array<[method: string, path: RegExp]> = [
   ["POST", /^\/agent\/v1\/token\/revoke$/],
 ];
 const READ = new Set(["GET", "HEAD", "OPTIONS"]);
+/** The Legion team's skills; everything else on the agent surface is agent security. */
+const SKILLS_SURFACE = /^\/skills(\/|$)/;
 
 /**
  * The subscription rules the dashboard's own routes follow (index.ts
@@ -281,7 +284,16 @@ export function subscriptionGate(deps: Pick<AgentLayerDeps, "accessState">) {
     if (STOP_ACTIONS.some(([m, re]) => m === req.method && re.test(path))) return next();
     try {
       const state = await deps.accessState(tenantId);
-      if (state === "ok" || (state === "readonly" && READ.has(req.method))) return next();
+      if (state === "ok" || (state === "readonly" && READ.has(req.method))) {
+        // The plan decides whether this surface is included at all: the five
+        // Legion agents' skills (Professional+), identities/firewall for the
+        // customer's own agents (AI Agent Security: Professional+, or the add-on).
+        // Stopping agents was let through above; nothing a plan removes can strand a running agent.
+        const plan = await resolvePlan(tenantId);
+        const feature = SKILLS_SURFACE.test(path) ? "aiAgents" : "agentSecurity";
+        if (!allows(plan, feature)) return res.status(403).json({ ...planRefusal(feature, plan.plan), error: { code: "plan_feature", message: planRefusal(feature, plan.plan).detail } });
+        return next();
+      }
       return res.status(402).json({
         detail: state === "readonly"
           ? "Your subscription payment is past due. Legion is read-only until it is settled."

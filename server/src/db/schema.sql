@@ -698,3 +698,21 @@ DROP TRIGGER IF EXISTS audit_log_append_only ON audit_log;
 CREATE TRIGGER audit_log_append_only
   BEFORE UPDATE OR DELETE ON audit_log
   FOR EACH ROW EXECUTE FUNCTION audit_log_append_only();
+
+-- Plans (PLANS in src/plans.ts). A subscription records which plan and add-ons
+-- its Paddle items are; the operator can set a plan by hand for a contract
+-- (Enterprise) with tenants.plan_override. Nullable: an older row means the
+-- single plan that existed before (resolved as Professional).
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS plan   text;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS addons text[] NOT NULL DEFAULT '{}';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS plan_override text;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tenants_plan_override_check') THEN
+    ALTER TABLE tenants ADD CONSTRAINT tenants_plan_override_check
+      CHECK (plan_override IS NULL OR plan_override IN ('starter', 'professional', 'business', 'enterprise'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'subscriptions_plan_check') THEN
+    ALTER TABLE subscriptions ADD CONSTRAINT subscriptions_plan_check
+      CHECK (plan IS NULL OR plan IN ('starter', 'professional', 'business', 'enterprise'));
+  END IF;
+END $$;

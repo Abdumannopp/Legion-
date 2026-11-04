@@ -66,6 +66,8 @@ const REQUIRED_SECURITY_TESTS = {
     "db-app-role", "agent-security", "saas-signup-billing", "payments", "text-safety", "turnstile",
     // audit 2026-09-29 fixes, re-audit 2026-11
     "migrations", "access-log", "audit-append-only", "mock-provider", "deploy-supervision", "retention",
+    // plans: prices, limits and what a plan refuses
+    "plans", "plan-limits",
   ].map((n) => `tests/${n}.test.ts`),
   "packages/agent-identity": [
     "untrusted-content", "injection-regression", "suspension-immediate", "killswitch", "prompt-guard", "firewall",

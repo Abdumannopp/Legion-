@@ -27,6 +27,7 @@ import { BlockList, isIP } from "node:net";
 import { randomUUID } from "node:crypto";
 import type { Campaign, CampaignRule } from "./campaigns.js";
 import { queryAll, queryOne } from "./db/pool.js";
+import { allows, resolvePlan } from "./plan-limits.js";
 import * as store from "./store.js";
 
 export const AUTO_RULES: ReadonlySet<CampaignRule> = new Set(["rapid_chain", "wide_sweep", "velocity", "credential_attack", "account_compromise"]);
@@ -217,7 +218,7 @@ export async function revokeBlock(tenantId: string, ipInput: string, userId: str
 
 export type AutoDecision =
   | { campaign: string; ip: string; action: "blocked" | "extended" }
-  | { campaign: string; ip: string | null; action: "skipped"; why: "off" | "rule" | "not_public" | "allowlisted" | "rate_limited" | "full" };
+  | { campaign: string; ip: string | null; action: "skipped"; why: "off" | "plan" | "rule" | "not_public" | "allowlisted" | "rate_limited" | "full" };
 
 /**
  * Decides, for campaigns that were just detected, which source addresses to
@@ -227,9 +228,13 @@ export type AutoDecision =
 export async function respondToCampaigns(tenantId: string, campaigns: Campaign[]): Promise<AutoDecision[]> {
   if (!campaigns.length) return [];
   const settings = await getSettings(tenantId);
+  // Automatic blocking is a plan feature (policy-based blocking: Business and up). A workspace
+  // that switched it on and then moved to a smaller plan keeps detection, loses the automatic block.
+  const planAllowsAuto = settings.mode !== "auto" || allows(await resolvePlan(tenantId), "autoBlocking");
   const decisions: AutoDecision[] = [];
   for (const c of campaigns) {
     const ip = attackerOf(c);
+    if (!planAllowsAuto) { decisions.push({ campaign: c.id, ip, action: "skipped", why: "plan" }); continue; }
     if (settings.mode !== "auto") { decisions.push({ campaign: c.id, ip, action: "skipped", why: "off" }); continue; }
     if (!ip) { decisions.push({ campaign: c.id, ip: null, action: "skipped", why: "rule" }); continue; }
     if (!isPublicAddress(ip)) { decisions.push({ campaign: c.id, ip, action: "skipped", why: "not_public" }); continue; }

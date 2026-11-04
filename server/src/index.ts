@@ -32,6 +32,8 @@ import * as blocklist from "./blocklist.js";
 import * as payments from "./payments.js";
 import { rejectNul } from "./text.js";
 import { accessLog } from "./access-log.js";
+import { adminSeatFree, allows, classifyPrices, offeredPriceIds, planRefusal, pruneAlertsByPlan, resolvePlan, usageOf } from "./plan-limits.js";
+import { ADDON_IDS, ADDONS, PLAN_IDS, PLANS, SELF_HOSTED, SETUP_SERVICES } from "./plans.js";
 import * as webhookCredentials from "./webhook-credentials.js";
 import { hashOneTimeToken, newOneTimeToken } from "./auth-tokens.js";
 import { describeReport, migrateSecretsAtRest } from "./secrets-migration.js";
@@ -232,6 +234,25 @@ export async function accessState(tenantId: string): Promise<AccessState> {
   if (!tenant) return "blocked";
   if (!tenant.trial_ends_at) return "ok";
   return new Date(tenant.trial_ends_at) > new Date() ? "ok" : "blocked";
+}
+
+/** Refuses with 403 `plan_feature` when the workspace's plan lacks `feature`; true when allowed. */
+async function planAllows(tenantId: string, feature: Parameters<typeof allows>[1], res: Response): Promise<boolean> {
+  const plan = await resolvePlan(tenantId);
+  if (allows(plan, feature)) return true;
+  res.status(403).json(planRefusal(feature, plan.plan));
+  return false;
+}
+
+/** Refuses with 403 `plan_limit` when another admin seat is not included in the plan; true when there is room. */
+async function adminSeatAvailable(tenantId: string, res: Response, excludeUserId?: string): Promise<boolean> {
+  const seat = await adminSeatFree(tenantId, excludeUserId);
+  if (seat.ok) return true;
+  res.status(403).json({
+    detail: `The ${PLANS[seat.plan].name} plan includes ${seat.limit} administrator${seat.limit === 1 ? "" : "s"}. Remove one, or upgrade your plan, to add another.`,
+    code: "plan_limit", limit: "admins", max: seat.limit, plan: seat.plan,
+  });
+  return false;
 }
 
 async function enforceAccess(req: AuthedRequest, res: Response): Promise<boolean> {
@@ -1383,6 +1404,8 @@ app.get("/assets", auth, async (req: AuthedRequest, res) => {
 });
 
 app.post("/copilot/chat", requireRole("analyst"), async (req: AuthedRequest, res) => {
+  // The Copilot assistant is part of extended AI analysis (Professional and up).
+  if (!(await planAllows(req.user!.tenant_id, "copilot", res))) return;
   const body = parse(z.object({ message: z.string().min(1).max(4000), history: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().min(1).max(4000) })).max(20).default([]) }), req.body, res); if (!body) return;
 
   const tenantId = req.user!.tenant_id;
@@ -1462,6 +1485,9 @@ app.post("/users/invite", requireRole("admin"), async (req: AuthedRequest, res) 
     email: z.string().email().max(254).transform((v) => v.toLowerCase()),
     role: z.enum(["admin", "analyst", "viewer"]),
   }), req.body, res); if (!body) return;
+
+  // The plan includes a number of administrator seats (audit: plans).
+  if (body.role === "admin" && !(await adminSeatAvailable(req.user!.tenant_id, res))) return;
 
   // Invitations are platform email to an address the tenant chooses: capped per tenant.
   const invitesThisHour = (await store.recentAuditCount(req.user!.tenant_id, "user.invited")) + (await store.recentAuditCount(req.user!.tenant_id, "user.invite_resent"));
@@ -1556,6 +1582,8 @@ app.patch("/users/:id/role", requireRole("admin"), async (req: AuthedRequest, re
   if (!UUID_RE.test(String(req.params.id))) return res.status(404).json({ detail: "User not found" });
   const body = parse(z.object({ role: z.enum(["admin", "analyst", "viewer"]) }), req.body, res); if (!body) return;
   const userId = String(req.params.id);
+  // Promoting to admin takes a seat (the person's own seat, if already an admin, does not count twice).
+  if (body.role === "admin" && !(await adminSeatAvailable(req.user!.tenant_id, res, userId))) return;
   // Check "a tenant keeps at least one admin" and change the role atomically
   // (store.updateUserKeepingAnAdmin): two admins demoting each other at once
   // can no longer leave the tenant with none.
@@ -1753,16 +1781,59 @@ app.get("/billing/subscription", auth, async (req: AuthedRequest, res) => {
   return res.json({ ...sub, access_state: state, trial_ends_at: tenant?.trial_ends_at || null });
 });
 
+/** The price list: public (the pricing page), the same data the server enforces. Never exposes Paddle price ids. */
+app.get("/billing/plans", (_req, res) => {
+  const purchasable = (id: string, interval: "month" | "year") => Boolean(config.paddlePlanPrices[`${id}.${interval}`]);
+  res.setHeader("Cache-Control", "public, max-age=300");
+  res.json({
+    currency: "USD",
+    trial_days: config.trialDays,
+    plans: PLAN_IDS.map((id) => ({ ...PLANS[id], buy: { month: purchasable(id, "month"), year: purchasable(id, "year") } })),
+    addons: Object.values(ADDONS).map((a) => ({ ...a, buy: Boolean(config.paddleAddonPrices[a.id]) })),
+    self_hosted: SELF_HOSTED,
+    setup: SETUP_SERVICES,
+  });
+});
+
+/** What this workspace's plan allows, and how much of it is used. */
+app.get("/billing/entitlements", auth, async (req: AuthedRequest, res) => {
+  const plan = await resolvePlan(req.user!.tenant_id);
+  res.json({ ...plan, usage: await usageOf(req.user!.tenant_id, plan) });
+});
+
 app.post("/billing/checkout-context", requireRole("admin"), async (req: AuthedRequest, res) => {
-  // The workspace is checked out in its own currency: the server chooses the
-  // price (PADDLE_PRICE_IDS), so the client cannot pick a cheaper one. null:
-  // no price for that currency — the client falls back to its default.
+  // A plan and billing period, plus add-ons. The server maps them to Paddle
+  // prices (PADDLE_PLAN_PRICES / PADDLE_ADDON_PRICES), so the client can only
+  // ask for what Legion sells, never name a price. Without a body it behaves as
+  // before: the workspace's currency price (PADDLE_PRICE_IDS), if any.
   const tenant = await store.getTenant(req.user!.tenant_id);
   const currency = tenant?.currency ?? config.defaultCurrency;
-  res.json({
-    checkout_token: signToken("checkout", { purpose: "paddle_checkout", tenant_id: req.user!.tenant_id }, "1h"),
-    currency,
-    price_id: config.paddlePriceIds[currency] ?? null,
+  const token = signToken("checkout", { purpose: "paddle_checkout", tenant_id: req.user!.tenant_id }, "1h");
+  const body = parse(z.object({
+    plan: z.enum(PLAN_IDS).optional(),
+    interval: z.enum(["month", "year"]).default("month"),
+    addons: z.array(z.enum(ADDON_IDS)).max(10).default([]),
+  }), req.body ?? {}, res); if (!body) return; // unknown keys (a client-chosen price, another tenant) are ignored: nothing reads them if (!body) return;
+  if (!body.plan) {
+    return res.json({ checkout_token: token, currency, price_id: config.paddlePriceIds[currency] ?? null });
+  }
+  const planPrice = config.paddlePlanPrices[`${body.plan}.${body.interval}`];
+  if (!planPrice) {
+    return res.status(409).json({
+      detail: body.plan === "enterprise" ? "Enterprise is by agreement. Contact us." : "That plan cannot be bought online yet.",
+      code: "plan_not_purchasable",
+    });
+  }
+  // Add-ons are billed monthly, so they ride only on a monthly plan; each once.
+  const addonIds = [...new Set(body.addons)];
+  if (addonIds.length && body.interval !== "month") {
+    return res.status(400).json({ detail: "Add-ons are billed monthly. Choose the monthly plan to add them.", code: "addon_interval" });
+  }
+  const unavailable = addonIds.filter((a) => !config.paddleAddonPrices[a]);
+  if (unavailable.length) return res.status(409).json({ detail: "An add-on you chose cannot be bought online yet.", code: "addon_not_purchasable" });
+  return res.json({
+    checkout_token: token, currency: "USD", plan: body.plan, interval: body.interval,
+    items: [planPrice, ...addonIds.map((a) => config.paddleAddonPrices[a]!)].map((priceId) => ({ priceId, quantity: 1 })),
   });
 });
 
@@ -1864,16 +1935,26 @@ app.post("/billing/webhook", async (req, res) => {
 
   // Audit P1-4: the browser opens the checkout, so it could pick any price in
   // the vendor's catalogue (a cheaper plan, a test price). Only the prices the
-  // server offers (PADDLE_PRICE_IDS) grant access; anything else is recorded
-  // but kept blocked, and the operator is told.
+  // server offers (plans, add-ons, the legacy single price) grant access;
+  // anything else is recorded but kept blocked, and the operator is told.
   const priceIds = (payload.items ?? []).map((i) => i?.price?.id).filter((x): x is string => typeof x === "string");
-  const offered = new Set(Object.values(config.paddlePriceIds));
-  if (offered.size && GRANTS_ACCESS.has(resolved) && (!priceIds.length || priceIds.some((p) => !offered.has(p)))) {
-    console.error(`Paddle ${eventType} for subscription ${payload.id}: price ${priceIds.join(",") || "(none)"} is not one Legion offers — access not granted.`);
+  const offered = offeredPriceIds();
+  const bought = classifyPrices(priceIds);
+  if (offered.size && GRANTS_ACCESS.has(resolved) && (!priceIds.length || bought.unknown.length)) {
+    console.error(`Paddle ${eventType} for subscription ${payload.id}: price ${(bought.unknown.length ? bought.unknown : priceIds).join(",") || "(none)"} is not one Legion offers — access not granted.`);
     resolved = "paused";
     await store.audit({
       tenant_id: tenantId, user_id: null, user_email: null, action: "billing.unrecognised_price",
-      resource_type: "subscription", resource_id: payload.id, detail: priceIds.join(",").slice(0, 200) || "(none)", ip_address: req.ip || null,
+      resource_type: "subscription", resource_id: payload.id, detail: (bought.unknown.length ? bought.unknown : priceIds).join(",").slice(0, 200) || "(none)", ip_address: req.ip || null,
+    });
+  }
+  // Add-ons alone are not a plan: a subscription of only add-ons grants nothing.
+  if (offered.size && GRANTS_ACCESS.has(resolved) && priceIds.length && !bought.plan) {
+    console.error(`Paddle ${eventType} for subscription ${payload.id}: no plan among its items — access not granted.`);
+    resolved = "paused";
+    await store.audit({
+      tenant_id: tenantId, user_id: null, user_email: null, action: "billing.no_plan",
+      resource_type: "subscription", resource_id: payload.id, detail: priceIds.join(",").slice(0, 200), ip_address: req.ip || null,
     });
   }
 
@@ -1899,10 +1980,12 @@ app.post("/billing/webhook", async (req, res) => {
     status: resolved,
     paddle_customer_id: payload.customer_id || existing?.paddle_customer_id || "",
     paddle_subscription_id: payload.id,
-    paddle_price_id: payload.items?.[0]?.price?.id || existing?.paddle_price_id || null,
+    paddle_price_id: priceIds.find((id) => classifyPrices([id]).plan) ?? priceIds[0] ?? existing?.paddle_price_id ?? null,
     current_period_end: payload.current_billing_period?.ends_at || null,
     cancel_at_period_end: payload.scheduled_change?.action === "cancel",
     last_event_at: occurredAt,
+    plan: bought.plan,
+    addons: bought.addons,
   });
 
   if (!record) return res.status(202).json({ status: "skipped", reason: "stale event" });
@@ -2105,6 +2188,7 @@ app.get("/security/blocks", auth, async (req: AuthedRequest, res) => {
 });
 
 app.post("/security/blocks", requireRole("admin"), async (req: AuthedRequest, res) => {
+  if (!(await planAllows(req.user!.tenant_id, "ipBlocking", res))) return;
   const body = parse(z.object({
     ip: z.string().min(2).max(45),
     minutes: z.number().int().min(5).max(10_080).optional(),
@@ -2145,6 +2229,8 @@ app.patch("/security/auto-response", requireRole("admin"), async (req: AuthedReq
     minutes: z.number().int().min(5).max(10_080).optional(),
     allowlist: z.string().max(10_000).optional(),
   }), req.body, res); if (!body) return;
+  // Turning automatic blocking ON needs a plan with policy-based blocking. Turning it off, or changing the allowlist, never does.
+  if (body.mode === "auto" && !(await planAllows(req.user!.tenant_id, "autoBlocking", res))) return;
   const settings = await blocklist.updateSettings(req.user!.tenant_id, body);
   await log(req, "security.auto_response_changed", "tenant", req.user!.tenant_id,
     `mode=${settings.mode} minutes=${settings.minutes} allowlist=${settings.allowlist ? settings.allowlist.split(",").length : 0}`);
@@ -2172,7 +2258,8 @@ app.post(BLOCKLIST_PATH,
   let body: { action?: unknown } = {};
   try { body = JSON.parse(rawBody!.toString("utf8")) ?? {}; } catch { /* checked below */ }
   if (body.action !== "sync-blocklist") return res.status(400).json({ detail: "Invalid request" });
-  const entries = await blocklist.activeEntries(authResult.tenantId);
+  // A plan without address blocking has nothing for the manager to enforce (an empty list also un-blocks anything left over).
+  const entries = allows(await resolvePlan(authResult.tenantId), "ipBlocking") ? await blocklist.activeEntries(authResult.tenantId) : [];
   res.setHeader("Cache-Control", "no-store");
   res.json({ generated_at: new Date().toISOString(), entries });
   });
@@ -2196,6 +2283,10 @@ app.post(payments.PAYMENT_CHECK_PATH,
   try { body = JSON.parse(rawBody!.toString("utf8")); } catch { /* checked below */ }
   const parsed = payments.paymentCheckSchema.safeParse(body);
   if (!parsed.success) return res.status(400).json({ detail: "Invalid request" });
+  // The payment check is included from Professional, or bought as an add-on. Refusing
+  // makes the client exit 1: the payment software must not pay on its own.
+  const checkPlan = await resolvePlan(authResult.tenantId);
+  if (!allows(checkPlan, "paymentCheck")) return res.status(403).json(planRefusal("paymentCheck", checkPlan.plan));
   let result;
   try { result = await payments.checkPayment(authResult.tenantId, parsed.data); }
   catch (err) {
@@ -2480,6 +2571,9 @@ if (process.env.NODE_ENV !== "test") {
       if (removed > 0) console.info(`Pruned ${removed} expired session token(s).`);
       // Shared counters older than a day are no longer consulted.
       await query("DELETE FROM usage_counters WHERE window_start < now() - interval '1 day'");
+      // Resolved alerts older than the plan keeps them (hosted only).
+      const aged = await pruneAlertsByPlan();
+      if (aged > 0) console.info(`Removed ${aged} resolved alert(s) older than their plan's retention.`);
     } catch (error) {
       console.error("Session prune failed:", error instanceof Error ? error.message : error);
     }

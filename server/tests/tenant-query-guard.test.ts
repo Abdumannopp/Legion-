@@ -43,6 +43,7 @@ const REVIEWED: Exception[] = [
   { file: "store.ts", table: "subscriptions", match: /WHERE paddle_subscription_id = \$1/i, reason: "Paddle webhook (signature-verified) resolves the subscription's own tenant from the row" },
   // --- workers: rows were claimed first; the row carries tenant_id and the work uses it
   { file: "outbox.ts", table: "notification_outbox", reason: "worker bookkeeping by row id after a claim; delivery uses row.tenant_id/recipient fixed at enqueue" },
+  { file: "plan-limits.ts", table: "tenants", match: /^SELECT id FROM tenants/i, reason: "retention job: visits every workspace and prunes each by its OWN plan" },
   { file: "outbox.ts", table: "tenants", reason: "enqueue reads the ALERT's own tenant's notification address" },
   { file: "webhook-credentials.ts", table: "webhook_nonces", reason: "replay nonces keyed by the credential's key id (itself tenant-bound)" },
   { file: "webhook-credentials.ts", table: "webhook_credentials", match: /WHERE key_id = \$1 (AND \(last_used_at|RETURNING)/i,

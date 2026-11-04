@@ -35,6 +35,16 @@ function readVersion(): string {
 const paddleEnvironment =
   process.env.PADDLE_ENVIRONMENT === "production" ? "production" : "sandbox";
 
+/** "key=pri_…,key=pri_…" → { key: "pri_…" }; entries with an unknown key or a malformed price id are dropped. */
+function parsePriceMap(raw: string | undefined, keyRe: RegExp): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const part of (raw || "").split(",")) {
+    const [key, id] = part.split("=").map((x) => x?.trim() ?? "");
+    if (key && keyRe.test(key) && /^pri_[A-Za-z0-9]+$/.test(id ?? "")) out[key] = id!;
+  }
+  return out;
+}
+
 const isProduction = process.env.NODE_ENV === "production";
 const deploymentMode = (process.env.DEPLOYMENT_MODE || "self-hosted") as
   | "self-hosted"
@@ -237,6 +247,13 @@ export const config = {
   /** Paddle price per billing currency ("USD=pri_…,EUR=pri_…"): a workspace is checked out in its own currency. */
   paddlePriceIds: Object.fromEntries((process.env.PADDLE_PRICE_IDS || "").split(",").map((p) => p.split("=").map((x) => x?.trim() ?? ""))
     .filter(([c, id]) => /^[A-Z]{3}$/.test((c ?? "").toUpperCase()) && /^pri_[A-Za-z0-9]+$/.test(id ?? "")).map(([c, id]) => [c!.toUpperCase(), id!])) as Record<string, string>,
+  /**
+   * Paddle price per plan and billing period: "starter.month=pri_…,starter.year=pri_…,professional.month=…".
+   * A plan with no price here cannot be bought online (Enterprise is by agreement).
+   */
+  paddlePlanPrices: parsePriceMap(process.env.PADDLE_PLAN_PRICES, /^(starter|professional|business|enterprise)\.(month|year)$/),
+  /** Paddle price per add-on (one per month): "agent_security=pri_…,payment_fraud=pri_…". */
+  paddleAddonPrices: parsePriceMap(process.env.PADDLE_ADDON_PRICES, /^(agent_security|payment_fraud|threat_intel|endpoints_100|ai_credits_5000)$/),
   paddleWebhookSecret: process.env.PADDLE_WEBHOOK_SECRET || "",
   paddleEnvironment,
   // Overridable so the billing paths can be exercised against a stub.

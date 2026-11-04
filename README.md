@@ -68,6 +68,7 @@ Full guide for customers: [INSTALL.md](INSTALL.md).
 | Try Legion on your own computer | [TRY-LOCALLY.md](TRY-LOCALLY.md) · Docker: [DOCKER-WINDOWS.md](DOCKER-WINDOWS.md) · Windows: [WINDOWS-NODE.md](WINDOWS-NODE.md) |
 | Install and run Legion (full customer guide) | [INSTALL.md](INSTALL.md) |
 | Put Legion online (VPS + domain + HTTPS + Cloudflare) | [DEPLOY-ONLINE.md](DEPLOY-ONLINE.md) |
+| Plans, prices and what each plan includes | [PRICING.md](PRICING.md) |
 | Run it as a paid SaaS (sign-up, trial, Paddle, email) | [SAAS.md](SAAS.md) · [EMAIL-PADDLE.md](EMAIL-PADDLE.md) |
 | Connect Wazuh (events in, automatic blocking out) | [WAZUH.md](WAZUH.md) |
 | Payment check (stop payment fraud) | [PAYMENT-CHECK.md](PAYMENT-CHECK.md) |

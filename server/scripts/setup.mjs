@@ -382,6 +382,11 @@ ALERT_EMAIL_MIN_SEVERITY=high
 PADDLE_ENVIRONMENT=sandbox
 PADDLE_API_KEY=
 PADDLE_WEBHOOK_SECRET=
+# One Paddle price per plan and period (Paddle > Catalog > Prices): see SAAS.md.
+# starter.month=pri_...,starter.year=pri_...,professional.month=...,business.month=...
+PADDLE_PLAN_PRICES=
+# One monthly Paddle price per add-on: agent_security=pri_...,payment_fraud=pri_...
+PADDLE_ADDON_PRICES=
 # Free days every new workspace gets. Keep NEXT_PUBLIC_TRIAL_DAYS the same.
 TRIAL_DAYS=14
 ` : `# --- Email (optional) --------------------------------------------------------
@@ -440,14 +445,10 @@ NEXT_PUBLIC_DEPLOYMENT_MODE=saas
 # Where your server is, e.g. "Germany (Hetzner)" - named in the Privacy Policy.
 NEXT_PUBLIC_DATA_LOCATION=
 NEXT_PUBLIC_TRIAL_DAYS=14
-# Paddle > Developer tools > Authentication > client-side token, and the
-# plan's price id (pri_...). Environment must match PADDLE_ENVIRONMENT.
+# Paddle > Developer tools > Authentication > client-side token.
+# Environment must match PADDLE_ENVIRONMENT. Prices are chosen by the server.
 NEXT_PUBLIC_PADDLE_ENVIRONMENT=sandbox
 NEXT_PUBLIC_PADDLE_CLIENT_TOKEN=
-NEXT_PUBLIC_PADDLE_PRICE_ID=
-# Optional: shown before Paddle's localized price loads, e.g. 49 USD.
-# Don't use the "$" sign here: it is read as a variable and comes out empty.
-NEXT_PUBLIC_PRICE_LABEL=
 ` : ""}`;
   const frontendForce = new Set();
   if (domain) frontendForce.add("NEXT_PUBLIC_API_URL");
@@ -477,8 +478,8 @@ ${c.green("Setup complete - hosted service.")}
   Before it can take customers, fill in (details in SAAS.md):
     server/.env          SMTP_PASSWORD (Resend API key), PADDLE_API_KEY, PADDLE_WEBHOOK_SECRET
     frontend/.env.local  NEXT_PUBLIC_OPERATOR_NAME, NEXT_PUBLIC_SUPPORT_EMAIL,
-                         NEXT_PUBLIC_DATA_LOCATION, NEXT_PUBLIC_PADDLE_CLIENT_TOKEN,
-                         NEXT_PUBLIC_PADDLE_PRICE_ID
+                         NEXT_PUBLIC_DATA_LOCATION, NEXT_PUBLIC_PADDLE_CLIENT_TOKEN
+    server/.env          also PADDLE_PLAN_PRICES (one Paddle price per plan and period)
   Then:
     ${c.cyan("npm run build")}
     ${c.cyan("sudo systemctl restart legion")}   (or npm start)
