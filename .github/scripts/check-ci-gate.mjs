@@ -39,7 +39,7 @@ for (const line of text.split("\n")) {
   if (cond) jobs[current].ifs.push(cond[1]);
 }
 
-const REQUIRED_FOR_RELEASE = ["deploy-scripts", "dependencies", "agent-identity", "app", "security-assessment"];
+const REQUIRED_FOR_RELEASE = ["deploy-scripts", "dependencies", "agent-identity", "app", "security-assessment", "pilot-stack"];
 for (const j of [...REQUIRED_FOR_RELEASE, "release-gate", "release"]) {
   if (!jobs[j]) problems.push(`job "${j}" is missing`);
 }

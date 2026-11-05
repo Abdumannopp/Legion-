@@ -452,7 +452,7 @@ jobs:
   release-gate:
     name: Release gate
     runs-on: ubuntu-latest
-    needs: [deploy-scripts, dependencies, agent-identity, app, security-assessment]
+    needs: [deploy-scripts, dependencies, agent-identity, app, security-assessment, pilot-stack]
     if: always()
     steps:
       - uses: actions/checkout@v4
