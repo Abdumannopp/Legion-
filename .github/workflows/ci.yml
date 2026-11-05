@@ -196,15 +196,24 @@ jobs:
           echo "$JWT" > /tmp/jwt
           curl -fsS -H "Authorization: Bearer $JWT" http://127.0.0.1:8000/soc/audit/verify
           curl -fsS -o /dev/null http://127.0.0.1:3000/login
-      - name: Crash and recovery (kill -9 the API container)
+      - name: Crash and recovery (SIGKILL the API process)
         run: |
           set -euo pipefail
           dc() { docker compose --env-file .env.pilot -f docker-compose.pilot.yml "$@"; }
-          docker kill -s KILL "$(dc ps -q backend)"
-          for i in $(seq 1 60); do
-            s=$(docker inspect -f '{{.State.Health.Status}}' "$(dc ps -q backend)" 2>/dev/null || echo none); [ "$s" = healthy ] && break; sleep 3
+          CID=$(dc ps -a -q backend)
+          before=$(docker inspect -f '{{.State.StartedAt}}' "$CID")
+          # A real crash, not an operator action: `docker kill` counts as a manual stop and Docker
+          # (correctly) does not restart that under `unless-stopped`. SIGKILL from the host is what an
+          # OOM kill or a fault looks like to the container runtime.
+          sudo kill -9 "$(docker inspect -f '{{.State.Pid}}' "$CID")"
+          s=none
+          for i in $(seq 1 40); do
+            after=$(docker inspect -f '{{.State.StartedAt}}' "$CID" 2>/dev/null || echo "$before")
+            s=$(docker inspect -f '{{.State.Health.Status}}' "$CID" 2>/dev/null || echo none)
+            [ "$after" != "$before" ] && [ "$s" = healthy ] && break; sleep 3
           done
-          echo "backend after kill: $s"; [ "$s" = healthy ]
+          echo "restarts: $(docker inspect -f '{{.RestartCount}}' "$CID"), health after crash: $s"
+          [ "$after" != "$before" ] && [ "$s" = healthy ]
           JWT=$(cat /tmp/jwt)
           curl -fsS -H "Authorization: Bearer $JWT" http://127.0.0.1:8000/soc/audit/verify
           dc run --rm db-provision    # provisioning is safe to repeat
