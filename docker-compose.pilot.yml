@@ -82,7 +82,11 @@ services:
     <<: *hardening
     image: redis:7.4-alpine
     # Rate-limit counters and realtime fan-out only; nothing here must survive a restart.
-    command: ["redis-server", "--save", "", "--appendonly", "no", "--protected-mode", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    # protected-mode is OFF on purpose: with no password, protected mode refuses every client that is not
+    # on loopback, i.e. the API (found by the CI pilot job: the API logged "Redis not reachable" and fell
+    # back to per-instance rate limits). This is safe because Redis sits on the internal `data` network
+    # together with the API only: nothing else can open a connection to it.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--protected-mode", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
     user: "999:999"
     networks: [data]
     mem_limit: 192m
