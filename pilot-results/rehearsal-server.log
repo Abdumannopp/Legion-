@@ -1,0 +1,229 @@
+Legion: empty database (demo seed disabled).
+
+========================================================================
+  FIRST-RUN SETUP
+
+  Nobody can use this Legion yet. To create the first administrator, open
+    https://pilot.acme-soc.test/setup
+  and enter this one-time setup token:
+
+    lst_DxqInuF8DH-5isAnbPlXondyxSxEVic2RBrqCpUXEsg
+
+  It is also saved in /tmp/legion-rehearsal-pTAIXe/state/.legion-setup-token (readable only by you).
+  It stops working the moment the first administrator is created.
+  Anyone who has it can take over this installation — do not share it.
+========================================================================
+
+Legion: AI analysis off — no alert data leaves this server.
+WARNING: REDIS_URL is not set. Rate limits are counted per instance, so running more than one replica multiplies every limit. Set REDIS_URL before scaling beyond a single instance.
+WARNING: REDIS_URL is not set. Realtime alerts reach only the clients connected to this instance, so a second replica would silently miss them.
+Legion: REDIS_URL is not set — realtime fan-out and rate limits are per instance. Set it before running more than one API instance.
+Legion: WARNING — BACKUP_STATUS_FILE is not set, so /health/backup cannot report on backups. Run ops/check-backup.sh from a timer (RECOVERY.md).
+Legion: trusting proxies — 127.0.0.1.
+Legion Node API: http://localhost:30018 (listening on 127.0.0.1)
+{"t":"2026-11-05T00:51:22.559Z","msg":"http","rid":"fd11a8f0-2fab-413e-9a0f-aa8340f6ad71","method":"GET","route":"/health","status":200,"ms":9.3,"tenant":null}
+Legion: refused first-run setup from 127.0.0.1: missing or wrong setup token
+{"t":"2026-11-05T00:51:23.391Z","msg":"http","rid":"53d0c533-b097-40bd-ba98-519b5598049f","method":"POST","route":"/auth/register","status":403,"ms":414.1,"tenant":null}
+Legion: refused first-run setup from 127.0.0.1: missing or wrong setup token
+{"t":"2026-11-05T00:51:23.727Z","msg":"http","rid":"5c9b4d1c-1595-498e-ba7f-cfe2a0290a80","method":"POST","route":"/auth/register","status":403,"ms":332.4,"tenant":null}
+{"t":"2026-11-05T00:51:24.063Z","msg":"http","rid":"fc1f2685-1572-4842-9685-347a87ef8fb5","method":"POST","route":"/auth/register","status":201,"ms":334.2,"tenant":null}
+{"t":"2026-11-05T00:51:24.398Z","msg":"http","rid":"32688df7-6574-49bc-954b-de467c610308","method":"POST","route":"/auth/login","status":200,"ms":333,"tenant":null}
+{"t":"2026-11-05T00:51:24.402Z","msg":"http","rid":"0b40f29d-c4e4-42c6-a41c-b2d663411616","method":"GET","route":"/alerts","status":401,"ms":1.4,"tenant":null}
+{"t":"2026-11-05T00:51:24.404Z","msg":"http","rid":"2f01072d-e605-4d2e-b479-83da465ba87d","method":"GET","route":"/metrics","status":401,"ms":0.8,"tenant":null}
+{"t":"2026-11-05T00:51:24.406Z","msg":"http","rid":"38d8eec2-04d8-4e39-b26a-a6a7e5d84aba","method":"GET","route":"/metrics","status":401,"ms":1,"tenant":null}
+Legion: rejected webhook (missing) key=- ip=127.0.0.1
+{"t":"2026-11-05T00:51:24.411Z","msg":"http","rid":"f31be4ca-78e1-4bd1-badb-8d6c31ce7629","method":"POST","route":"/security-events/webhook","status":401,"ms":3.9,"tenant":null}
+{"t":"2026-11-05T00:51:24.414Z","msg":"http","rid":"025db92b-854e-4178-8baf-7f28e13a0d23","method":"GET","route":"/health","status":200,"ms":1.4,"tenant":null}
+{"t":"2026-11-05T00:51:24.416Z","msg":"http","rid":"12e07700-f92c-4da6-bdbe-f8d871068dde","method":"GET","route":"/health","status":200,"ms":0.5,"tenant":null}
+{"t":"2026-11-05T00:51:24.428Z","msg":"http","rid":"229d624b-7306-48d8-890c-62d90dce3fa3","method":"POST","route":"/security-events/credentials","status":201,"ms":10.4,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:24.476Z","msg":"http","rid":"5772275c-93a3-4810-b854-ab209e908e1b","method":"POST","route":"/security-events/webhook","status":202,"ms":34.6,"tenant":null}
+{"t":"2026-11-05T00:51:24.493Z","msg":"http","rid":"564f0691-6113-48eb-8d80-ce4271a5b26d","method":"POST","route":"/security-events/webhook","status":202,"ms":14.6,"tenant":null}
+{"t":"2026-11-05T00:51:24.507Z","msg":"http","rid":"5484c5d8-2aae-42da-b8b6-1fb8cfdf8adb","method":"POST","route":"/security-events/webhook","status":202,"ms":11.8,"tenant":null}
+{"t":"2026-11-05T00:51:24.524Z","msg":"http","rid":"1eda3e27-c22d-4dc8-8e86-d800ff30f094","method":"POST","route":"/security-events/webhook","status":202,"ms":15.4,"tenant":null}
+{"t":"2026-11-05T00:51:24.541Z","msg":"http","rid":"46bef820-647e-4940-a499-98b8c51aa076","method":"POST","route":"/security-events/webhook","status":202,"ms":13.8,"tenant":null}
+{"t":"2026-11-05T00:51:24.569Z","msg":"http","rid":"0f4495f0-2c81-4cab-82b5-5f4ef0b44e8b","method":"POST","route":"/security-events/webhook","status":202,"ms":26,"tenant":null}
+{"t":"2026-11-05T00:51:24.579Z","msg":"http","rid":"3271ae5f-c404-4107-ad7a-3f198e4e5482","method":"GET","route":"/alerts","status":200,"ms":7.8,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:24.619Z","msg":"http","rid":"e9934a07-cac0-48af-b150-a3fdc7db9da1","method":"GET","route":"/alerts","status":200,"ms":5.1,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:24.636Z","msg":"http","rid":"97ee3cca-5fac-4ecf-a2fc-3962a4c60bcd","method":"PUT","route":"/policy","status":200,"ms":14.7,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:24.679Z","msg":"http","rid":"89ffac03-699d-4440-95da-b466e8668c21","method":"POST","route":"/workflows/:name/runs","status":201,"ms":41.6,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:24.684Z","msg":"http","rid":"f9b79db7-e52e-4b11-a698-2232ebe2ed39","method":"GET","route":"/actions","status":200,"ms":4.3,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:24.710Z","msg":"http","rid":"e8bc28b1-d6d6-41c1-86e2-5bfaf4dd7e2b","method":"POST","route":"/approvals/:id/decision","status":200,"ms":23.8,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:24.732Z","msg":"http","rid":"d8312679-7cff-49fa-9da0-daa9ca86ee48","method":"POST","route":"/actions","status":422,"ms":6.7,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:24.747Z","msg":"http","rid":"6fc2c86c-5907-4f22-b1fd-dc7b0209a9a6","method":"POST","route":"/actions","status":201,"ms":13.7,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:24.757Z","msg":"http","rid":"44f27f39-b57c-4ace-b03d-aa86f210b84b","method":"GET","route":"/metrics","status":200,"ms":8.4,"tenant":null}
+{"t":"2026-11-05T00:51:24.981Z","msg":"http","rid":"6319d31b-854a-4b9a-820e-13a974625497","method":"POST","route":"/auth/login","status":200,"ms":106.1,"tenant":null}
+{"t":"2026-11-05T00:51:24.986Z","msg":"http","rid":"1932d10a-c247-4a2e-a2e9-87d4af4ed441","method":"GET","route":"/alerts","status":200,"ms":3.7,"tenant":"6663fb13-83c8-0695-ca40-ca89b02b93ff"}
+{"t":"2026-11-05T00:51:24.995Z","msg":"http","rid":"2ac6e87c-b9e7-4d94-bae8-22c80608039f","method":"GET","route":"/actions","status":200,"ms":6.8,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:25.002Z","msg":"http","rid":"6e604aa0-03a4-49fb-96e9-d59689bc9545","method":"GET","route":"/actions/:id","status":404,"ms":5,"tenant":"6663fb13-83c8-0695-ca40-ca89b02b93ff"}
+{"t":"2026-11-05T00:51:25.011Z","msg":"http","rid":"c1f67a94-cf19-4abd-846a-637c9332d726","method":"GET","route":"/approvals/:id","status":404,"ms":7.2,"tenant":"6663fb13-83c8-0695-ca40-ca89b02b93ff"}
+{"t":"2026-11-05T00:51:25.019Z","msg":"http","rid":"985c17c2-a19a-4eab-b0f5-30d32d922a75","method":"POST","route":"/approvals/:id/decision","status":404,"ms":6.7,"tenant":"6663fb13-83c8-0695-ca40-ca89b02b93ff"}
+{"t":"2026-11-05T00:51:25.025Z","msg":"http","rid":"2726845e-66fb-4a31-ace9-2f1a536d8277","method":"GET","route":"/actions/:id","status":404,"ms":4,"tenant":"6663fb13-83c8-0695-ca40-ca89b02b93ff"}
+{"t":"2026-11-05T00:51:25.030Z","msg":"http","rid":"3d5afeb9-9433-4f65-95db-6d36a48dca5b","method":"GET","route":"/approvals/:id","status":404,"ms":4.3,"tenant":"6663fb13-83c8-0695-ca40-ca89b02b93ff"}
+{"t":"2026-11-05T00:51:25.038Z","msg":"http","rid":"02843ec3-12f8-400b-a121-a2d88fb33aac","method":"POST","route":"/approvals/:id/decision","status":404,"ms":6.3,"tenant":"6663fb13-83c8-0695-ca40-ca89b02b93ff"}
+{"t":"2026-11-05T00:51:25.043Z","msg":"http","rid":"ca4c0190-3ad5-45a8-82fe-a365e7401c3b","method":"GET","route":"/actions/:id","status":404,"ms":3.7,"tenant":"6663fb13-83c8-0695-ca40-ca89b02b93ff"}
+{"t":"2026-11-05T00:51:25.048Z","msg":"http","rid":"1c156cff-aee8-4221-ba42-0c411dade171","method":"GET","route":"/approvals/:id","status":404,"ms":4,"tenant":"6663fb13-83c8-0695-ca40-ca89b02b93ff"}
+{"t":"2026-11-05T00:51:25.056Z","msg":"http","rid":"25f9c97b-1895-4af8-a29a-e6034150d552","method":"POST","route":"/approvals/:id/decision","status":404,"ms":5.9,"tenant":"6663fb13-83c8-0695-ca40-ca89b02b93ff"}
+{"t":"2026-11-05T00:51:25.061Z","msg":"http","rid":"0418de0b-3a8f-4f14-9dd0-b7ce2ec27fcf","method":"GET","route":"/actions","status":200,"ms":4.4,"tenant":"6663fb13-83c8-0695-ca40-ca89b02b93ff"}
+{"t":"2026-11-05T00:51:25.066Z","msg":"http","rid":"88d229fd-20dd-4176-bced-eec709bbec73","method":"GET","route":"/soc/audit","status":200,"ms":3.7,"tenant":"6663fb13-83c8-0695-ca40-ca89b02b93ff"}
+{"t":"2026-11-05T00:51:25.072Z","msg":"http","rid":"542d4878-56c4-4b64-9402-4ef215e37a07","method":"GET","route":"/policy","status":200,"ms":3.9,"tenant":"6663fb13-83c8-0695-ca40-ca89b02b93ff"}
+{"t":"2026-11-05T00:51:25.078Z","msg":"http","rid":"ff1d14b5-863a-4476-800a-51906bdf8458","method":"GET","route":"/soc/audit/verify","status":200,"ms":5,"tenant":"6663fb13-83c8-0695-ca40-ca89b02b93ff"}
+{"t":"2026-11-05T00:51:25.084Z","msg":"http","rid":"b00e39ff-d8e4-4399-9bbf-ab12533c2edb","method":"GET","route":"/soc/audit/verify","status":200,"ms":5.1,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:25.090Z","msg":"http","rid":"2948b795-0a3e-4fab-8557-8d894ce2ff98","method":"GET","route":"/policy","status":200,"ms":3.5,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:25.104Z","msg":"http","rid":"c7fadd30-ad32-41c2-953d-efcac4a89354","method":"PUT","route":"/policy","status":200,"ms":13,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:25.620Z","msg":"http","rid":"a3e4450f-aea5-407d-bdd5-de68bcf48d08","method":"POST","route":"/actions","status":201,"ms":469.9,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:25.630Z","msg":"http","rid":"a2c2c15b-40db-4932-be53-4482c82bbf46","method":"POST","route":"/actions","status":201,"ms":477.9,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:25.632Z","msg":"http","rid":"4c1564e1-0c77-4241-a23a-ba44541a057c","method":"POST","route":"/actions","status":201,"ms":478.8,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:25.637Z","msg":"http","rid":"b965c1e4-8a06-4f03-8264-062b5fe3e6da","method":"POST","route":"/actions","status":201,"ms":475.3,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:25.641Z","msg":"http","rid":"402d1b6d-7a33-4164-83e3-b68ed480eaf3","method":"POST","route":"/actions","status":201,"ms":479.1,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:25.643Z","msg":"http","rid":"d16a5db8-76fa-4efe-878a-da1f0f016ab9","method":"POST","route":"/actions","status":201,"ms":490.3,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:25.645Z","msg":"http","rid":"6ce6ba6e-ef51-45bf-a409-4f07b5a62265","method":"POST","route":"/actions","status":201,"ms":484.9,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:25.648Z","msg":"http","rid":"210e189a-881a-4c0b-8549-7d87a6060a63","method":"POST","route":"/actions","status":201,"ms":487.1,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:25.650Z","msg":"http","rid":"f3b79262-968e-44b5-aceb-604eb393f972","method":"POST","route":"/actions","status":201,"ms":485.2,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:25.652Z","msg":"http","rid":"8ffeec71-bd55-40b6-b0b2-bcbb067ac80d","method":"POST","route":"/actions","status":201,"ms":488,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:25.654Z","msg":"http","rid":"dc7f09cc-538f-41e6-8630-2f7c791b90a5","method":"POST","route":"/actions","status":201,"ms":489.1,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:25.658Z","msg":"http","rid":"2727c888-fed6-496f-ac74-98d04b6c0543","method":"POST","route":"/actions","status":201,"ms":492,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:25.664Z","msg":"http","rid":"53cf131e-522a-4387-9925-635b093bc0d5","method":"POST","route":"/actions","status":201,"ms":500.9,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:25.666Z","msg":"http","rid":"21c8f512-9aa7-4162-ba97-d59f880364e7","method":"POST","route":"/actions","status":201,"ms":499.6,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:51:25.668Z","msg":"http","rid":"0bfe21f2-4ec8-4b50-848b-f02e4aead4de","method":"POST","route":"/actions","status":201,"ms":500.8,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+Legion: AI analysis off — no alert data leaves this server.
+WARNING: REDIS_URL is not set. Rate limits are counted per instance, so running more than one replica multiplies every limit. Set REDIS_URL before scaling beyond a single instance.
+WARNING: REDIS_URL is not set. Realtime alerts reach only the clients connected to this instance, so a second replica would silently miss them.
+Legion: REDIS_URL is not set — realtime fan-out and rate limits are per instance. Set it before running more than one API instance.
+Legion: WARNING — BACKUP_STATUS_FILE is not set, so /health/backup cannot report on backups. Run ops/check-backup.sh from a timer (RECOVERY.md).
+Legion: trusting proxies — 127.0.0.1.
+Legion Node API: http://localhost:30018 (listening on 127.0.0.1)
+{"t":"2026-11-05T00:51:26.926Z","msg":"http","rid":"0f16a2db-8df9-4815-84bb-2b9c4ac1000d","method":"GET","route":"/health","status":200,"ms":8.4,"tenant":null}
+{"t":"2026-11-05T00:52:32.149Z","msg":"http","rid":"035eea96-d581-4a82-8701-432351b61fe8","method":"POST","route":"/actions","status":200,"ms":165.7,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.155Z","msg":"http","rid":"c2fd8878-ab9b-4368-9dcf-779dc57141f0","method":"POST","route":"/actions","status":200,"ms":155,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.157Z","msg":"http","rid":"903af7db-9c5a-46a1-ba8e-b60ac160b3ae","method":"POST","route":"/actions","status":200,"ms":156,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.157Z","msg":"http","rid":"46b92985-8f24-4d76-908d-8a29fb70568e","method":"POST","route":"/actions","status":200,"ms":155.4,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.158Z","msg":"http","rid":"84ee3e82-3b57-47b2-9514-d8d0a445f294","method":"POST","route":"/actions","status":200,"ms":154.7,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.161Z","msg":"http","rid":"6d9246a0-4632-420c-aef2-d6e08ece0e67","method":"POST","route":"/actions","status":200,"ms":148.2,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.161Z","msg":"http","rid":"5ea42cd8-7480-4cd4-bdc3-6767f74224f8","method":"POST","route":"/actions","status":200,"ms":143.2,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.167Z","msg":"http","rid":"9883c88d-ccef-4c45-b278-474132c4508f","method":"POST","route":"/actions","status":200,"ms":168.5,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.170Z","msg":"http","rid":"e0587804-9a69-47eb-ab52-f1107f0de491","method":"POST","route":"/actions","status":200,"ms":151.3,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.171Z","msg":"http","rid":"005719a2-bed8-4785-8a2b-5de97a91a541","method":"POST","route":"/actions","status":200,"ms":151.3,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.171Z","msg":"http","rid":"e48db753-5715-4642-bee5-77c216100092","method":"POST","route":"/actions","status":200,"ms":150.1,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.172Z","msg":"http","rid":"e3f2510a-60a4-42dd-8dc8-5a6f74e38a76","method":"POST","route":"/actions","status":200,"ms":150,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.174Z","msg":"http","rid":"d4853613-d4e8-47bf-84f0-aee5d180e676","method":"POST","route":"/actions","status":200,"ms":151.5,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.174Z","msg":"http","rid":"52c0b782-8731-4071-a7b0-e44618586a72","method":"POST","route":"/actions","status":200,"ms":151.5,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.176Z","msg":"http","rid":"becf1e60-8d6b-475b-933c-91c7a15b0f6e","method":"POST","route":"/actions","status":200,"ms":152.5,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.176Z","msg":"http","rid":"b31f4ef8-cd3e-42cd-a553-3e4bbedf5688","method":"POST","route":"/actions","status":200,"ms":151.7,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.178Z","msg":"http","rid":"85c8cb82-8248-498b-b2ed-02375b57474d","method":"POST","route":"/actions","status":200,"ms":152.5,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.178Z","msg":"http","rid":"5b72e43c-f4e9-4495-9043-b09a21903dfa","method":"POST","route":"/actions","status":200,"ms":151.7,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.180Z","msg":"http","rid":"f1baf3eb-92b4-4b65-a3d1-bd87508d95e9","method":"POST","route":"/actions","status":200,"ms":152.5,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.180Z","msg":"http","rid":"8b8ae7a1-5c6a-4bca-8bca-d449eca7a47b","method":"POST","route":"/actions","status":200,"ms":151.9,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.180Z","msg":"http","rid":"93e9c1b3-7c8d-437e-9cae-b4c1b12448af","method":"POST","route":"/actions","status":200,"ms":151.3,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.182Z","msg":"http","rid":"394dda77-4e15-4748-8bad-e3138ba4554a","method":"POST","route":"/actions","status":200,"ms":151.5,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.182Z","msg":"http","rid":"df846d5c-d0ae-4b25-84f5-6337ad660bc7","method":"POST","route":"/actions","status":200,"ms":151.7,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.183Z","msg":"http","rid":"77ca49d0-ceb6-4cb1-b352-392ae9319734","method":"POST","route":"/actions","status":200,"ms":150.6,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.185Z","msg":"http","rid":"a0c2afaa-f591-4e3c-9a2a-ab2c37a22dd8","method":"POST","route":"/actions","status":200,"ms":150.7,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.185Z","msg":"http","rid":"bfccedf5-2d94-4837-aaf0-ffed4e30a29d","method":"POST","route":"/actions","status":200,"ms":150.3,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.186Z","msg":"http","rid":"9e340688-7420-49cb-a02c-cdf1c8ec31fd","method":"POST","route":"/actions","status":200,"ms":149.7,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.186Z","msg":"http","rid":"07dc7a2d-b629-46ba-a7d6-0d5a8f77df1f","method":"POST","route":"/actions","status":200,"ms":149.4,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.187Z","msg":"http","rid":"4bf738e5-daf6-4342-adec-1df25dec7595","method":"POST","route":"/actions","status":200,"ms":149.9,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.188Z","msg":"http","rid":"07a2d659-7747-4d14-ac68-af4c7ad1d356","method":"POST","route":"/actions","status":200,"ms":149.7,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.190Z","msg":"http","rid":"4977206c-1d70-4b85-b0a6-1d0ba13db45e","method":"POST","route":"/actions","status":200,"ms":151,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.191Z","msg":"http","rid":"f76127c8-a62b-480a-be34-a6cbc46eb980","method":"POST","route":"/actions","status":200,"ms":150.9,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.191Z","msg":"http","rid":"f8e4d0f7-c15a-4a1a-879d-30e47b9100c7","method":"POST","route":"/actions","status":200,"ms":150.5,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.196Z","msg":"http","rid":"a093a9e0-906d-43c7-9a1f-a9011b1a7f05","method":"POST","route":"/actions","status":200,"ms":142.1,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.198Z","msg":"http","rid":"daf3c5ac-a914-4e8c-847e-a2ab2d1083f1","method":"POST","route":"/actions","status":200,"ms":138.3,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.200Z","msg":"http","rid":"0b165e31-ecd7-45e7-9cee-d7709ba89a7a","method":"POST","route":"/actions","status":200,"ms":135.4,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.202Z","msg":"http","rid":"e76bd26e-51f1-4b30-818b-1e57524cdf0c","method":"POST","route":"/actions","status":200,"ms":129,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.204Z","msg":"http","rid":"bc93f518-acf5-4481-9099-4f452ec99c28","method":"POST","route":"/actions","status":200,"ms":123.5,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.206Z","msg":"http","rid":"ddb4b38e-a166-4029-b342-a3dc83e0350c","method":"POST","route":"/actions","status":200,"ms":200.6,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.206Z","msg":"http","rid":"de4d86b6-e25d-4ce2-af95-301a0c68724e","method":"POST","route":"/actions","status":200,"ms":199.4,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.208Z","msg":"http","rid":"0e07723c-ca7b-42ca-9400-06c3713d5559","method":"POST","route":"/actions","status":200,"ms":199.5,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.210Z","msg":"http","rid":"067c21e0-93b9-48ea-8093-460aabdecf6b","method":"POST","route":"/actions","status":200,"ms":198.6,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.210Z","msg":"http","rid":"b4a6fde5-e88e-4267-84fd-8363ff5a8af4","method":"POST","route":"/actions","status":200,"ms":126.5,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.212Z","msg":"http","rid":"f1cec77b-7b5e-4362-8753-ff24d286a2e0","method":"POST","route":"/actions","status":200,"ms":124.6,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.213Z","msg":"http","rid":"faf338dd-82f9-4433-98ef-1df7f9cf6fbb","method":"POST","route":"/actions","status":200,"ms":122.9,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.215Z","msg":"http","rid":"3ddf8c15-c3c4-4464-9c35-c6ef6eaee1be","method":"POST","route":"/actions","status":200,"ms":121.2,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.216Z","msg":"http","rid":"76c0ee77-6bff-4d15-99f3-10659af0ba05","method":"POST","route":"/actions","status":200,"ms":116.4,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.217Z","msg":"http","rid":"90a46006-c047-45af-b079-2e2b5dd95a93","method":"POST","route":"/actions","status":200,"ms":111.4,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.219Z","msg":"http","rid":"73c4d71d-f92c-4f54-9e29-4fd5d4e1f258","method":"POST","route":"/actions","status":200,"ms":105.8,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.220Z","msg":"http","rid":"c28b045f-ad86-4917-bc48-e3a3d78d0963","method":"POST","route":"/actions","status":200,"ms":93.5,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.221Z","msg":"http","rid":"e8fd63e1-dc83-42ec-a7cf-744737b1738e","method":"POST","route":"/actions","status":200,"ms":86.1,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.222Z","msg":"http","rid":"73016190-33a0-4dc1-90d2-2e347015d5d7","method":"POST","route":"/actions","status":200,"ms":78.2,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.223Z","msg":"http","rid":"590da9db-5ae5-4c29-86a2-b14b8c7e1e85","method":"POST","route":"/actions","status":200,"ms":70.2,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.223Z","msg":"http","rid":"14f161f7-fcca-4795-9830-69988669cf89","method":"POST","route":"/actions","status":200,"ms":103.1,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.223Z","msg":"http","rid":"0b5e7943-cb0c-4d02-903f-cbc13e50c3c0","method":"POST","route":"/actions","status":200,"ms":56.2,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.224Z","msg":"http","rid":"9cb79af7-694d-4478-91f8-2c4e94ead1e6","method":"POST","route":"/actions","status":200,"ms":49.6,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.224Z","msg":"http","rid":"550f9cac-b18d-4386-9d58-d3b2ddac0a6e","method":"POST","route":"/actions","status":200,"ms":44,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.225Z","msg":"http","rid":"7b0a8b30-d550-4c23-ba1f-fd7440a8d8ef","method":"POST","route":"/actions","status":200,"ms":38.4,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.225Z","msg":"http","rid":"643b5d9a-818b-44d9-818b-747681671cc8","method":"POST","route":"/actions","status":200,"ms":32.5,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.249Z","msg":"http","rid":"0672b967-3383-4e6b-accc-2a6d0160928e","method":"POST","route":"/actions","status":201,"ms":51.3,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.283Z","msg":"http","rid":"638510ef-7735-4392-908f-ed5719f7dcaf","method":"GET","route":"/soc/audit/verify","status":200,"ms":10,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:32.307Z","msg":"http","rid":"fc26b8cf-a31a-40f8-a573-552e6590b777","method":"POST","route":"/actions","status":201,"ms":13.4,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+Legion: AI analysis off — no alert data leaves this server.
+WARNING: REDIS_URL is not set. Rate limits are counted per instance, so running more than one replica multiplies every limit. Set REDIS_URL before scaling beyond a single instance.
+WARNING: REDIS_URL is not set. Realtime alerts reach only the clients connected to this instance, so a second replica would silently miss them.
+Legion: REDIS_URL is not set — realtime fan-out and rate limits are per instance. Set it before running more than one API instance.
+Legion: WARNING — BACKUP_STATUS_FILE is not set, so /health/backup cannot report on backups. Run ops/check-backup.sh from a timer (RECOVERY.md).
+Legion: trusting proxies — 127.0.0.1.
+Legion Node API: http://localhost:30018 (listening on 127.0.0.1)
+{"t":"2026-11-05T00:52:33.453Z","msg":"http","rid":"c803177d-8506-4751-ac6c-776f432840ac","method":"GET","route":"/health","status":200,"ms":14.7,"tenant":null}
+SIGTERM received — draining connections.
+Legion: AI analysis off — no alert data leaves this server.
+WARNING: REDIS_URL is not set. Rate limits are counted per instance, so running more than one replica multiplies every limit. Set REDIS_URL before scaling beyond a single instance.
+WARNING: REDIS_URL is not set. Realtime alerts reach only the clients connected to this instance, so a second replica would silently miss them.
+Legion: REDIS_URL is not set — realtime fan-out and rate limits are per instance. Set it before running more than one API instance.
+Legion: WARNING — BACKUP_STATUS_FILE is not set, so /health/backup cannot report on backups. Run ops/check-backup.sh from a timer (RECOVERY.md).
+Legion: trusting proxies — 127.0.0.1.
+Legion Node API: http://localhost:30018 (listening on 127.0.0.1)
+{"t":"2026-11-05T00:52:34.590Z","msg":"http","rid":"518c5347-1887-4d94-a806-61c8870cecdb","method":"GET","route":"/health","status":200,"ms":6.2,"tenant":null}
+{"t":"2026-11-05T00:52:35.780Z","msg":"http","rid":"9a5ba335-f20c-4877-9fbf-655fced93605","method":"POST","route":"/security-events/webhook","status":202,"ms":45.8,"tenant":null}
+{"t":"2026-11-05T00:52:35.804Z","msg":"http","rid":"f9fd767c-6dff-4a7b-9dc5-418991718c6e","method":"POST","route":"/security-events/webhook","status":202,"ms":21.4,"tenant":null}
+{"t":"2026-11-05T00:52:35.818Z","msg":"http","rid":"b05c2f6e-5bb1-4001-9579-03c1357b2d3d","method":"POST","route":"/security-events/webhook","status":202,"ms":12.4,"tenant":null}
+SIGTERM received — draining connections.
+Legion: AI analysis off — no alert data leaves this server.
+WARNING: REDIS_URL is not set. Rate limits are counted per instance, so running more than one replica multiplies every limit. Set REDIS_URL before scaling beyond a single instance.
+WARNING: REDIS_URL is not set. Realtime alerts reach only the clients connected to this instance, so a second replica would silently miss them.
+Legion: REDIS_URL is not set — realtime fan-out and rate limits are per instance. Set it before running more than one API instance.
+Legion: WARNING — BACKUP_STATUS_FILE is not set, so /health/backup cannot report on backups. Run ops/check-backup.sh from a timer (RECOVERY.md).
+Legion: trusting proxies — 127.0.0.1.
+Legion Node API: http://localhost:30018 (listening on 127.0.0.1)
+{"t":"2026-11-05T00:52:38.408Z","msg":"http","rid":"bbf08903-0387-47b2-bf8c-ab5a640728ea","method":"GET","route":"/health","status":200,"ms":7.1,"tenant":null}
+{"t":"2026-11-05T00:52:38.800Z","msg":"http","rid":"58aa7ff2-81a9-4647-8ace-41857429fa20","method":"POST","route":"/auth/login","status":200,"ms":391,"tenant":null}
+{"t":"2026-11-05T00:52:38.830Z","msg":"http","rid":"1e8bb08d-a77d-42fb-ab24-1e739e2f4ae5","method":"GET","route":"/soc/audit/verify","status":200,"ms":18.2,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:38.873Z","msg":"http","rid":"a74441ed-5111-4492-a067-33e0be9939ca","method":"POST","route":"/security-events/webhook","status":202,"ms":41.1,"tenant":null}
+SIGTERM received — draining connections.
+Legion: AI analysis off — no alert data leaves this server.
+WARNING: REDIS_URL is not set. Rate limits are counted per instance, so running more than one replica multiplies every limit. Set REDIS_URL before scaling beyond a single instance.
+WARNING: REDIS_URL is not set. Realtime alerts reach only the clients connected to this instance, so a second replica would silently miss them.
+Legion: REDIS_URL is not set — realtime fan-out and rate limits are per instance. Set it before running more than one API instance.
+Legion: WARNING — BACKUP_STATUS_FILE is not set, so /health/backup cannot report on backups. Run ops/check-backup.sh from a timer (RECOVERY.md).
+Legion: trusting proxies — 127.0.0.1.
+Legion Node API: http://localhost:30018 (listening on 127.0.0.1)
+{"t":"2026-11-05T00:52:40.261Z","msg":"http","rid":"7ff26698-d718-4244-90eb-b24f64c40825","method":"GET","route":"/health","status":200,"ms":6.3,"tenant":null}
+{"t":"2026-11-05T00:52:40.668Z","msg":"http","rid":"162a5a5b-441f-4215-a7d6-63e51dd6fd13","method":"POST","route":"/auth/login","status":200,"ms":405.6,"tenant":null}
+{"t":"2026-11-05T00:52:40.705Z","msg":"http","rid":"5c428535-0455-48a2-ac97-f80e5f1b85d6","method":"GET","route":"/soc/audit/verify","status":200,"ms":14.3,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+Unhandled error: Error: The SOC audit chain was signed with key cfg-cfd7ee84e3 but this process has key cfg-5c5b938aee. Restore the original SOC_AUDIT_KEY (and JWT_SECRET if it was derived); refusing to extend the chain with a different key.
+{"t":"2026-11-05T00:52:40.720Z","msg":"http","rid":"a3ba7632-8ff6-4f63-81fc-6a138ce32444","method":"POST","route":"/actions","status":500,"ms":13.4,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:43.236Z","msg":"http","rid":"01e324b6-538c-4944-a858-c9d20d6e4d3d","method":"GET","route":"/metrics","status":200,"ms":13.2,"tenant":null}
+SIGTERM received — draining connections.
+Legion: AI analysis off — no alert data leaves this server.
+WARNING: REDIS_URL is not set. Rate limits are counted per instance, so running more than one replica multiplies every limit. Set REDIS_URL before scaling beyond a single instance.
+WARNING: REDIS_URL is not set. Realtime alerts reach only the clients connected to this instance, so a second replica would silently miss them.
+Legion: REDIS_URL is not set — realtime fan-out and rate limits are per instance. Set it before running more than one API instance.
+Legion: WARNING — BACKUP_STATUS_FILE is not set, so /health/backup cannot report on backups. Run ops/check-backup.sh from a timer (RECOVERY.md).
+Legion: trusting proxies — 127.0.0.1.
+Legion Node API: http://localhost:30018 (listening on 127.0.0.1)
+{"t":"2026-11-05T00:52:44.527Z","msg":"http","rid":"a030a826-6922-4b7b-9fdc-f4a80756d2f0","method":"GET","route":"/health","status":200,"ms":7.1,"tenant":null}
+{"t":"2026-11-05T00:52:44.945Z","msg":"http","rid":"956f742f-2170-4fe6-945d-d08ed5e808a1","method":"POST","route":"/auth/login","status":200,"ms":416.8,"tenant":null}
+{"t":"2026-11-05T00:52:44.973Z","msg":"http","rid":"3ce2b413-aa09-47af-8790-687cd6352c5a","method":"GET","route":"/soc/audit/verify","status":200,"ms":26.6,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+SIGTERM received — draining connections.
+Legion: AI analysis off — no alert data leaves this server.
+WARNING: REDIS_URL is not set. Rate limits are counted per instance, so running more than one replica multiplies every limit. Set REDIS_URL before scaling beyond a single instance.
+WARNING: REDIS_URL is not set. Realtime alerts reach only the clients connected to this instance, so a second replica would silently miss them.
+Legion: REDIS_URL is not set — realtime fan-out and rate limits are per instance. Set it before running more than one API instance.
+Legion: WARNING — BACKUP_STATUS_FILE is not set, so /health/backup cannot report on backups. Run ops/check-backup.sh from a timer (RECOVERY.md).
+Legion: trusting proxies — 127.0.0.1.
+Legion Node API: http://localhost:30018 (listening on 127.0.0.1)
+{"t":"2026-11-05T00:52:46.247Z","msg":"http","rid":"7789bed8-41d8-4fe1-87ed-6add3c2536ff","method":"GET","route":"/health","status":200,"ms":6.8,"tenant":null}
+{"t":"2026-11-05T00:52:46.313Z","msg":"http","rid":"b966ca4f-3960-4ec7-a6d0-9ca979054a36","method":"POST","route":"/security-events/webhook","status":202,"ms":44.2,"tenant":null}
+{"t":"2026-11-05T00:52:46.342Z","msg":"http","rid":"ea6de95c-ce85-4dd5-a0f3-e2e70c0ecb14","method":"POST","route":"/security/blocks","status":201,"ms":25.9,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:46.881Z","msg":"http","rid":"ec5635ad-635e-4243-8979-e676543a6308","method":"POST","route":"/actions/controls","status":200,"ms":15.5,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:46.905Z","msg":"http","rid":"5f76daa7-4256-4947-825c-7446ea09618e","method":"POST","route":"/actions","status":423,"ms":11.8,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}
+{"t":"2026-11-05T00:52:46.918Z","msg":"http","rid":"f1127149-241a-4c47-b790-5ba99982c16a","method":"GET","route":"/metrics","status":200,"ms":11.3,"tenant":null}
+{"t":"2026-11-05T00:52:46.930Z","msg":"http","rid":"fca49f90-6598-44cf-bfcd-02fcb6023f6c","method":"POST","route":"/actions/controls","status":200,"ms":10.5,"tenant":"3b730030-6501-47a5-8647-59b24c5c1116"}

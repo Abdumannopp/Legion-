@@ -1,0 +1,26 @@
+# Alertmanager for the pilot. Replace the webhook with the team's real channel
+# BEFORE the pilot starts, then run the delivery test in PILOT.md §9 — an alert
+# nobody receives is not monitoring.
+route:
+  receiver: pilot-team
+  group_by: [alertname]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 2h
+  routes:
+    - matchers: ['severity="page"']
+      receiver: pilot-team
+      repeat_interval: 30m
+    - matchers: ['severity="info"']
+      receiver: pilot-team
+      repeat_interval: 24h
+receivers:
+  - name: pilot-team
+    webhook_configs:
+      - url_file: /etc/alertmanager/secrets/alert-webhook-url
+        send_resolved: true
+inhibit_rules:
+  # If the API is down, the worker alerts add nothing.
+  - source_matchers: ['alertname="LegionApiDown"']
+    target_matchers: ['alertname=~"LegionSoc.*|LegionRestarted|LegionDbPoolWaiting"']
+    equal: [instance]

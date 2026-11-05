@@ -183,6 +183,41 @@ describe("worker crashes and recovery", () => {
     expect(row.status).toBe("simulated");
   });
 
+  const stage = async (updatedAgo: string, attempts: number) => {
+    const action = await queuedAction();
+    await query("UPDATE action_requests SET status = 'running', attempts = $2, updated_at = now() - $3::interval WHERE id = $1", [action.id, attempts, updatedAgo]);
+    await claimJobs("worker-that-crashed", 5);
+    await query("UPDATE soc_jobs SET lease_until = now() - interval '1 second'");
+    return action;
+  };
+
+  it("a recovered job never completes while its action is unresolved: a fresh 'running' action (someone may be running it) is re-checked later, not abandoned", async () => {
+    const action = await stage("5 seconds", 1);
+    expect(await runOnce({ owner: "healthy-1" })).toMatchObject({ claimed: 1, deferred: 1, done: 0 });
+    expect((await query("SELECT status FROM action_requests WHERE id = $1", [action.id])).rows[0].status).toBe("running");
+    expect((await query("SELECT status, attempts FROM soc_jobs")).rows[0]).toEqual({ status: "queued", attempts: 1 }); // only the crashed worker's attempt counts; the deferral spent none, and the job is not done
+    // ...and once it has been idle past the stale window, the next pass takes it over
+    await query("UPDATE action_requests SET updated_at = now() - interval '2 minutes' WHERE id = $1", [action.id]);
+    await query("UPDATE soc_jobs SET run_after = now()");
+    expect(await runOnce({ owner: "healthy-1" })).toMatchObject({ done: 1 });
+    expect((await query("SELECT status FROM action_requests WHERE id = $1", [action.id])).rows[0].status).toBe("simulated");
+  });
+
+  it("recovery happens within the job-lease window (an action idle for 90 s is reclaimed on the first pass after the lease lapses)", async () => {
+    const action = await stage("90 seconds", 1);
+    expect(await runOnce({ owner: "healthy-1" })).toMatchObject({ done: 1 });
+    expect((await query("SELECT status, attempts FROM action_requests WHERE id = $1", [action.id])).rows[0]).toEqual({ status: "simulated", attempts: 2 });
+    expect((await query("SELECT note FROM action_events WHERE action_id = $1 AND to_status = 'running' ORDER BY seq DESC LIMIT 1", [action.id])).rows[0].note).toMatch(/recovered/);
+  });
+
+  it("an action that keeps killing its worker is failed after its attempts are used up, not retried forever (audited)", async () => {
+    const action = await stage("2 minutes", 5);
+    expect(await runOnce({ owner: "healthy-1" })).toMatchObject({ done: 1 });
+    expect((await query("SELECT status, error FROM action_requests WHERE id = $1", [action.id])).rows[0]).toMatchObject({ status: "failed", error: expect.stringMatching(/abandoned/) });
+    expect((await query("SELECT count(*)::int AS n FROM soc_audit_events WHERE tenant_id = $1 AND event = 'action.failed'", [E.tenantA])).rows[0].n).toBe(1);
+    expect(await verifyAuditChain(E.tenantA)).toMatchObject({ ok: true });
+  });
+
   it("a poison job (always failing) backs off, is dead-lettered after its last attempt and is audited — and does not block other work", async () => {
     const action = await queuedAction();
     await transaction((c) => enqueueJob(c, E.tenantA, "action.run", { action_request_id: "poison" }, "poison", { maxAttempts: 2 }));

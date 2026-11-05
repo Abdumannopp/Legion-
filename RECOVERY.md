@@ -13,9 +13,15 @@
 | Sessions | refresh tokens in PostgreSQL, access tokens signed with `JWT_SECRET` | New `JWT_SECRET` ⇒ everyone signs in again. Nothing else is lost. |
 | Code | the release you deployed | Redeploy it. |
 
-There is no Docker/compose deployment in this repository: Legion runs under
-systemd (`deploy/legion.service`) behind nginx. If you containerise it, the
-same scripts run unchanged inside the container that has `pg_dump` and `age`.
+Legion runs either under systemd (`deploy/legion.service`) behind nginx, or as the
+containers of `docker-compose.pilot.yml` (PILOT.md). The backup and restore scripts
+are identical for both: run them on the host against the database (Postgres is not
+published, so use `docker compose exec postgres …` or a one-off container on the
+`data` network), or inside any container that has `pg_dump` and `age`. After a
+restore, re-run the one-shot provisioning (`db-provision`) so the API's
+least-privilege role owns the restored tables, and keep **`SOC_AUDIT_KEY`** with the
+other secrets: without it the SOC audit chain cannot be verified, and a wrong key makes
+audited actions fail by design (PILOT.md §6, §7).
 
 ## Architecture
 

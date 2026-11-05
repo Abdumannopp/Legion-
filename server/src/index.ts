@@ -57,6 +57,7 @@ import { createAgentLayer } from "./agents.js";
 import { registerSocRoutes } from "./soc-routes.js";
 import { shadowEvaluate } from "./policy/shadow.js";
 import { startRuntime, stopRuntime } from "./runtime/worker.js";
+import { collectMetrics } from "./metrics.js";
 import { pruneExpiredMemory } from "./memory/store.js";
 import type { AccessState, Alert, Role, Severity, Subscription, User } from "./types.js";
 
@@ -508,6 +509,25 @@ app.get("/health/outbox", async (req, res) => {
   if (!safeEqual(given, expected)) return res.status(401).json({ detail: "Authentication required" });
   try {
     return res.json({ ...(await outbox.queueMetrics()), worker: outbox.workerStatus() });
+  } catch {
+    return res.status(503).json({ detail: "Service unavailable" });
+  }
+});
+
+/**
+ * Prometheus metrics for the pilot dashboards and alerts (metrics.ts): counts
+ * only, platform-wide. Same token and same "absent unless configured" rule as
+ * /health/outbox.
+ */
+app.get("/metrics", async (req, res) => {
+  const expected = config.healthMetricsToken;
+  if (!expected) return res.status(404).json({ detail: "Not found" });
+  const given = (req.header("authorization") || "").replace(/^Bearer\s+/i, "");
+  if (!safeEqual(given, expected)) return res.status(401).json({ detail: "Authentication required" });
+  try {
+    res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    return res.send(await collectMetrics());
   } catch {
     return res.status(503).json({ detail: "Service unavailable" });
   }

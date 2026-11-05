@@ -1,0 +1,217 @@
+# Legion — CONTROLLED PILOT stack (one workspace, simulation only).
+#
+# Not started by anything automatically. Use it only after the checklist in
+# PILOT.md, and only with explicit approval:
+#
+#   cp deploy/pilot.env.example .env.pilot && chmod 600 .env.pilot   # fill every CHANGE-ME (the file is git-ignored)
+#   node ops/pilot-preflight.mjs --env .env.pilot --compose docker-compose.pilot.yml
+#   docker compose --env-file .env.pilot -f docker-compose.pilot.yml build
+#   docker compose --env-file .env.pilot -f docker-compose.pilot.yml up -d
+#
+# What is different from docker-compose.yml (the evaluation stack):
+#   - Postgres and Redis sit on an INTERNAL network: no inbound, no outbound.
+#   - The API and the dashboard are published on 127.0.0.1 only. TLS, rate
+#     limits and the public listener are the host's nginx (deploy/nginx.conf).
+#   - The API connects as a least-privilege database role (legion_app), created
+#     by the one-shot `db-provision` service. The superuser password never
+#     reaches the API container.
+#   - Every container: non-root, read-only root filesystem, all Linux
+#     capabilities dropped, no-new-privileges, memory/CPU/process limits, an
+#     init process, healthchecks.
+#   - The pilot safety switches are fixed HERE, not read from .env: the policy
+#     engine only records, the alert workflow only records, nothing runs live,
+#     and no demo data is seeded.
+
+name: legion-pilot
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  init: true
+  pids_limit: 256
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
+services:
+  postgres:
+    <<: *hardening
+    image: postgres:16.6-alpine
+    # The official entrypoint starts as root to fix volume ownership, then drops
+    # to the postgres user; it needs these and nothing else.
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    environment:
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:-legion_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env.pilot}
+      POSTGRES_DB: ${POSTGRES_DB:-legion}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+    command:
+      - postgres
+      - -c
+      - password_encryption=scram-sha-256
+      - -c
+      - log_connections=on
+      - -c
+      - log_disconnections=on
+      - -c
+      - log_statement=ddl
+      - -c
+      - log_min_duration_statement=1000
+      - -c
+      - idle_in_transaction_session_timeout=60000
+    volumes:
+      - legion-pgdata:/var/lib/postgresql/data
+    tmpfs:
+      - /tmp
+      - /run/postgresql
+    networks: [data]
+    mem_limit: 1g
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_ADMIN_USER:-legion_admin} -d ${POSTGRES_DB:-legion}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    # Never published. Backups and the restore drill connect through
+    # `docker compose exec` or a one-off container on the `data` network.
+
+  redis:
+    <<: *hardening
+    image: redis:7.4-alpine
+    # Rate-limit counters and realtime fan-out only; nothing here must survive a restart.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--protected-mode", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    user: "999:999"
+    networks: [data]
+    mem_limit: 192m
+    cpus: 0.5
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-shot: gives the API its own least-privilege database role (no
+  # superuser, no CREATEROLE/CREATEDB, no file or program access). Safe to run
+  # again on every deploy; it re-checks and strips drifted privileges.
+  db-provision:
+    <<: *hardening
+    restart: "no"
+    build: { context: ., dockerfile: server/Dockerfile }
+    image: legion-pilot-backend:local
+    command: ["node", "dist/db/provision-cli.js"]
+    environment:
+      DATABASE_ADMIN_URL: postgresql://${POSTGRES_ADMIN_USER:-legion_admin}:${POSTGRES_ADMIN_PASSWORD}@postgres:5432/${POSTGRES_DB:-legion}
+      APP_DB_USER: legion_app
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?set APP_DB_PASSWORD in .env.pilot}
+    tmpfs: [/tmp]
+    networks: [data]
+    depends_on:
+      postgres: { condition: service_healthy }
+    mem_limit: 256m
+
+  backend:
+    <<: *hardening
+    image: legion-pilot-backend:local
+    # No `env_file`: that would hand the API EVERY variable in .env.pilot,
+    # including the database admin password. Only the names below get in.
+    environment:
+      # --- fixed for the pilot; .env.pilot cannot change them -------------------
+      NODE_ENV: production
+      DEPLOYMENT_MODE: self-hosted
+      SEED_DEMO_DATA: "false"
+      POLICY_ENGINE_MODE: shadow          # record what the policy would decide; enforce nothing
+      ORCHESTRATOR_AUTO_MODE: shadow      # alert workflow records only; no approvals, no actions
+      RUNTIME_WORKER: "on"
+      COOKIE_SECURE: "true"
+      DB_SSL_INSECURE: "false"
+      # --- wiring ---------------------------------------------------------------
+      DATABASE_URL: postgresql://legion_app:${APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-legion}
+      REDIS_URL: redis://redis:6379
+      LEGION_BIND_ADDRESS: 0.0.0.0        # inside the container; published on loopback below
+      PORT: "8000"
+      # --- secrets and addresses, by name (from .env.pilot via --env-file) ----------
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env.pilot}
+      LEGION_ENCRYPTION_KEYS: ${LEGION_ENCRYPTION_KEYS:?set LEGION_ENCRYPTION_KEYS in .env.pilot}
+      SOC_AUDIT_KEY: ${SOC_AUDIT_KEY:?set SOC_AUDIT_KEY in .env.pilot}
+      HEALTH_METRICS_TOKEN: ${HEALTH_METRICS_TOKEN:?set HEALTH_METRICS_TOKEN in .env.pilot}
+      FRONTEND_URL: ${FRONTEND_URL:?set FRONTEND_URL in .env.pilot}
+      CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS in .env.pilot}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:?set TRUSTED_PROXIES in .env.pilot}
+      REFRESH_COOKIE_PATH: ${REFRESH_COOKIE_PATH:-/api/auth}
+      SMTP_HOST: ${SMTP_HOST:?set SMTP_HOST in .env.pilot}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-Legion Pilot <no-reply@example.com>}
+      ALERT_EMAIL_MIN_SEVERITY: ${ALERT_EMAIL_MIN_SEVERITY:-high}
+      AI_PROVIDER: ${AI_PROVIDER:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      # The first-run setup token is written here (a small volume, not the image).
+      SETUP_TOKEN_FILE: /var/lib/legion/.legion-setup-token
+    volumes:
+      - legion-state:/var/lib/legion
+    tmpfs: [/tmp]
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    networks: [data, edge]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      db-provision: { condition: service_completed_successfully }
+    mem_limit: 768m
+    cpus: 1.0
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  frontend:
+    <<: *hardening
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?https://YOUR-DOMAIN/api}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:?wss://YOUR-DOMAIN/api}
+        NEXT_PUBLIC_OPERATOR_NAME: ${NEXT_PUBLIC_OPERATOR_NAME:-}
+        NEXT_PUBLIC_SUPPORT_EMAIL: ${NEXT_PUBLIC_SUPPORT_EMAIL:-}
+        NEXT_PUBLIC_DATA_LOCATION: ${NEXT_PUBLIC_DATA_LOCATION:-}
+    image: legion-pilot-frontend:local
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL}
+    tmpfs:
+      - /tmp
+      - /app/frontend/.next/cache
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
+    networks: [edge]
+    depends_on:
+      backend: { condition: service_healthy }
+    mem_limit: 512m
+    cpus: 0.75
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+networks:
+  # No route to the outside world in either direction.
+  data:
+    internal: true
+  # Where the API reaches SMTP and the AI provider (if any), and where the
+  # host's nginx reaches the published loopback ports.
+  edge: {}
+
+volumes:
+  legion-pgdata:
+  legion-state:

@@ -207,8 +207,29 @@ export async function syncWithApproval(tenantId: string, actionId: string, by: A
  * Simulates a queued action, at most once: the queued → running move is a
  * compare-and-set, so concurrent callers cannot both run it.
  */
-/** A `running` action untouched for this long was abandoned by a worker that died. */
-export const RUNNING_STALE_SECONDS = 300;
+/**
+ * A `running` action untouched for this long was abandoned by a worker that died.
+ * A simulation only reads and takes milliseconds, so a minute is a wide margin;
+ * recovery must come BEFORE the job lease (120 s) is used up again, never after.
+ */
+export const RUNNING_STALE_SECONDS = 60;
+/** An action that keeps killing its worker is failed after this many attempts instead of looping forever. */
+export const MAX_RUN_ATTEMPTS = 5;
+
+/** Gives up on an action whose attempts are used up (it keeps crashing its worker). */
+export async function failAbandoned(tenantId: string, actionId: string): Promise<boolean> {
+  const system: ActorRef = { kind: "system", component: "action_engine" };
+  return transaction(async (client) => {
+    const r = await client.query(
+      `UPDATE action_requests SET status = 'failed', error = 'abandoned: the worker stopped during every attempt', updated_at = now()
+        WHERE tenant_id = $1 AND id = $2 AND status = 'running' AND attempts >= $3`,
+      [tenantId, actionId, MAX_RUN_ATTEMPTS],
+    );
+    if (r.rowCount !== 1) return false;
+    await event(client, tenantId, actionId, "running", "failed", system, "abandoned after repeated worker failures");
+    return true;
+  });
+}
 
 export async function runQueued(tenantId: string, actionId: string): Promise<ActionRequest | null> {
   const system: ActorRef = { kind: "system", component: "action_engine" };

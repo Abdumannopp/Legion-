@@ -20,7 +20,7 @@ import type { User } from "../src/types.js";
 import { putPolicy } from "../src/policy/store.js";
 import { flushShadow } from "../src/policy/shadow.js";
 import { proposeAction } from "../src/actions/engine.js";
-import { appendAuditEventNow, verifyAuditChain } from "../src/audit/events.js";
+import { appendAuditEventNow, AuditKeyMismatch, currentAuditKeyId, verifyAuditChain } from "../src/audit/events.js";
 
 let tenantA: string; let tenantB: string;
 let admin: User; let analyst: User; let adminB: User;
@@ -98,10 +98,10 @@ describe("the chain", () => {
     const fake = createHash("sha256").update(last.hash + "forged").digest("hex"); // the best an attacker without the key can do
     await query(
       `INSERT INTO soc_audit_events (tenant_id, seq, id, category, event, actor, detail, key_id, prev_hash, hash)
-       VALUES ($1, $2, $3, 'action', 'action.simulated', '{"kind":"system","component":"x"}', '{}', 'jwt-derived', $4, $5)`,
-      [tenantA, Number(last.seq) + 1, randomUUID(), last.hash, fake],
+       VALUES ($1, $2, $3, 'action', 'action.simulated', '{"kind":"system","component":"x"}', '{}', $6, $4, $5)`,
+      [tenantA, Number(last.seq) + 1, randomUUID(), last.hash, fake, currentAuditKeyId()],
     );
-    expect(await verifyAuditChain(tenantA)).toMatchObject({ ok: false, broken_at: Number(last.seq) + 1 });
+    expect(await verifyAuditChain(tenantA)).toMatchObject({ ok: false, broken_at: Number(last.seq) + 1, reason: expect.stringMatching(/content/) });
   });
 
   it("a different key does not verify (the key is what makes it trustworthy)", async () => {
@@ -110,6 +110,45 @@ describe("the chain", () => {
     expect((await verifyAuditChain(tenantA)).ok).toBe(false);
     config.socAuditKey = "";
     expect((await verifyAuditChain(tenantA)).ok).toBe(true);
+  });
+
+  it("key ids carry a fingerprint: two different keys never share an id, and the id reveals nothing of the key", () => {
+    const a = currentAuditKeyId();
+    config.socAuditKey = "first-key-0123456789abcdef0123456789";
+    const b = currentAuditKeyId();
+    config.socAuditKey = "second-key-0123456789abcdef012345678";
+    const c = currentAuditKeyId();
+    config.socAuditKey = "";
+    expect(new Set([a, b, c]).size).toBe(3);
+    expect(b).toMatch(/^cfg-[0-9a-f]{10}$/);
+    expect(a).toMatch(/^jwt-[0-9a-f]{10}$/);
+    expect(b + c).not.toContain("key-0123");
+  });
+
+  it("FAILS CLOSED on a wrong or changed key: the chain is not extended (so it is not silently broken), and the right key still verifies afterwards", async () => {
+    await vanguard(tenantA);
+    const before = await verifyAuditChain(tenantA);
+    expect(before).toMatchObject({ ok: true, events: expect.any(Number) });
+    config.socAuditKey = "a-mistyped-key-0123456789abcdef012345";
+    try {
+      await expect(appendAuditEventNow(tenantA, { category: "runtime", event: "test.event", actor: { kind: "system", component: "t" } })).rejects.toBeInstanceOf(AuditKeyMismatch);
+      await expect(vanguard(tenantA)).rejects.toBeInstanceOf(AuditKeyMismatch); // an auditable change cannot happen without its audit event
+      expect((await verifyAuditChain(tenantA)).ok).toBe(false); // the wrong key cannot vouch for it
+    } finally { config.socAuditKey = ""; }
+    // nothing was appended or half-done under the wrong key
+    expect(await verifyAuditChain(tenantA)).toEqual(before);
+    expect((await query("SELECT count(*)::int AS n FROM action_requests WHERE tenant_id = $1", [tenantA])).rows[0].n).toBe(1);
+    await appendAuditEventNow(tenantA, { category: "runtime", event: "test.event", actor: { kind: "system", component: "t" } });
+    expect((await verifyAuditChain(tenantA)).ok).toBe(true);
+  });
+
+  it("a key mismatch is visible to monitoring", async () => {
+    await vanguard(tenantA);
+    const { collectMetrics } = await import("../src/metrics.js");
+    const value = async () => Number(/^legion_soc_audit_key_mismatch_workspaces (\d+)$/m.exec(await collectMetrics())![1]);
+    expect(await value()).toBe(0);
+    config.socAuditKey = "a-mistyped-key-0123456789abcdef012345";
+    try { expect(await value()).toBe(1); } finally { config.socAuditKey = ""; }
   });
 
   it("is append-only in the database", async () => {

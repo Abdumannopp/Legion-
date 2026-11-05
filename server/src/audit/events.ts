@@ -13,7 +13,7 @@
  * - Events carry ids, decisions and reasons — never request text, alert
  *   text, secrets or model output.
  */
-import { createHmac, hkdfSync, randomUUID } from "node:crypto";
+import { createHash, createHmac, hkdfSync, randomUUID } from "node:crypto";
 import type pg from "pg";
 import { config } from "../config.js";
 import { queryAll, transaction } from "../db/pool.js";
@@ -32,9 +32,26 @@ export interface AuditEventInput {
   detail?: Record<string, string | number | boolean | null | string[]>;
 }
 
+/**
+ * The chain key and its id. The id carries a short one-way fingerprint of the
+ * key, so two different keys never share an id: appending with the wrong key
+ * is detectable (and refused, below) instead of silently forking the chain.
+ */
 function key(): { id: string; key: Buffer } {
-  if (config.socAuditKey) return { id: "configured", key: Buffer.from(hkdfSync("sha256", config.socAuditKey, "legion-soc-audit", "soc audit chain v1", 32)) };
-  return { id: "jwt-derived", key: Buffer.from(hkdfSync("sha256", config.jwtSecret, "legion-soc-audit", "soc audit chain v1", 32)) };
+  const configured = Boolean(config.socAuditKey);
+  const k = Buffer.from(hkdfSync("sha256", configured ? config.socAuditKey : config.jwtSecret, "legion-soc-audit", "soc audit chain v1", 32));
+  const fingerprint = createHash("sha256").update("legion-soc-audit-key-id\0").update(k).digest("hex").slice(0, 10);
+  return { id: `${configured ? "cfg" : "jwt"}-${fingerprint}`, key: k };
+}
+
+/** The id of the key this process signs with (for monitoring: never the key itself). */
+export const currentAuditKeyId = (): string => key().id;
+
+/** Raised instead of extending a chain that this process's key did not sign. */
+export class AuditKeyMismatch extends Error {
+  constructor(readonly chainKeyId: string, readonly currentKeyId: string) {
+    super(`The SOC audit chain was signed with key ${chainKeyId} but this process has key ${currentKeyId}. Restore the original SOC_AUDIT_KEY (and JWT_SECRET if it was derived); refusing to extend the chain with a different key.`);
+  }
 }
 
 interface Body { tenant_id: string; seq: number; id: string; at: string; category: string; event: string; actor: unknown; subject_type: string | null; subject_id: string | null; detail: unknown; key_id: string }
@@ -46,10 +63,12 @@ export function chainHash(k: Buffer, prev: string, body: Body): string {
 export async function appendAuditEvent(client: pg.PoolClient, tenantId: string, e: AuditEventInput): Promise<{ seq: number; hash: string }> {
   if (!/^[a-z_]{1,32}\.[a-z_]{1,32}$/.test(e.event)) throw new Error(`invalid audit event name: ${e.event}`);
   await client.query("SELECT pg_advisory_xact_lock(hashtext('soc_audit:' || $1))", [tenantId]);
-  const last = (await client.query<{ seq: string; hash: string }>(
-    "SELECT seq, hash FROM soc_audit_events WHERE tenant_id = $1 ORDER BY seq DESC LIMIT 1", [tenantId],
+  const last = (await client.query<{ seq: string; hash: string; key_id: string }>(
+    "SELECT seq, hash, key_id FROM soc_audit_events WHERE tenant_id = $1 ORDER BY seq DESC LIMIT 1", [tenantId],
   )).rows[0];
   const { id: keyId, key: k } = key();
+  // Fail closed: a wrong or rotated-by-mistake key must not quietly corrupt the chain.
+  if (last && last.key_id !== keyId) throw new AuditKeyMismatch(last.key_id, keyId);
   const body: Body = {
     tenant_id: tenantId, seq: last ? Number(last.seq) + 1 : 1, id: randomUUID(),
     // Millisecond precision, fixed here: what is hashed is exactly what is stored.

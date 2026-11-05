@@ -1,0 +1,1599 @@
+{
+ "uid": "legion-pilot",
+ "title": "Legion pilot",
+ "tags": [
+  "legion",
+  "pilot"
+ ],
+ "timezone": "browser",
+ "schemaVersion": 39,
+ "version": 1,
+ "refresh": "15s",
+ "time": {
+  "from": "now-3h",
+  "to": "now"
+ },
+ "panels": [
+  {
+   "id": 1,
+   "type": "row",
+   "title": "Pilot safety",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 0
+   },
+   "panels": []
+  },
+  {
+   "id": 2,
+   "type": "stat",
+   "title": "Live actions (must be 0)",
+   "description": "Actions in any mode other than shadow/simulation. Any value above 0 = stop the pilot.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 6,
+    "x": 0,
+    "y": 1
+   },
+   "targets": [
+    {
+     "expr": "legion_soc_actions_live",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 1
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 3,
+   "type": "stat",
+   "title": "Emergency stop active",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 6,
+    "x": 6,
+    "y": 1
+   },
+   "targets": [
+    {
+     "expr": "legion_soc_workspaces_paused",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 1
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 4,
+   "type": "stat",
+   "title": "API up",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 6,
+    "x": 12,
+    "y": 1
+   },
+   "targets": [
+    {
+     "expr": "up{job=\"legion-api\"}",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "green",
+        "value": 1
+       }
+      ]
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "NO"
+        },
+        "1": {
+         "text": "YES"
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 5,
+   "type": "stat",
+   "title": "SOC worker running",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 6,
+    "x": 18,
+    "y": 1
+   },
+   "targets": [
+    {
+     "expr": "legion_soc_runtime_worker_running",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "green",
+        "value": 1
+       }
+      ]
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "NO"
+        },
+        "1": {
+         "text": "YES"
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 6,
+   "type": "row",
+   "title": "Workers and recovery",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 5
+   },
+   "panels": []
+  },
+  {
+   "id": 7,
+   "type": "stat",
+   "title": "Seconds since worker pass",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 0,
+    "y": 6
+   },
+   "targets": [
+    {
+     "expr": "legion_soc_runtime_last_tick_age_seconds",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 30
+       },
+       {
+        "color": "red",
+        "value": 60
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 8,
+   "type": "stat",
+   "title": "Oldest due job (s)",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 4,
+    "y": 6
+   },
+   "targets": [
+    {
+     "expr": "legion_soc_jobs_oldest_due_age_seconds",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 60
+       },
+       {
+        "color": "red",
+        "value": 300
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 9,
+   "type": "stat",
+   "title": "Dead jobs",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 8,
+    "y": 6
+   },
+   "targets": [
+    {
+     "expr": "legion_soc_jobs{status=\"dead\"}",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 1
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 10,
+   "type": "stat",
+   "title": "Lapsed leases",
+   "description": "A worker died holding a job. Should clear within a minute.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 12,
+    "y": 6
+   },
+   "targets": [
+    {
+     "expr": "legion_soc_jobs_expired_leases",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 1
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 11,
+   "type": "stat",
+   "title": "Actions stuck running",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 16,
+    "y": 6
+   },
+   "targets": [
+    {
+     "expr": "legion_soc_actions_stuck_running",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 1
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 12,
+   "type": "stat",
+   "title": "Worker errors (10m)",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 20,
+    "y": 6
+   },
+   "targets": [
+    {
+     "expr": "increase(legion_soc_runtime_tick_errors_total[10m])",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 1
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 13,
+   "type": "timeseries",
+   "title": "SOC jobs by status",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 12,
+    "x": 0,
+    "y": 10
+   },
+   "targets": [
+    {
+     "expr": "legion_soc_jobs",
+     "legendFormat": "{{status}}",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   }
+  },
+  {
+   "id": 14,
+   "type": "timeseries",
+   "title": "Worker passes per minute",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 12,
+    "x": 12,
+    "y": 10
+   },
+   "targets": [
+    {
+     "expr": "rate(legion_soc_runtime_ticks_total[5m])*60",
+     "legendFormat": "passes/min",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   }
+  },
+  {
+   "id": 15,
+   "type": "row",
+   "title": "Workflows, approvals and execution attempts",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 17
+   },
+   "panels": []
+  },
+  {
+   "id": 16,
+   "type": "stat",
+   "title": "Approvals waiting",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 0,
+    "y": 18
+   },
+   "targets": [
+    {
+     "expr": "legion_soc_approvals_pending",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 1
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 17,
+   "type": "stat",
+   "title": "Oldest approval wait (s)",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 4,
+    "y": 18
+   },
+   "targets": [
+    {
+     "expr": "legion_soc_approvals_oldest_pending_age_seconds",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 1800
+       },
+       {
+        "color": "red",
+        "value": 3600
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 18,
+   "type": "stat",
+   "title": "Approved, not yet used",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 8,
+    "y": 18
+   },
+   "targets": [
+    {
+     "expr": "legion_soc_approvals_approved_unused",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 1
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 19,
+   "type": "stat",
+   "title": "Workflow runs (1h)",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 12,
+    "y": 18
+   },
+   "targets": [
+    {
+     "expr": "legion_soc_workflow_runs_1h",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 20,
+   "type": "stat",
+   "title": "Failed workflows (1h)",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 16,
+    "y": 18
+   },
+   "targets": [
+    {
+     "expr": "legion_soc_workflow_runs_failed_1h",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 1
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 21,
+   "type": "stat",
+   "title": "Audit events (all)",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 20,
+    "y": 18
+   },
+   "targets": [
+    {
+     "expr": "legion_soc_audit_events",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 22,
+   "type": "timeseries",
+   "title": "Action requests by status (every execution attempt)",
+   "description": "denied / recorded / awaiting_approval / queued / running / simulated / failed \u2026 every proposal, whoever made it.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 12,
+    "x": 0,
+    "y": 22
+   },
+   "targets": [
+    {
+     "expr": "legion_soc_actions",
+     "legendFormat": "{{status}}",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   }
+  },
+  {
+   "id": 23,
+   "type": "timeseries",
+   "title": "Policy decisions (last 5 min)",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 12,
+    "x": 12,
+    "y": 22
+   },
+   "targets": [
+    {
+     "expr": "legion_soc_policy_decisions_5m",
+     "legendFormat": "{{decision}}",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   }
+  },
+  {
+   "id": 24,
+   "type": "timeseries",
+   "title": "Shadow decisions that disagree with the existing code (24h)",
+   "description": "The evidence for or against ever enforcing the policy.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 12,
+    "x": 0,
+    "y": 29
+   },
+   "targets": [
+    {
+     "expr": "legion_soc_shadow_divergent_24h",
+     "legendFormat": "divergent",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   }
+  },
+  {
+   "id": 25,
+   "type": "timeseries",
+   "title": "Audit events",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 12,
+    "x": 12,
+    "y": 29
+   },
+   "targets": [
+    {
+     "expr": "legion_soc_audit_events",
+     "legendFormat": "events",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   }
+  },
+  {
+   "id": 26,
+   "type": "row",
+   "title": "Dependencies",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 36
+   },
+   "panels": []
+  },
+  {
+   "id": 27,
+   "type": "stat",
+   "title": "Notifications waiting",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 0,
+    "y": 37
+   },
+   "targets": [
+    {
+     "expr": "legion_outbox_pending",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 28,
+   "type": "stat",
+   "title": "Notifications dead",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 4,
+    "y": 37
+   },
+   "targets": [
+    {
+     "expr": "legion_outbox_dead",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 1
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 29,
+   "type": "stat",
+   "title": "Oldest notification (s)",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 8,
+    "y": 37
+   },
+   "targets": [
+    {
+     "expr": "legion_outbox_oldest_pending_age_seconds",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 300
+       },
+       {
+        "color": "red",
+        "value": 900
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 30,
+   "type": "stat",
+   "title": "AI circuit open",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 12,
+    "y": 37
+   },
+   "targets": [
+    {
+     "expr": "legion_ai_circuit_open",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 1
+       }
+      ]
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "NO"
+        },
+        "1": {
+         "text": "YES"
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 31,
+   "type": "stat",
+   "title": "DB connections waiting",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 16,
+    "y": 37
+   },
+   "targets": [
+    {
+     "expr": "legion_db_pool_waiting",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "none",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 1
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  },
+  {
+   "id": 32,
+   "type": "stat",
+   "title": "Uptime (s)",
+   "description": "",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 20,
+    "y": 37
+   },
+   "targets": [
+    {
+     "expr": "legion_process_uptime_seconds",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     },
+     "mappings": []
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    },
+    "colorMode": "background",
+    "graphMode": "none"
+   }
+  }
+ ],
+ "templating": {
+  "list": []
+ },
+ "annotations": {
+  "list": []
+ },
+ "description": "Everything to watch during the controlled pilot. Source: server/src/metrics.ts."
+}

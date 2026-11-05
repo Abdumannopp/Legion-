@@ -1,0 +1,445 @@
+{
+  "started_at": "2026-11-05T00:51:20.831Z",
+  "steps": [
+    {
+      "name": "create an empty database and provision the least-privilege role (db/provision-cli)",
+      "ok": true,
+      "ms": 169,
+      "detail": "provision-cli: role legion_app_9ed3bde9 created"
+    },
+    {
+      "name": "preflight against the live database role (before the first boot)",
+      "ok": true,
+      "ms": 122,
+      "detail": "15 passed, 4 warning(s)"
+    },
+    {
+      "name": "boot in production mode as an unprivileged user; migrations apply as the app role",
+      "ok": true,
+      "ms": 1451,
+      "detail": {
+        "uid": "65534\t65534\t65534\t65534",
+        "capEff": "0000000000000000",
+        "noNewPrivs": "1",
+        "boot_ms": 1433,
+        "migrations": "7/7"
+      }
+    },
+    {
+      "name": "the API's database role really is least-privilege (no superuser, files, programs, roles; cannot reach other databases)",
+      "ok": true,
+      "ms": 392,
+      "detail": [
+        "server/Dockerfile:digest",
+        "frontend/Dockerfile:digest",
+        "owner-can-disable-triggers",
+        "db-tls"
+      ]
+    },
+    {
+      "name": "network: the API listens on loopback only",
+      "ok": true,
+      "ms": 2,
+      "detail": {
+        "listeners": [
+          "127.0.0.1:30018"
+        ],
+        "lan_probe": "refused"
+      }
+    },
+    {
+      "name": "first-run setup needs the one-time token; wrong or missing token is refused",
+      "ok": true,
+      "ms": 1427,
+      "detail": "token consumed and deleted"
+    },
+    {
+      "name": "unauthenticated and forged access is refused (webhook, API, metrics)",
+      "ok": true,
+      "ms": 17,
+      "detail": "ok"
+    },
+    {
+      "name": "read-only integration: a signed Wazuh feed creates alerts and nothing else changes",
+      "ok": true,
+      "ms": 175,
+      "detail": {
+        "alerts": 7,
+        "ip_blocks": 0
+      }
+    },
+    {
+      "name": "secrets at rest: the webhook secret is stored encrypted (not the one the sensor holds)",
+      "ok": true,
+      "ms": 22,
+      "detail": {
+        "webhook_secret_in_db": "not present in plaintext",
+        "passwords": "bcrypt"
+      }
+    },
+    {
+      "name": "simulation only: policy ASSIST, workflow proposes a block, a person approves, it is simulated, nothing real blocks",
+      "ok": true,
+      "ms": 134,
+      "detail": {
+        "workflow": "alert_response",
+        "approval": "digest-bound",
+        "result": "block",
+        "real_blocks": 0,
+        "live": "refused (422)",
+        "critical": "awaiting_approval"
+      }
+    },
+    {
+      "name": "metrics and alert inputs: /metrics is live and shows the safety invariants",
+      "ok": true,
+      "ms": 10,
+      "detail": {
+        "legion_soc_actions_live": 0,
+        "legion_soc_runtime_worker_running": 1,
+        "legion_soc_runtime_last_tick_age_seconds": 0,
+        "legion_soc_approvals_pending": 2,
+        "legion_soc_audit_events": 27
+      }
+    },
+    {
+      "name": "tenant isolation in the live process: a second workspace sees nothing of the first",
+      "ok": true,
+      "ms": 320,
+      "detail": {
+        "b_alerts": 0,
+        "cross_tenant_probes": 9,
+        "all": "404",
+        "audit_chains": "independent"
+      }
+    },
+    {
+      "name": "audit chain verifies in the live process",
+      "ok": true,
+      "ms": 6,
+      "detail": {
+        "events": 27
+      }
+    },
+    {
+      "name": "kill -9 under load: no action is lost or run twice; the restarted worker finishes everything",
+      "ok": true,
+      "ms": 67199,
+      "detail": {
+        "requests": 60,
+        "answered": 15,
+        "lost_connections": 45,
+        "created_before_restart": 59,
+        "states_at_kill": {
+          "running": 32,
+          "simulated": 15,
+          "queued": 12
+        },
+        "restart_to_healthy_ms": 1223,
+        "restart_to_all_finished_ms": 66249,
+        "jobs": {
+          "queued": 1,
+          "done": 48,
+          "running": 20
+        },
+        "replays_ok": true,
+        "dead_jobs": 0,
+        "audit_chain": "valid"
+      }
+    },
+    {
+      "name": "a worker that died mid-simulation: the restarted process reclaims the stuck action and its lapsed job",
+      "ok": true,
+      "ms": 1182,
+      "detail": {
+        "recovered_after_restart_ms": 1095
+      }
+    },
+    {
+      "name": "graceful shutdown: SIGTERM stops the process cleanly and quickly",
+      "ok": true,
+      "ms": 51,
+      "detail": {
+        "exit": {
+          "code": 0,
+          "sig": null
+        },
+        "ms": 51
+      }
+    },
+    {
+      "name": "backup: dump → restore test → encrypt (age, public key only on the server) → checksum",
+      "ok": true,
+      "ms": 2211,
+      "detail": {
+        "file": "legion-20261105T005234Z.dump.age",
+        "bytes": 428098,
+        "encrypted": true,
+        "restore_test": "see status",
+        "backup_ms": 1121
+      }
+    },
+    {
+      "name": "disaster: more data arrives after the backup, then the database is destroyed",
+      "ok": true,
+      "ms": 747,
+      "detail": {
+        "alerts_written_after_backup": 3
+      }
+    },
+    {
+      "name": "recovery: restore into a new database, re-provision the role, boot, verify everything",
+      "ok": true,
+      "ms": 2511,
+      "detail": {
+        "rto_ms": 2028,
+        "rpo": "3 alert(s) written after the last backup were lost (as designed: RPO = backup interval)",
+        "alerts_restored": 7,
+        "audit_chain": "245 events valid",
+        "webhook_after_restore": "accepted",
+        "login": "ok"
+      }
+    },
+    {
+      "name": "a wrong SOC_AUDIT_KEY fails closed: the chain is not extended, actions that must be audited are refused, and the right key still verifies",
+      "ok": true,
+      "ms": 5986,
+      "detail": {
+        "wrong_key_verify": "signed with key \"cfg-cfd7ee84e3\", verifying with \"cfg-5c5b938aee\"",
+        "action_under_wrong_key": 500,
+        "chain_unchanged": true,
+        "metric": "legion_soc_audit_key_mismatch_workspaces=1",
+        "right_key": "verifies"
+      }
+    },
+    {
+      "name": "rollback switches: ORCHESTRATOR_AUTO_MODE=off + POLICY_ENGINE_MODE=off stop all new workflow jobs and decisions without a redeploy",
+      "ok": true,
+      "ms": 1890,
+      "detail": {
+        "ingest": "still works",
+        "new_jobs": 0,
+        "new_shadow_decisions": 0
+      }
+    },
+    {
+      "name": "emergency stop: pausing the workspace refuses new actions at once",
+      "ok": true,
+      "ms": 67,
+      "detail": {
+        "refused": 423,
+        "metric": "legion_soc_workspaces_paused=1"
+      }
+    }
+  ],
+  "measurements": {
+    "boot_to_healthy_ms": 1433,
+    "crash_recovery": {
+      "requests": 60,
+      "answered": 15,
+      "lost_connections": 45,
+      "created_before_restart": 59,
+      "states_at_kill": {
+        "running": 32,
+        "simulated": 15,
+        "queued": 12
+      },
+      "restart_to_healthy_ms": 1223,
+      "restart_to_all_finished_ms": 66249,
+      "jobs": {
+        "queued": 1,
+        "done": 48,
+        "running": 20
+      }
+    },
+    "stop_SIGKILL_ms": 50,
+    "stuck_action_recovery_ms": 1095,
+    "stop_SIGTERM_ms": 50,
+    "backup_ms": 1121,
+    "rto_ms": 2028
+  },
+  "preflight_db_before_boot": [
+    {
+      "level": "PASS",
+      "area": "database",
+      "id": "role-attrs",
+      "text": "role legion_app_9ed3bde9: no superuser, CREATEROLE, CREATEDB, BYPASSRLS or REPLICATION"
+    },
+    {
+      "level": "PASS",
+      "area": "database",
+      "id": "not-postgres",
+      "text": "the API does not use the 'postgres' role"
+    },
+    {
+      "level": "PASS",
+      "area": "database",
+      "id": "memberships",
+      "text": "the role is a member of no other role"
+    },
+    {
+      "level": "PASS",
+      "area": "database",
+      "id": "no-file-read",
+      "text": "cannot read server files (42501)"
+    },
+    {
+      "level": "PASS",
+      "area": "database",
+      "id": "no-program",
+      "text": "cannot run programs on the server (42501)"
+    },
+    {
+      "level": "PASS",
+      "area": "database",
+      "id": "no-create-role",
+      "text": "cannot create roles (42501)"
+    },
+    {
+      "level": "PASS",
+      "area": "database",
+      "id": "no-ext",
+      "text": "cannot create untrusted extensions (42501)"
+    },
+    {
+      "level": "WARN",
+      "area": "database",
+      "id": "migrations",
+      "text": "legion_migrations does not exist yet: the API has not started against this database (expected before the first boot)"
+    },
+    {
+      "level": "PASS",
+      "area": "pilot-safety",
+      "id": "no-live-actions",
+      "text": "no action exists in a mode other than shadow/simulation"
+    },
+    {
+      "level": "PASS",
+      "area": "pilot-safety",
+      "id": "one-tenant",
+      "text": "0 workspace(s)"
+    },
+    {
+      "level": "WARN",
+      "area": "database",
+      "id": "db-tls",
+      "text": "this database connection is not TLS. Acceptable only on the internal docker network or a loopback socket; use DB_SSL=true with a verified CA for any managed or remote database."
+    }
+  ],
+  "process_identity": {
+    "uid": "65534\t65534\t65534\t65534",
+    "gid": "65534\t65534\t65534\t65534",
+    "capEff": "0000000000000000",
+    "capPrm": "0000000000000000",
+    "noNewPrivs": "1",
+    "groups": "NStgid:\t4384"
+  },
+  "preflight_db_after_boot": [
+    {
+      "level": "PASS",
+      "area": "database",
+      "id": "role-attrs",
+      "text": "role legion_app_9ed3bde9: no superuser, CREATEROLE, CREATEDB, BYPASSRLS or REPLICATION"
+    },
+    {
+      "level": "PASS",
+      "area": "database",
+      "id": "not-postgres",
+      "text": "the API does not use the 'postgres' role"
+    },
+    {
+      "level": "PASS",
+      "area": "database",
+      "id": "memberships",
+      "text": "the role is a member of no other role"
+    },
+    {
+      "level": "PASS",
+      "area": "database",
+      "id": "no-file-read",
+      "text": "cannot read server files (42501)"
+    },
+    {
+      "level": "PASS",
+      "area": "database",
+      "id": "no-program",
+      "text": "cannot run programs on the server (42501)"
+    },
+    {
+      "level": "PASS",
+      "area": "database",
+      "id": "no-create-role",
+      "text": "cannot create roles (42501)"
+    },
+    {
+      "level": "PASS",
+      "area": "database",
+      "id": "no-ext",
+      "text": "cannot create untrusted extensions (42501)"
+    },
+    {
+      "level": "PASS",
+      "area": "database",
+      "id": "migrations",
+      "text": "7/7 versioned migrations applied"
+    },
+    {
+      "level": "PASS",
+      "area": "database",
+      "id": "append-only",
+      "text": "6 append-only triggers protect the audit and decision tables"
+    },
+    {
+      "level": "PASS",
+      "area": "pilot-safety",
+      "id": "no-live-actions",
+      "text": "no action exists in a mode other than shadow/simulation"
+    },
+    {
+      "level": "PASS",
+      "area": "pilot-safety",
+      "id": "one-tenant",
+      "text": "0 workspace(s)"
+    },
+    {
+      "level": "WARN",
+      "area": "database",
+      "id": "owner-can-disable-triggers",
+      "text": "the API role OWNS 4 append-only table(s); an owner can DISABLE their triggers. The SOC audit chain is keyed (tampering stays detectable) but the plain audit_log is not. Mitigation: ship chain checkpoints off-host; fix: split migrator/runtime roles (PILOT.md §4, risk R-3)."
+    },
+    {
+      "level": "WARN",
+      "area": "database",
+      "id": "db-tls",
+      "text": "this database connection is not TLS. Acceptable only on the internal docker network or a loopback socket; use DB_SSL=true with a verified CA for any managed or remote database."
+    }
+  ],
+  "notes": [
+    "PostgreSQL allows every role to CONNECT to every database by default; the app role could connect to another database but could neither read nor create anything there. On a shared server, also run REVOKE CONNECT ON DATABASE <other> FROM PUBLIC."
+  ],
+  "metrics_sample": {
+    "legion_soc_actions_live": 0,
+    "legion_soc_runtime_worker_running": 1,
+    "legion_soc_runtime_last_tick_age_seconds": 0,
+    "legion_soc_approvals_pending": 2,
+    "legion_soc_audit_events": 27
+  },
+  "backup_status": {
+    "last_attempt_at": "2026-11-05T00:52:35Z",
+    "last_success_at": "2026-11-05T00:52:35Z",
+    "last_backup_file": "legion-20261105T005234Z.dump.age",
+    "last_backup_bytes": 428098,
+    "encrypted": "true",
+    "last_failure_reason": null,
+    "last_failure_stage": null,
+    "restore_tested_at": "2026-11-05T00:52:35Z",
+    "restore_test_result": "ok",
+    "restore_test_source": "backup-run"
+  },
+  "finished_at": "2026-11-05T00:52:46.931Z",
+  "summary": {
+    "steps": 22,
+    "passed": 22,
+    "failed": 0
+  }
+}
