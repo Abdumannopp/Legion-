@@ -1,0 +1,126 @@
+# Unit tests for monitoring/alerts.yml — run with:  promtool test rules monitoring/alerts.test.yml
+# They feed synthetic metric series and assert which alerts fire (and that a healthy system fires none).
+rule_files: [alerts.yml]
+evaluation_interval: 15s
+
+tests:
+  - name: healthy system fires nothing
+    interval: 15s
+    input_series:
+      - { series: 'up{job="legion-api"}', values: '1x40' }
+      - { series: 'legion_process_uptime_seconds', values: '3600x40' }
+      - { series: 'legion_soc_actions_live', values: '0x40' }
+      - { series: 'legion_soc_runtime_worker_running', values: '1x40' }
+      - { series: 'legion_soc_runtime_last_tick_age_seconds', values: '1x40' }
+      - { series: 'legion_soc_jobs_oldest_due_age_seconds', values: '0x40' }
+      - { series: 'legion_soc_audit_key_mismatch_workspaces', values: '0x40' }
+      - { series: 'legion_soc_approvals_oldest_pending_age_seconds', values: '120x40' }
+      - { series: 'legion_soc_approvals_approved_unused', values: '0x40' }
+      - { series: 'legion_soc_actions_stuck_running', values: '0x40' }
+      - { series: 'legion_soc_jobs_expired_leases', values: '0x40' }
+      - { series: 'legion_outbox_dead', values: '0x40' }
+    alert_rule_test:
+      - { eval_time: 8m, alertname: LegionApiDown, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionRestarted, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionLiveActionDetected, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionSocWorkerStopped, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionSocWorkerStale, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionSocJobsBacklog, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionSocLeasesLapsed, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionActionStuckRunning, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionAuditKeyMismatch, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionApprovalWaitingTooLong, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionApprovedButUnused, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionNotificationsDead, exp_alerts: [] }
+
+  - name: a live action pages immediately
+    interval: 15s
+    input_series:
+      - { series: 'legion_soc_actions_live', values: '0 0 0 1 1 1 1 1' }
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: LegionLiveActionDetected
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: LegionLiveActionDetected
+        exp_alerts:
+          - exp_labels: { severity: page }
+            exp_annotations:
+              summary: An action exists in a mode other than shadow/simulation. Stop the pilot (PILOT.md §10 kill switch).
+              runbook: PILOT.md §10
+
+  - name: API down pages after two minutes
+    interval: 15s
+    input_series:
+      - { series: 'up{job="legion-api"}', values: '1 1 1 0x30' }
+    alert_rule_test:
+      - { eval_time: 1m, alertname: LegionApiDown, exp_alerts: [] }
+      - eval_time: 3m
+        alertname: LegionApiDown
+        exp_alerts:
+          - exp_labels: { severity: page, job: legion-api }
+            exp_annotations:
+              summary: The Legion API is not answering /metrics.
+              runbook: PILOT.md §9 "API down"
+
+  - name: a worker that stopped ticking pages as stale
+    interval: 15s
+    input_series:
+      - { series: 'legion_soc_runtime_worker_running', values: '1x60' }
+      - { series: 'legion_soc_runtime_last_tick_age_seconds', values: '1 1 1 90+15x60' }
+    alert_rule_test:
+      - { eval_time: 2m, alertname: LegionSocWorkerStale, exp_alerts: [] }
+      - eval_time: 6m
+        alertname: LegionSocWorkerStale
+        exp_alerts:
+          - exp_labels: { severity: page }
+            exp_annotations: { summary: "The SOC worker is running but has not finished a pass for over a minute (hung or crash-looping)." }
+
+  - name: a worker that never ran (-1) also counts as stale
+    interval: 15s
+    input_series:
+      - { series: 'legion_soc_runtime_worker_running', values: '1x40' }
+      - { series: 'legion_soc_runtime_last_tick_age_seconds', values: '-1x40' }
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: LegionSocWorkerStale
+        exp_alerts:
+          - exp_labels: { severity: page }
+            exp_annotations: { summary: "The SOC worker is running but has not finished a pass for over a minute (hung or crash-looping)." }
+
+  - name: a backlog of due jobs pages
+    interval: 15s
+    input_series:
+      - { series: 'legion_soc_jobs_oldest_due_age_seconds', values: '0 0 400x60' }
+    alert_rule_test:
+      - { eval_time: 3m, alertname: LegionSocJobsBacklog, exp_alerts: [] }
+      - eval_time: 8m
+        alertname: LegionSocJobsBacklog
+        exp_alerts:
+          - exp_labels: { severity: page }
+            exp_annotations: { summary: "A SOC job has been due for over five minutes and nothing has taken it." }
+
+  - name: a wrong audit key pages at once
+    interval: 15s
+    input_series:
+      - { series: 'legion_soc_audit_key_mismatch_workspaces', values: '0 1 1 1' }
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: LegionAuditKeyMismatch
+        exp_alerts:
+          - exp_labels: { severity: page }
+            exp_annotations:
+              summary: The SOC audit key does not match the one the chain was signed with. Actions will fail until the original SOC_AUDIT_KEY is restored.
+              runbook: PILOT.md §9
+
+  - name: an approval waiting over an hour raises a ticket
+    interval: 1m
+    input_series:
+      - { series: 'legion_soc_approvals_oldest_pending_age_seconds', values: '600 1800 3700 3800' }
+    alert_rule_test:
+      - { eval_time: 1m, alertname: LegionApprovalWaitingTooLong, exp_alerts: [] }
+      - eval_time: 2m
+        alertname: LegionApprovalWaitingTooLong
+        exp_alerts:
+          - exp_labels: { severity: ticket }
+            exp_annotations: { summary: "An approval request has waited over an hour for a person." }

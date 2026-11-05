@@ -304,6 +304,12 @@ export const config = {
   policyEngineMode: (process.env.POLICY_ENGINE_MODE || "shadow") as "off" | "shadow",
   /** Task 10 Background Runtime: this process claims and runs SOC jobs ("off" for an API-only replica). */
   runtimeWorker: (process.env.RUNTIME_WORKER || "on") !== "off",
+  /**
+   * Resource budget: at most this many action requests per workspace per hour (429 beyond it).
+   * Each request stores ~6.5 KB across its tables, and the history is append-only, so without a
+   * ceiling one compromised account could fill the disk at the request-rate limit.
+   */
+  socActionsPerHour: Math.max(10, Math.floor(Number(process.env.SOC_ACTIONS_PER_HOUR ?? 3000)) || 3000),
   runtimePollSeconds: Math.min(300, Math.max(1, Math.floor(Number(process.env.RUNTIME_POLL_SECONDS ?? 5)) || 5)),
   /**
    * Task 10 Orchestrator: run the alert workflow for every NEW alert, in the

@@ -19,6 +19,9 @@ COPY --from=build /app /app
 WORKDIR /app/server
 # The first-run setup token is written into this folder (see setup-token.ts).
 RUN chown node:node /app/server
+# State directory for the pilot stack (docker-compose.pilot.yml mounts a volume here and runs with a
+# read-only root filesystem). Created and owned by the non-root user so a fresh volume inherits it.
+RUN mkdir -p /var/lib/legion && chown node:node /var/lib/legion
 # Not root: the process only needs its own files and the network.
 USER node
 EXPOSE 8000

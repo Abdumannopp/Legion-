@@ -70,6 +70,138 @@ jobs:
         if: always()
         run: docker compose down -v
 
+  # The hardened pilot stack (docker-compose.pilot.yml), built and run for real, then checked from the
+  # outside: non-root, read-only, no capabilities, loopback-only ports, an unreachable database,
+  # least-privilege role, a crash and restart. Also runs the monitoring rules through promtool.
+  pilot-stack:
+    name: Pilot stack (hardened containers) and monitoring rules
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Alert rules and Prometheus config (promtool), alert unit tests
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends prometheus
+          sudo systemctl stop prometheus 2>/dev/null || true
+          cd monitoring
+          promtool check rules alerts.yml
+          promtool test rules alerts.test.yml
+      - name: Generate a throwaway pilot configuration
+        run: |
+          r() { openssl rand -hex 32; }
+          cat > .env.pilot <<EOF
+          POSTGRES_ADMIN_USER=legion_admin
+          POSTGRES_ADMIN_PASSWORD=$(r)
+          APP_DB_PASSWORD=$(r)
+          POSTGRES_DB=legion
+          JWT_SECRET=$(r)
+          LEGION_ENCRYPTION_KEYS=k1:$(r)
+          SOC_AUDIT_KEY=$(r)
+          HEALTH_METRICS_TOKEN=$(r)
+          FRONTEND_URL=https://pilot.ci-legion.test
+          CORS_ORIGINS=https://pilot.ci-legion.test
+          TRUSTED_PROXIES=127.0.0.1,172.16.0.0/12
+          REFRESH_COOKIE_PATH=/api/auth
+          NEXT_PUBLIC_API_URL=https://pilot.ci-legion.test/api
+          NEXT_PUBLIC_WS_URL=wss://pilot.ci-legion.test/api
+          SMTP_HOST=smtp.ci-legion.test
+          API_PORT=8000
+          WEB_PORT=3000
+          EOF
+          sed -i 's/^          //' .env.pilot
+          chmod 600 .env.pilot
+      - name: Preflight (the checklist as code) on the pilot compose file
+        run: node ops/pilot-preflight.mjs --env .env.pilot --compose docker-compose.pilot.yml
+      - name: Build and start the pilot stack
+        run: |
+          docker compose --env-file .env.pilot -f docker-compose.pilot.yml build
+          docker compose --env-file .env.pilot -f docker-compose.pilot.yml up -d
+          for i in $(seq 1 60); do
+            s=$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose --env-file .env.pilot -f docker-compose.pilot.yml ps -q backend)" 2>/dev/null || echo none)
+            [ "$s" = healthy ] && break
+            sleep 3
+          done
+          echo "backend health: $s"; [ "$s" = healthy ]
+      - name: Container hardening, checked from outside
+        run: |
+          set -euo pipefail
+          dc() { docker compose --env-file .env.pilot -f docker-compose.pilot.yml "$@"; }
+          for svc in backend frontend redis; do
+            uid=$(dc exec -T $svc id -u); echo "$svc runs as uid $uid"; [ "$uid" != 0 ]
+          done
+          ! dc exec -T backend touch /usr/local/not-writable 2>/dev/null   # read-only root filesystem
+          dc exec -T backend touch /tmp/writable                            # tmpfs is writable
+          for svc in backend frontend redis; do
+            caps=$(dc exec -T $svc sh -c 'grep CapEff /proc/self/status | cut -f2'); echo "$svc CapEff=$caps"; [ "$caps" = 0000000000000000 ]
+            nnp=$(dc exec -T $svc sh -c 'grep NoNewPrivs /proc/self/status | cut -f2'); [ "$nnp" = 1 ]
+          done
+          # Postgres: no process of the database runs as root.
+          if docker top "$(dc ps -q postgres)" -eo user,comm | awk '$2 ~ /^postgres/ && ($1=="root" || $1=="0") {bad=1} END {exit bad}'; then echo "postgres processes are not root"; else echo "postgres runs a process as root"; exit 1; fi
+          # Published ports: API and dashboard on loopback only; database and redis not published at all.
+          ss -ltnH | tee /tmp/listen.txt
+          grep -E ':(8000|3000)\b' /tmp/listen.txt | grep -vE '127\.0\.0\.1:(8000|3000)\b' && { echo "published beyond loopback"; exit 1; } || true
+          ! grep -E ':(5432|6379)\b' /tmp/listen.txt
+          # The data network has no way out.
+          ! dc exec -T postgres wget -q -T 4 -O- http://example.com 2>/dev/null
+          # The API never receives the database admin password.
+          ! dc exec -T backend env | grep -q POSTGRES_ADMIN_PASSWORD
+      - name: Database role is least-privilege (queried from inside the API container)
+        run: |
+          dc() { docker compose --env-file .env.pilot -f docker-compose.pilot.yml "$@"; }
+          dc exec -T backend node -e '
+            const pg = require("pg");
+            (async () => {
+              const c = new pg.Client({ connectionString: process.env.DATABASE_URL }); await c.connect();
+              const r = (await c.query("SELECT current_user u, rolsuper s, rolcreaterole cr, rolcreatedb cd, rolbypassrls b, rolreplication rp FROM pg_roles WHERE rolname = current_user")).rows[0];
+              console.log(JSON.stringify(r));
+              if (r.u !== "legion_app" || r.s || r.cr || r.cd || r.b || r.rp) throw new Error("role has elevated attributes");
+              for (const sql of ["SELECT pg_read_file(\u0027/etc/passwd\u0027)", "COPY (SELECT 1) TO PROGRAM \u0027true\u0027", "CREATE ROLE ci_probe"]) {
+                let denied = false; try { await c.query(sql); } catch { denied = true; }
+                if (!denied) throw new Error("allowed: " + sql);
+              }
+              const m = (await c.query("SELECT count(*)::int n FROM legion_migrations")).rows[0].n; console.log("migrations applied:", m);
+              await c.end();
+            })().catch((e) => { console.error(e.message); process.exit(1); });'
+      - name: First-run setup, monitoring endpoint, audit chain
+        run: |
+          set -euo pipefail
+          dc() { docker compose --env-file .env.pilot -f docker-compose.pilot.yml "$@"; }
+          TOKEN=$(grep '^HEALTH_METRICS_TOKEN=' .env.pilot | cut -d= -f2)
+          curl -fsS http://127.0.0.1:8000/health
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/metrics); [ "$code" = 401 ]
+          curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/metrics | tee /tmp/metrics.txt | grep -E '^legion_(up|soc_actions_live|soc_runtime_worker_running) '
+          grep -q '^legion_soc_actions_live 0$' /tmp/metrics.txt
+          grep -q '^legion_soc_runtime_worker_running 1$' /tmp/metrics.txt
+          SETUP=$(dc exec -T backend cat /var/lib/legion/.legion-setup-token | tr -d '\r\n')
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -d '{"email":"ci@pilot.test","password":"a-long-ci-password-1","tenant_name":"CI"}' http://127.0.0.1:8000/auth/register); [ "$code" = 403 ]
+          curl -fsS -H 'content-type: application/json' -d "{\"email\":\"ci@pilot.test\",\"password\":\"a-long-ci-password-1\",\"tenant_name\":\"CI\",\"setup_token\":\"$SETUP\"}" http://127.0.0.1:8000/auth/register >/dev/null
+          JWT=$(curl -fsS -H 'content-type: application/json' -d '{"username":"ci@pilot.test","password":"a-long-ci-password-1"}' http://127.0.0.1:8000/auth/login | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).access_token))')
+          echo "$JWT" > /tmp/jwt
+          curl -fsS -H "Authorization: Bearer $JWT" http://127.0.0.1:8000/soc/audit/verify
+          curl -fsS -o /dev/null http://127.0.0.1:3000/login
+      - name: Crash and recovery (kill -9 the API container)
+        run: |
+          set -euo pipefail
+          dc() { docker compose --env-file .env.pilot -f docker-compose.pilot.yml "$@"; }
+          docker kill -s KILL "$(dc ps -q backend)"
+          for i in $(seq 1 60); do
+            s=$(docker inspect -f '{{.State.Health.Status}}' "$(dc ps -q backend)" 2>/dev/null || echo none); [ "$s" = healthy ] && break; sleep 3
+          done
+          echo "backend after kill: $s"; [ "$s" = healthy ]
+          JWT=$(cat /tmp/jwt)
+          curl -fsS -H "Authorization: Bearer $JWT" http://127.0.0.1:8000/soc/audit/verify
+          dc run --rm db-provision    # provisioning is safe to repeat
+      - name: Logs on failure
+        if: failure()
+        run: docker compose --env-file .env.pilot -f docker-compose.pilot.yml logs --tail=150 | sed -E 's#(postgres(ql)?)://[^@ ]*@#\1://***@#g'
+      - name: Stop and remove the stack
+        if: always()
+        run: docker compose --env-file .env.pilot -f docker-compose.pilot.yml down -v
+
   dependencies:
     name: Known vulnerabilities in the lockfile
     runs-on: ubuntu-latest

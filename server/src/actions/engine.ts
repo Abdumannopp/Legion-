@@ -17,6 +17,7 @@
  *  - The workspace emergency stop refuses new actions and holds queued ones.
  */
 import { randomUUID } from "node:crypto";
+import { config } from "../config.js";
 import type pg from "pg";
 import { queryAll, queryOne, transaction } from "../db/pool.js";
 import { cancelApproval, consumeApproval, createApproval, getApproval, type Approval } from "../approvals/engine.js";
@@ -115,6 +116,9 @@ export async function proposeAction(tenantId: string, p: Proposal): Promise<{ ac
     return { action: toAction(existing), replayed: true };
   }
   if (await isPaused(tenantId)) throw new ActionError(423, "paused", "Actions are paused in this workspace");
+  // Resource budget (a replay above costs nothing and is never refused by it).
+  const recent = await queryOne<{ n: number }>("SELECT count(*)::int AS n FROM action_requests WHERE tenant_id = $1 AND created_at > now() - interval '1 hour'", [tenantId]);
+  if ((recent?.n ?? 0) >= config.socActionsPerHour) throw new ActionError(429, "budget", `This workspace reached its limit of ${config.socActionsPerHour} action requests per hour`);
 
   const active = await getActivePolicy(tenantId);
   const started = process.hrtime.bigint();
