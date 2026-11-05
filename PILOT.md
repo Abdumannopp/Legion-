@@ -268,7 +268,7 @@ Never edit an applied migration (checksum guard) and never "fix" a chain by dele
 
 | ID | Risk / gap | Severity for pilot | Plan |
 |---|---|---|---|
-| R-1 | Containers were never built or run in the preparation environment (no Docker daemon). Compose and Dockerfiles were validated statically only. | **Medium** — closed by Gate C commands | Run Gate C; record in §12.2 |
+| R-1 | ~~Containers never built or run~~ **Closed in Task 13:** the CI job `pilot-stack` builds and starts this compose file on a real Docker host and checks hardening, Redis, DB role, `/metrics`, audit chain and crash restart. (Gate C on the real host is still required.) | Low | Run Gate C; record in §12.2 |
 | R-2 | Base images pinned by tag, not digest | Low | Pin digests at first build |
 | R-3 | App DB role owns tables ⇒ can disable append-only triggers | Medium | Migrator/runtime split; daily chain verify + off-host head meanwhile |
 | R-4 | Tenant isolation is application-enforced (no Postgres row-level security) | Low (well tested; one workspace in pilot) | Consider RLS before multi-tenant production |
@@ -279,8 +279,10 @@ Never edit an applied migration (checksum guard) and never "fix" a chain by dele
 | R-9 | Redis and Postgres traffic is plaintext on the internal network | Low | TLS for any managed/remote DB (`DB_SSL=true`) |
 | R-10 | No `SOC_AUDIT_KEY` rotation procedure; no off-host chain checkpoint automation | Medium | Daily manual head record now; automate and add rotation |
 | R-11 | Recovery from an abrupt kill takes up to ~75 s for in-flight simulations | Info | Acceptable (simulation only) |
-| R-12 | Metric/alert rules were checked for the metrics they name, not executed by `promtool` | Low | Gate C: `promtool check rules` |
+| R-12 | ~~Rules not executed by promtool~~ **Closed in Task 13:** `promtool check rules` and `promtool test rules` (`monitoring/alerts.test.yml`) run in CI. Delivery to a human is still untested | Low | Gate C alert-path test |
 | R-13 | Real AI provider and real connector behaviour were not tested (none configured) | Info | Out of pilot scope |
 
 ## 14. Evidence index
 `pilot-results/rehearsal.json` (22 steps, measurements) · `pilot-results/rehearsal-server.log` (server log, credentials scrubbed) · `E2E-REPORT.md`, `e2e-results/` (Task 11) · `SOC-CORE.md` · tests: `pilot-preflight`, `pilot-monitoring`, `metrics`, `soc-audit`, `e2e-soc-*`, `tenant-query-guard`, `tenant-isolation-sweep`, `cross-tenant-attacks`, `disaster-recovery`, `backup-scripts`.
+
+Task 13 (production readiness): see `PRODUCTION-READINESS-ASSESSMENT.md`. Verdict: pilot GO (conditional), general production NO-GO.

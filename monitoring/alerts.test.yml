@@ -137,7 +137,7 @@ tests:
         exp_alerts:
           - exp_labels: { severity: page }
             exp_annotations:
-              summary: More than 2 % of HTTP responses are server errors (5xx) for 10 minutes. This is a rollback trigger (PRODUCTION-READINESS-ASSESSMENT.md §9).
+              summary: More than 2 % of HTTP responses are server errors (5xx) for 10 minutes. This is a rollback trigger (PRODUCTION-READINESS-ASSESSMENT.md §8).
 
   - name: a handful of errors in healthy traffic does not page
     interval: 1m

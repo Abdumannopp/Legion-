@@ -116,7 +116,7 @@ describe("growth budget (measured)", () => {
     expect(perAction).toBeGreaterThan(0);
     expect(rows.action_requests).toBe(N);
     expect(rows.soc_audit_events).toBeGreaterThanOrEqual(N * 3);
-    // Documented gap (R-16 in PRODUCTION-READINESS-ASSESSMENT.md): no retention on the SOC history tables yet.
+    // Documented gap (K-2 in PRODUCTION-READINESS-ASSESSMENT.md): no retention on the SOC history tables yet.
     expect(pruned).toEqual([]);
   }, 120_000);
 });

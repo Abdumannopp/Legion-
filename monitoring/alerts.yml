@@ -16,7 +16,7 @@ groups:
         for: 10m
         labels: { severity: page }
         annotations:
-          summary: More than 2 % of HTTP responses are server errors (5xx) for 10 minutes. This is a rollback trigger (PRODUCTION-READINESS-ASSESSMENT.md §9).
+          summary: More than 2 % of HTTP responses are server errors (5xx) for 10 minutes. This is a rollback trigger (PRODUCTION-READINESS-ASSESSMENT.md §8).
 
       - alert: LegionSlowResponses
         expr: histogram_quantile(0.95, sum by (le) (rate(legion_http_request_duration_seconds_bucket[5m]))) > 2 and sum(rate(legion_http_requests_total[5m])) > 0.05
