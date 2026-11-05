@@ -12,6 +12,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
+import { recordRequest } from "./http-stats.js";
 
 type Line = { t: string; msg: "http"; rid: string; method: string; route: string; status: number; ms: number; tenant: string | null };
 
@@ -28,6 +29,8 @@ export function accessLog(enabled: () => boolean) {
     res.setHeader("x-request-id", rid);
     const started = process.hrtime.bigint();
     res.on("finish", () => {
+      // Counted whether or not the access log is on: monitoring must not depend on a log switch.
+      try { recordRequest(res.statusCode, Number(process.hrtime.bigint() - started) / 1e9); } catch { /* never break a response */ }
       if (!enabled()) return;
       const route = req.route?.path ? `${req.baseUrl}${String(req.route.path)}` : "(unmatched)";
       const tenant = (req as Request & { user?: { tenant_id?: string } }).user?.tenant_id ?? req.principal?.tenantId ?? null;

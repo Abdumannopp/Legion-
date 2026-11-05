@@ -23,7 +23,8 @@ let tenantA: string; let tenantB: string;
 const saved = config.healthMetricsToken;
 const scrape = (token = TOKEN) => request(app).get("/metrics").set("Authorization", `Bearer ${token}`);
 const metric = (text: string, name: string, labels?: string) => {
-  const m = new RegExp(`^${name}${labels ? `\\{${labels}\\}` : ""} (-?[0-9.]+)$`, "m").exec(text);
+  const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = new RegExp(`^${name}${labels ? `\\{${esc(labels)}\\}` : ""} (-?[0-9.]+)$`, "m").exec(text);
   return m ? Number(m[1]) : undefined;
 };
 
@@ -54,8 +55,10 @@ describe("GET /metrics", () => {
     const lines = text.trim().split("\n");
     const names = new Set(lines.filter((l) => !l.startsWith("#")).map((l) => l.split(/[{ ]/)[0]));
     for (const n of names) {
-      expect(text, n).toContain(`# HELP ${n} `);
-      expect(text, n).toContain(`# TYPE ${n} `);
+      const base = n.replace(/_(bucket|sum|count)$/, ""); // histogram series share their base name's HELP/TYPE
+      const declared = text.includes(`# TYPE ${n} `) ? n : base;
+      expect(text, n).toContain(`# HELP ${declared} `);
+      expect(text, n).toContain(`# TYPE ${declared} `);
     }
     for (const l of lines.filter((x) => !x.startsWith("#"))) expect(l).toMatch(/^[a-z0-9_]+(\{[^}]*\})? -?[0-9.]+$/);
     expect(metric(text, "legion_up")).toBe(1);
@@ -93,6 +96,25 @@ describe("GET /metrics", () => {
     const text = (await scrape().expect(200)).text;
     expect(metric(text, "legion_soc_actions_stuck_running")).toBe(1);
     expect(metric(text, "legion_soc_jobs_expired_leases")).toBe(1);
+  });
+
+  it("counts requests by status class and times them, with no route, tenant or path in any label", async () => {
+    const { resetHttpStats } = await import("../src/http-stats.js");
+    resetHttpStats();
+    await request(app).get("/health").expect(200);
+    await request(app).get("/alerts").expect(401);
+    await request(app).get("/definitely-not-a-route").expect(404);
+    const text = (await scrape().expect(200)).text;
+    expect(metric(text, "legion_http_requests_total", 'class="2xx"')).toBeGreaterThanOrEqual(1);
+    expect(metric(text, "legion_http_requests_total", 'class="4xx"')).toBeGreaterThanOrEqual(2);
+    expect(metric(text, "legion_http_requests_total", 'class="5xx"')).toBe(0);
+    const count = metric(text, "legion_http_request_duration_seconds_count")!;
+    expect(count).toBeGreaterThanOrEqual(3);
+    expect(metric(text, "legion_http_request_duration_seconds_bucket", 'le="+Inf"')).toBe(count);
+    // cumulative and monotonic
+    const les = [...text.matchAll(/^legion_http_request_duration_seconds_bucket\{le="([^"]+)"\} (\d+)$/gm)].map((m) => Number(m[2]));
+    expect([...les].sort((a, b) => a - b)).toEqual(les);
+    expect(text).not.toMatch(/legion_http_[a-z_]+\{[^}]*(route|path|tenant)/);
   });
 
   it("shows the worker heartbeat", async () => {

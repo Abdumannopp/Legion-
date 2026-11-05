@@ -1587,6 +1587,163 @@
     "colorMode": "background",
     "graphMode": "none"
    }
+  },
+  {
+   "id": 33,
+   "type": "row",
+   "title": "HTTP traffic",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 41
+   },
+   "panels": []
+  },
+  {
+   "id": 34,
+   "type": "timeseries",
+   "title": "Requests per second by status class",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 0,
+    "y": 42
+   },
+   "targets": [
+    {
+     "expr": "sum by (class) (rate(legion_http_requests_total[5m]))",
+     "legendFormat": "{{class}}",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   }
+  },
+  {
+   "id": 35,
+   "type": "timeseries",
+   "title": "Server-error ratio (5xx)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 8,
+    "y": 42
+   },
+   "targets": [
+    {
+     "expr": "sum(rate(legion_http_requests_total{class=\"5xx\"}[5m])) / sum(rate(legion_http_requests_total[5m]))",
+     "legendFormat": "5xx share",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   }
+  },
+  {
+   "id": 36,
+   "type": "timeseries",
+   "title": "Response time p50 / p95",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "legion-prometheus"
+   },
+   "gridPos": {
+    "h": 7,
+    "w": 8,
+    "x": 16,
+    "y": 42
+   },
+   "targets": [
+    {
+     "expr": "histogram_quantile(0.5, sum by (le) (rate(legion_http_request_duration_seconds_bucket[5m])))",
+     "legendFormat": "p50",
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    },
+    {
+     "expr": "histogram_quantile(0.95, sum by (le) (rate(legion_http_request_duration_seconds_bucket[5m])))",
+     "legendFormat": "p95",
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "legion-prometheus"
+     }
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom"
+    },
+    "tooltip": {
+     "mode": "multi"
+    }
+   }
   }
  ],
  "templating": {

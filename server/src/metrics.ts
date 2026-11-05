@@ -16,6 +16,7 @@ import { queueMetrics, workerStatus } from "./outbox.js";
 import { RUNNING_STALE_SECONDS } from "./actions/engine.js";
 import { runtimeHealth } from "./runtime/worker.js";
 import { currentAuditKeyId } from "./audit/events.js";
+import { renderHttpStats } from "./http-stats.js";
 import { config } from "./config.js";
 
 type Sample = { name: string; help: string; type: "gauge" | "counter"; values: Array<{ labels?: Record<string, string>; value: number }> };
@@ -122,5 +123,5 @@ export async function collectMetrics(): Promise<string> {
     g("legion_db_pool_total", "Database connections open.", pool.totalCount),
     g("legion_db_pool_waiting", "Requests waiting for a database connection.", pool.waitingCount),
   ];
-  return render(samples);
+  return render(samples) + renderHttpStats();
 }

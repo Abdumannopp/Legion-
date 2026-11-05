@@ -11,6 +11,20 @@ groups:
           summary: The Legion API is not answering /metrics.
           runbook: PILOT.md §9 "API down"
 
+      - alert: LegionHighErrorRate
+        expr: sum(rate(legion_http_requests_total{class="5xx"}[5m])) / sum(rate(legion_http_requests_total[5m])) > 0.02 and sum(rate(legion_http_requests_total[5m])) > 0.05
+        for: 10m
+        labels: { severity: page }
+        annotations:
+          summary: More than 2 % of HTTP responses are server errors (5xx) for 10 minutes. This is a rollback trigger (PRODUCTION-READINESS-ASSESSMENT.md §9).
+
+      - alert: LegionSlowResponses
+        expr: histogram_quantile(0.95, sum by (le) (rate(legion_http_request_duration_seconds_bucket[5m]))) > 2 and sum(rate(legion_http_requests_total[5m])) > 0.05
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: The 95th percentile response time has been over 2 seconds for 10 minutes.
+
       - alert: LegionRestarted
         expr: legion_process_uptime_seconds < 120
         for: 0m
