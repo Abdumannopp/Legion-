@@ -85,7 +85,7 @@ Monitoring (loopback only): prometheus :9090, alertmanager :9093, grafana :3001 
 | `ops/tests/pilot-rehearsal.mjs` | The live rehearsal (22 steps). |
 | `server/src/metrics.ts`, `GET /metrics` | The monitoring surface (token-protected, counts only). |
 
-**Container hardening (every service):** non-root user, read-only root filesystem, all capabilities dropped (Postgres adds back only `CHOWN DAC_OVERRIDE FOWNER SETGID SETUID`, which its entrypoint needs to hand the data directory to the `postgres` user), `no-new-privileges`, memory/CPU/process limits, init process, log rotation, healthchecks, images pinned by tag. The API never receives the database admin password (it gets an explicit list of variables, not the whole env file — the preflight caught a draft that did).
+**Container hardening (every service):** non-root user, read-only root filesystem, all capabilities dropped (Postgres included: since Task 15 it runs as `postgres`, uid 70, from the start, from `deploy/postgres/Dockerfile`, which also removes the `gosu` binary that carried a CRITICAL Go vulnerability), `no-new-privileges`, memory/CPU/process limits, init process, log rotation, healthchecks, images pinned by tag. The API never receives the database admin password (it gets an explicit list of variables, not the whole env file — the preflight caught a draft that did).
 
 ## 4. Security verification
 

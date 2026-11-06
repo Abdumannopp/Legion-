@@ -130,12 +130,12 @@ jobs:
         run: |
           set -euo pipefail
           dc() { docker compose --env-file .env.pilot -f docker-compose.pilot.yml "$@"; }
-          for svc in backend frontend redis; do
+          for svc in backend frontend redis postgres; do
             uid=$(dc exec -T $svc id -u); echo "$svc runs as uid $uid"; [ "$uid" != 0 ]
           done
           ! dc exec -T backend touch /usr/local/not-writable 2>/dev/null   # read-only root filesystem
           dc exec -T backend touch /tmp/writable                            # tmpfs is writable
-          for svc in backend frontend redis; do
+          for svc in backend frontend redis postgres; do
             caps=$(dc exec -T $svc sh -c 'grep CapEff /proc/self/status | cut -f2'); echo "$svc CapEff=$caps"; [ "$caps" = 0000000000000000 ]
             nnp=$(dc exec -T $svc sh -c 'grep NoNewPrivs /proc/self/status | cut -f2'); [ "$nnp" = 1 ]
           done
@@ -237,7 +237,7 @@ jobs:
           set -euo pipefail
           cp deploy/pilot.env.example .env.pilot
           docker compose --env-file .env.pilot -f docker-compose.pilot.yml build
-          docker compose --env-file .env.pilot -f docker-compose.pilot.yml pull postgres redis
+          docker compose --env-file .env.pilot -f docker-compose.pilot.yml pull --ignore-buildable
       - name: Scan (grype, pinned and checksum-verified)
         run: |
           set -euo pipefail

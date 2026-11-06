@@ -38,10 +38,11 @@ x-hardening: &hardening
 services:
   postgres:
     <<: *hardening
-    image: postgres:16.15-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
-    # The official entrypoint starts as root to fix volume ownership, then drops
-    # to the postgres user; it needs these and nothing else.
-    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    # The official image (pinned by digest) without gosu, run as `postgres` (uid 70) from the start:
+    # no root at any point and no capabilities (deploy/postgres/Dockerfile explains why).
+    build: { context: deploy/postgres }
+    image: legion-pilot-postgres:local
+    user: "70:70"
     environment:
       POSTGRES_USER: ${POSTGRES_ADMIN_USER:-legion_admin}
       POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in .env.pilot}
