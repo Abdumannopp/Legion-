@@ -15,7 +15,7 @@ import { aiCircuit } from "./ai.js";
 import { queueMetrics, workerStatus } from "./outbox.js";
 import { RUNNING_STALE_SECONDS } from "./actions/engine.js";
 import { runtimeHealth } from "./runtime/worker.js";
-import { currentAuditKeyId } from "./audit/events.js";
+import { auditKeyring, currentAuditKeyId } from "./audit/events.js";
 import { renderHttpStats } from "./http-stats.js";
 import { config } from "./config.js";
 
@@ -80,7 +80,9 @@ export async function collectMetrics(): Promise<string> {
   const audit = await many("SELECT tenant_id, count(*)::int AS n FROM soc_audit_events GROUP BY tenant_id");
   // Workspaces whose newest audit event was signed with a different key than this process holds.
   const heads = await many("SELECT DISTINCT ON (tenant_id) tenant_id, key_id FROM soc_audit_events ORDER BY tenant_id, seq DESC");
-  const keyMismatch = heads.filter((h) => h.key_id !== currentAuditKeyId()).length;
+  // A head signed with a key in SOC_AUDIT_PREVIOUS_KEYS is a rotation in progress, not a mismatch.
+  const ring = auditKeyring();
+  const keyMismatch = heads.filter((h) => h.key_id !== currentAuditKeyId() && !ring.has(String(h.key_id))).length;
   const wf = await many("SELECT tenant_id, count(*) FILTER (WHERE status = 'failed')::int AS failed, count(*)::int AS total FROM workflow_runs WHERE created_at > now() - interval '1 hour' GROUP BY tenant_id");
   const outbox = await queueMetrics();
   const rt = runtimeHealth();

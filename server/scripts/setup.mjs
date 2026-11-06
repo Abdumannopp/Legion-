@@ -303,6 +303,9 @@ async function main() {
   const encryptionKeys = existingEnvValue("LEGION_ENCRYPTION_KEYS") || `k1:${randomHex(32)}`;
   // Payment-check account hashes (HMAC key). Installs from before it existed hashed with the webhook
   // secret (or a built-in value); that becomes the previous key so confirmed accounts still match.
+  const socAuditKey = existingEnvValue("SOC_AUDIT_KEY") || randomHex(32);
+  // An install without it signed its audit chain with a key derived from JWT_SECRET: keep that verifiable.
+  const socAuditPrevious = existingEnvValue("SOC_AUDIT_PREVIOUS_KEYS") || (reusing && !existingEnvValue("SOC_AUDIT_KEY") ? "jwt" : "");
   const paymentHashKey = existingEnvValue("PAYMENT_HASH_KEY") || randomHex(32);
   const paymentHashPrevious = existingEnvValue("PAYMENT_HASH_PREVIOUS_KEYS") ||
     (reusing && !existingEnvValue("PAYMENT_HASH_KEY") ? (existingEnvValue("SECURITY_EVENT_WEBHOOK_SECRET") || "legion-payments") : "");
@@ -347,6 +350,9 @@ JWT_SECRET=${jwtSecret}
 # with two-factor sign-in. To rotate, put a new "id:key" FIRST and keep the old
 # one after it (see INSTALL.md, "Encryption keys").
 LEGION_ENCRYPTION_KEYS=${encryptionKeys}
+# Signs the SOC audit chain. Back it up with .env; rotate with SOC_AUDIT_PREVIOUS_KEYS (INSTALL.md).
+SOC_AUDIT_KEY=${socAuditKey}
+${socAuditPrevious ? `SOC_AUDIT_PREVIOUS_KEYS=${socAuditPrevious}` : ""}
 # Recognises bank accounts in the payment check without storing them. Back it up with .env.
 PAYMENT_HASH_KEY=${paymentHashKey}
 ${paymentHashPrevious ? `# Older payment hashes (kept matching; remove after 24 months).\nPAYMENT_HASH_PREVIOUS_KEYS=${paymentHashPrevious}` : ""}

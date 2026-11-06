@@ -129,7 +129,7 @@ Legend: ✅ verified by a command I ran this session · 🟡 verified statically
 | `HEALTH_METRICS_TOKEN` | same | `.env.pilot` + `monitoring/secrets/metrics-token` | monitoring blind; regenerate |
 | `age` private keys | `age-keygen` | **off the host**, two copies | backups unreadable |
 
-Rotation: `JWT_SECRET` (`JWT_PREVIOUS_SECRETS` keeps old sessions valid), encryption keys (add `k2:…` first in the list; old ones stay for decryption — `INSTALL.md`). **Do not rotate `SOC_AUDIT_KEY` during the pilot** — no rotation procedure exists yet (§13).
+Rotation: `JWT_SECRET` (`JWT_PREVIOUS_SECRETS` keeps old sessions valid), encryption keys (add `k2:…` first in the list; old ones stay for decryption — `INSTALL.md`). `SOC_AUDIT_KEY` (since 2026-11): put the new value in `SOC_AUDIT_KEY` and the old one in `SOC_AUDIT_PREVIOUS_KEYS`, restart; the next audited action records an `audit_key.rotated` event and the whole chain still verifies. Keep the old key listed for as long as the events it signed are kept (`SOC_RETENTION_DAYS`).
 
 ## 7. Backup and restore
 

@@ -37,11 +37,29 @@ export interface AuditEventInput {
  * key, so two different keys never share an id: appending with the wrong key
  * is detectable (and refused, below) instead of silently forking the chain.
  */
-function key(): { id: string; key: Buffer } {
-  const configured = Boolean(config.socAuditKey);
-  const k = Buffer.from(hkdfSync("sha256", configured ? config.socAuditKey : config.jwtSecret, "legion-soc-audit", "soc audit chain v1", 32));
+function derive(secret: string, kind: "cfg" | "jwt"): { id: string; key: Buffer } {
+  const k = Buffer.from(hkdfSync("sha256", secret, "legion-soc-audit", "soc audit chain v1", 32));
   const fingerprint = createHash("sha256").update("legion-soc-audit-key-id\0").update(k).digest("hex").slice(0, 10);
-  return { id: `${configured ? "cfg" : "jwt"}-${fingerprint}`, key: k };
+  return { id: `${kind}-${fingerprint}`, key: k };
+}
+
+function key(): { id: string; key: Buffer } {
+  return config.socAuditKey ? derive(config.socAuditKey, "cfg") : derive(config.jwtSecret, "jwt");
+}
+
+/**
+ * F-06: every key the chain may have been signed with, by id — the current one and each of
+ * SOC_AUDIT_PREVIOUS_KEYS ("jwt" = derived from the current JWT_SECRET). Verification accepts any of
+ * them; signing only ever uses the current key.
+ */
+export function auditKeyring(): Map<string, Buffer> {
+  const ring = new Map<string, Buffer>();
+  const cur = key(); ring.set(cur.id, cur.key);
+  for (const prev of config.socAuditPreviousKeys) {
+    const k = prev === "jwt" ? derive(config.jwtSecret, "jwt") : derive(prev, "cfg");
+    if (!ring.has(k.id)) ring.set(k.id, k.key);
+  }
+  return ring;
 }
 
 /** The id of the key this process signs with (for monitoring: never the key itself). */
@@ -67,8 +85,15 @@ export async function appendAuditEvent(client: pg.PoolClient, tenantId: string, 
     "SELECT seq, hash, key_id FROM soc_audit_events WHERE tenant_id = $1 ORDER BY seq DESC LIMIT 1", [tenantId],
   )).rows[0];
   const { id: keyId, key: k } = key();
-  // Fail closed: a wrong or rotated-by-mistake key must not quietly corrupt the chain.
-  if (last && last.key_id !== keyId) throw new AuditKeyMismatch(last.key_id, keyId);
+  // Fail closed: a wrong or rotated-by-mistake key must not quietly corrupt the chain. A key listed in
+  // SOC_AUDIT_PREVIOUS_KEYS is a deliberate rotation: it is recorded as its own chained event first.
+  if (last && last.key_id !== keyId) {
+    if (!auditKeyring().has(last.key_id)) throw new AuditKeyMismatch(last.key_id, keyId);
+    if (e.event !== "audit_key.rotated") {
+      await appendAuditEvent(client, tenantId, { category: "controls", event: "audit_key.rotated", actor: { kind: "system", component: "soc_audit" }, detail: { from_key_id: last.key_id, to_key_id: keyId } });
+      return appendAuditEvent(client, tenantId, e);
+    }
+  }
   const body: Body = {
     tenant_id: tenantId, seq: last ? Number(last.seq) + 1 : 1, id: randomUUID(),
     // Millisecond precision, fixed here: what is hashed is exactly what is stored.
@@ -99,7 +124,7 @@ export async function verifyAuditChain(tenantId: string): Promise<VerifyResult> 
     `SELECT tenant_id, seq, id, at, category, event, actor, subject_type, subject_id, detail, key_id, prev_hash, hash
        FROM soc_audit_events WHERE tenant_id = $1 ORDER BY seq`, [tenantId],
   );
-  const { id: keyId, key: k } = key();
+  const ring = auditKeyring();
   // Retention may have removed the oldest events (pruneSocHistory); the chain then starts at the anchor.
   const anchor = (await queryAll<{ anchor_hash: string; pruned_through_seq: string }>(
     "SELECT anchor_hash, pruned_through_seq FROM chain_prune_anchors WHERE table_name = 'soc_audit_events' AND tenant_id = $1", [tenantId],
@@ -111,7 +136,8 @@ export async function verifyAuditChain(tenantId: string): Promise<VerifyResult> 
     const fail = (reason: string): VerifyResult => ({ ok: false, events: rows.length, head: prev, broken_at: seq, reason });
     if (seq !== expectedSeq) return fail(`sequence gap: expected ${expectedSeq}`);
     if (r.prev_hash !== prev) return fail("previous-hash mismatch");
-    if (r.key_id !== keyId) return fail(`signed with key "${r.key_id}", verifying with "${keyId}"`);
+    const k = ring.get(r.key_id);
+    if (!k) return fail(`signed with key "${r.key_id}", which is neither SOC_AUDIT_KEY nor in SOC_AUDIT_PREVIOUS_KEYS`);
     const body: Body = { tenant_id: r.tenant_id, seq, id: r.id, at: r.at.toISOString(), category: r.category, event: r.event, actor: r.actor,
       subject_type: r.subject_type, subject_id: r.subject_id, detail: r.detail, key_id: r.key_id };
     if (chainHash(k, prev, body) !== r.hash) return fail("content does not match its hash");

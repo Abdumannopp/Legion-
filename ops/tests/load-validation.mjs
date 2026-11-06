@@ -75,7 +75,7 @@ async function main() {
   await sleep(500);
   Object.assign(env, {
     NODE_ENV: "production", DEPLOYMENT_MODE: "saas", DATABASE_URL: db.url, REDIS_URL: `redis://127.0.0.1:${redisPort}`,
-    JWT_SECRET: randomBytes(48).toString("hex"), PAYMENT_HASH_KEY: randomBytes(32).toString("hex"), LEGION_ENCRYPTION_KEYS: `load:${randomBytes(32).toString("hex")}`,
+    JWT_SECRET: randomBytes(48).toString("hex"), PAYMENT_HASH_KEY: randomBytes(32).toString("hex"), SOC_AUDIT_KEY: randomBytes(32).toString("hex"), LEGION_ENCRYPTION_KEYS: `load:${randomBytes(32).toString("hex")}`,
     FRONTEND_URL: FRONTEND, COOKIE_SECURE: "true", SMTP_HOST: "127.0.0.1", SMTP_PORT: String(smtp.port),
     HEALTH_METRICS_TOKEN: "load-metrics-token-0123456789abcdef",
     // Test-time cadence only: the worker polls every second and retries after

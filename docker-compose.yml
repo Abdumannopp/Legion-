@@ -81,6 +81,9 @@ services:
       # Payment-check account hashes (install.sh generates it). Production refuses to start without it.
       PAYMENT_HASH_KEY: ${PAYMENT_HASH_KEY:-}
       PAYMENT_HASH_PREVIOUS_KEYS: ${PAYMENT_HASH_PREVIOUS_KEYS:-}
+      # Signs the SOC audit chain (install.sh generates it). Production refuses to start without it.
+      SOC_AUDIT_KEY: ${SOC_AUDIT_KEY:-}
+      SOC_AUDIT_PREVIOUS_KEYS: ${SOC_AUDIT_PREVIOUS_KEYS:-}
       AI_PROVIDER: ${AI_PROVIDER:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-}

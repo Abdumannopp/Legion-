@@ -55,6 +55,7 @@ ENCRYPTION_KEYS="$(existing LEGION_ENCRYPTION_KEYS)"
 PAYMENT_HASH_KEY="$(existing PAYMENT_HASH_KEY)"
 # The API's own database role (legion_app). The Postgres admin password stays with the database.
 APP_DB_PASSWORD="$(existing APP_DB_PASSWORD)"
+SOC_AUDIT_KEY="$(existing SOC_AUDIT_KEY)"
 
 NEW_INSTALL=false
 if [[ -z "$JWT_SECRET" ]]; then
@@ -83,6 +84,15 @@ if [[ -z "$APP_DB_PASSWORD" ]]; then
     # tables to it on the next start; the API stops using the database superuser.
     printf 'APP_DB_PASSWORD=%s\n' "$APP_DB_PASSWORD" >> "$ENV_FILE"
     ok "Added APP_DB_PASSWORD to $ENV_FILE (the API now uses its own least-privilege database role)"
+  fi
+fi
+
+if [[ -z "$SOC_AUDIT_KEY" ]]; then
+  SOC_AUDIT_KEY="$(random_hex 32)"
+  if [[ "$NEW_INSTALL" != true ]]; then
+    # The audit chain so far was signed with a key derived from JWT_SECRET: keep it verifiable.
+    printf 'SOC_AUDIT_KEY=%s\nSOC_AUDIT_PREVIOUS_KEYS=jwt\n' "$SOC_AUDIT_KEY" >> "$ENV_FILE"
+    ok "Added SOC_AUDIT_KEY to $ENV_FILE (the existing audit chain stays verifiable)"
   fi
 fi
 
@@ -159,6 +169,7 @@ SECURITY_EVENT_WEBHOOK_SECRET=$WEBHOOK_SECRET
 LEGION_ENCRYPTION_KEYS=$ENCRYPTION_KEYS
 PAYMENT_HASH_KEY=$PAYMENT_HASH_KEY
 APP_DB_PASSWORD=$APP_DB_PASSWORD
+SOC_AUDIT_KEY=$SOC_AUDIT_KEY
 EOF
   chmod 600 "$ENV_FILE"
   ok "Wrote $ENV_FILE (permissions 600)"

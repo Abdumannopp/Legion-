@@ -333,6 +333,12 @@ export const config = {
    */
   /** Key for the SOC audit chain (HMAC). Unset: derived from JWT_SECRET (changing that secret then breaks verification of older events). */
   socAuditKey: process.env.SOC_AUDIT_KEY || "",
+  /**
+   * Keys the SOC audit chain was signed with before (verify only; new events always use
+   * SOC_AUDIT_KEY). Comma-separated raw keys; the entry "jwt" means "the key derived from the current
+   * JWT_SECRET", which is what installs without SOC_AUDIT_KEY used.
+   */
+  socAuditPreviousKeys: (process.env.SOC_AUDIT_PREVIOUS_KEYS || "").split(",").map((s) => s.trim()).filter(Boolean),
   orchestratorAutoMode: (process.env.ORCHESTRATOR_AUTO_MODE || "off") as "off" | "shadow",
   retentionAuditMonths: Math.max(0, Math.floor(Number(process.env.RETENTION_AUDIT_MONTHS ?? 24)) || 0),
   /** Audit P2-16: delivered alert emails (recipient + alert text) are kept this many days, then deleted. 0 = keep. */
@@ -590,6 +596,17 @@ export interface SafetyInputs {
   databaseUrl: string;
 }
 
+/** F-06: the SOC audit chain key must be its own secret in production (deriving it from JWT_SECRET ties audit integrity to session rotation). */
+export function socAuditKeyProblems(c: { socAuditKey: string; socAuditPreviousKeys: string[]; jwtSecret: string }): string[] {
+  const p: string[] = [];
+  if (!c.socAuditKey) {
+    p.push("SOC_AUDIT_KEY is required in production (openssl rand -hex 32). Upgrading an install that never set it: set SOC_AUDIT_KEY and SOC_AUDIT_PREVIOUS_KEYS=jwt so the existing chain still verifies");
+  } else if (isWeakJwtSecret(c.socAuditKey)) p.push("SOC_AUDIT_KEY must be a long random value (32+ chars), not a placeholder");
+  else if (c.socAuditKey === c.jwtSecret) p.push("SOC_AUDIT_KEY must be its own value, not JWT_SECRET");
+  if (c.socAuditKey && c.socAuditPreviousKeys.includes(c.socAuditKey)) p.push("SOC_AUDIT_PREVIOUS_KEYS must not contain the current SOC_AUDIT_KEY");
+  return p;
+}
+
 /** F-03: what is wrong with the payment hash keys for production. Pure, for the boot check and its tests. */
 export function paymentHashKeyProblems(c: { paymentHashKey: string; paymentHashPreviousKeys: string[]; jwtSecret: string; webhookSecret: string }): string[] {
   const p: string[] = [];
@@ -716,6 +733,7 @@ if (isProduction) {
     problems.push("JWT_SECRET must be a long random value (32+ chars), not a placeholder");
   }
   problems.push(...paymentHashKeyProblems(config));
+  problems.push(...socAuditKeyProblems(config));
   if (config.webhookEncryptionKey && config.webhookEncryptionKey.length < 32) {
     problems.push("WEBHOOK_ENCRYPTION_KEY must be 32+ random characters (openssl rand -hex 32)");
   }
