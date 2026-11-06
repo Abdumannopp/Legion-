@@ -115,14 +115,14 @@ Tick each box only with evidence attached (command output or a link). *Before pi
 
 | ID | Limitation | Severity for production | Status |
 |---|---|---|---|
-| K-1 | Audit-trail tamper resistance depends on the table owner not turning triggers off (R-3) | **High** for multi-tenant | Open. Split migrator/runtime roles; keyed chain mitigates |
-| K-2 | No retention/archival for SOC history (≈6.5 KB per action, unbounded) | **High** at scale | Open. Rate-capped only |
-| K-3 | No container image vulnerability scan in CI; base images by tag | Medium | Open |
+| K-1 | Audit-trail tamper resistance depends on the table owner not turning triggers off (R-3) | **High** for multi-tenant | **Partly mitigated (Task 15, 5f967c3):** off-host checkpoints now detect a cut or rewritten SOC chain (`audit-checkpoint.test.ts`). Prevention still open: the app role can use the documented erasure switch, so the real fix is moving erasure and migrations to a separate role. The plain `audit_log` is not keyed |
+| K-2 | No retention/archival for SOC history (≈6.5 KB per action, unbounded) | **High** at scale | **Fixed (Task 15, 7daa9a7):** `SOC_RETENTION_DAYS` deletes finished history only; chain verifies from an anchor (`soc-retention.test.ts`) |
+| K-3 | No container image vulnerability scan in CI; base images by tag | Medium | **Fixed in code (Task 15, 63742bf, 4b1a634):** grype (pinned, checksum-verified) gates on fixable CRITICAL; all images pinned by digest; Postgres 16.6 → 16.15; Dependabot keeps pins current |
 | K-4 | Tenant isolation relies on application code, not Postgres RLS (R-4) | Medium | Open. Heavily tested; one defect = cross-tenant exposure |
 | K-5 | Single instance: no HA for API, Postgres, Redis. RPO ≤ 24 h with nightly backups | **High** for a 24×7 promise | Open. WAL archiving / managed Postgres needed for stage 4 |
-| K-6 | `SOC_AUDIT_KEY` has no rotation procedure; no automated off-host chain checkpoint (R-10) | Medium | Open |
+| K-6 | `SOC_AUDIT_KEY` has no rotation procedure; no automated off-host chain checkpoint (R-10) | Medium | **Partly fixed (Task 15, 5f967c3):** checkpoint logged every 6 h, verify compares it. Key rotation still open |
 | K-7 | No dashboard screens for approvals, actions, policy (R-5) | Medium (usability, operator error) | Open |
-| K-8 | Approval expiry / "approved while paused" are lazily applied (R-6) | Low | Open |
+| K-8 | Approval expiry / "approved while paused" are lazily applied (R-6) | Low | **Fixed (Task 15, 1ae9b7b):** worker reconciles once a minute per workspace (`approval-reconciler.test.ts`) |
 | K-9 | Only the 3-step alert workflow is wired; Hunter/Guardian workflows are not (R-7) | Low | Open |
 | K-10 | No live executor exists. Autonomous actions cannot be enabled, by design | n/a | Blocks stage 5 until designed and reviewed |
 | K-11 | Real AI provider and real connector behaviour never tested (none configured) (R-13) | Medium if AI is enabled | Open |
