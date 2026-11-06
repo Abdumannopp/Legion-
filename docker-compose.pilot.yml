@@ -38,7 +38,7 @@ x-hardening: &hardening
 services:
   postgres:
     <<: *hardening
-    image: postgres:16.6-alpine
+    image: postgres:16.15-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
     # The official entrypoint starts as root to fix volume ownership, then drops
     # to the postgres user; it needs these and nothing else.
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
@@ -80,7 +80,7 @@ services:
 
   redis:
     <<: *hardening
-    image: redis:7.4-alpine
+    image: redis:7.4-alpine@sha256:c5d34a98396a4775e223c74e929162c35c5a2182901ba26b50ade939941ce14b
     # Rate-limit counters and realtime fan-out only; nothing here must survive a restart.
     # protected-mode is OFF on purpose: with no password, protected mode refuses every client that is not
     # on loopback, i.e. the API (found by the CI pilot job: the API logged "Redis not reachable" and fell

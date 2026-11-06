@@ -138,14 +138,16 @@ jobs:
           echo "${GRYPE_SHA256}  /tmp/grype.tgz" | sha256sum -c -
           tar -xzf /tmp/grype.tgz -C /tmp grype
           mkdir -p image-scan
-          for img in legion-pilot-backend:local legion-pilot-frontend:local postgres:16.6-alpine redis:7.4-alpine; do
-            name=$(echo "$img" | tr ':/' '__')
+          IMAGES=$(docker compose --env-file .env.pilot -f docker-compose.pilot.yml config --images | sort -u)
+          echo "$IMAGES"
+          for img in $IMAGES; do
+            name=$(echo "$img" | tr ':/@' '___')
             /tmp/grype "docker:$img" -o json --file "image-scan/$name.json" >/dev/null
             echo "== $img (fixable HIGH/CRITICAL) =="
             /tmp/grype "docker:$img" --only-fixed -o table | awk 'NR==1 || /High|Critical/' | head -40
           done
           fail=0
-          for img in legion-pilot-backend:local legion-pilot-frontend:local postgres:16.6-alpine redis:7.4-alpine; do
+          for img in $IMAGES; do
             /tmp/grype "docker:$img" --only-fixed --fail-on critical -q -o table >/dev/null || { echo "::error::$img has a CRITICAL vulnerability with a fix available"; fail=1; }
           done
           exit $fail
