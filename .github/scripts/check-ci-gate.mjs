@@ -39,7 +39,7 @@ for (const line of text.split("\n")) {
   if (cond) jobs[current].ifs.push(cond[1]);
 }
 
-const REQUIRED_FOR_RELEASE = ["deploy-scripts", "dependencies", "agent-identity", "app", "security-assessment", "pilot-stack", "image-scan", "docker"];
+const REQUIRED_FOR_RELEASE = ["deploy-scripts", "dependencies", "agent-identity", "app", "security-assessment", "pilot-stack", "image-scan", "docker", "secrets", "sast"];
 for (const j of [...REQUIRED_FOR_RELEASE, "release-gate", "release"]) {
   if (!jobs[j]) problems.push(`job "${j}" is missing`);
 }
@@ -59,6 +59,11 @@ if (!/provenance\.mjs validate[^\n]*--require-clean[^\n]*--expect-commit/.test(t
 if (!/grype[^\n]*--only-fixed --fail-on critical/.test(text) || !/sha256sum -c/.test(text)) {
   problems.push("the image vulnerability scan (grype --only-fixed --fail-on critical, checksum-verified) is missing");
 }
+
+// PR-10: SBOM, secret scanning and SAST stay in place, pinned and gating.
+if (!/syft[^\n]*cyclonedx-json/.test(text)) problems.push("the SBOM step (syft, CycloneDX) is missing");
+if (!/gitleaks git \. [^\n]*--exit-code 1/.test(text)) problems.push("the secret scan (gitleaks over the git history, failing on a finding) is missing");
+if (!/semgrep scan [^\n]*--severity ERROR --error/.test(text.replace(/\\\n\s*/g, " "))) problems.push("the static analysis (semgrep, failing on ERROR) is missing");
 
 // 3. The security suites keep every regression test for a fixed finding.
 //    Dropping one from `test:security` (or deleting its file) quietly removes

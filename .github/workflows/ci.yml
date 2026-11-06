@@ -282,12 +282,68 @@ jobs:
           # Same gate, by the scanner itself (the check-ci-gate script requires this exact form).
           [ "$fail" = 0 ] && for img in $IMAGES; do /tmp/grype "docker:$img" --only-fixed --fail-on critical -q -o table >/dev/null; done
           exit $fail
+      - name: SBOM for every image and for the source tree (syft, pinned and checksum-verified)
+        if: always()
+        run: |
+          set -euo pipefail
+          SYFT_VERSION=1.18.1
+          SYFT_SHA256=066c251652221e4d44fcc4d115ce3df33a91769da38c830a8533199db2f65aab
+          curl -fsSL -o /tmp/syft.tgz "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          echo "${SYFT_SHA256}  /tmp/syft.tgz" | sha256sum -c -
+          tar -xzf /tmp/syft.tgz -C /tmp syft
+          mkdir -p sbom
+          for img in $(docker compose --env-file .env.pilot -f docker-compose.pilot.yml config --images | sort -u); do
+            /tmp/syft "docker:$img" -q -o cyclonedx-json="sbom/$(echo "$img" | tr ':/@' '___').cdx.json"
+          done
+          /tmp/syft dir:. -q --exclude './node_modules' --exclude './**/node_modules' -o cyclonedx-json=sbom/source.cdx.json
+          for f in sbom/*.json; do node -e 'const b=require(process.argv[1]); if (!Array.isArray(b.components) || !b.components.length) { console.error("empty SBOM: " + process.argv[1]); process.exit(1); } console.log(process.argv[1] + ": " + b.components.length + " components")' "$PWD/$f"; done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: image-scan-${{ github.sha }}
-          path: image-scan/
+          path: |
+            image-scan/
+            sbom/
           if-no-files-found: ignore
+
+  # Secret scanning over the whole history (a secret removed in a later commit is still leaked).
+  # gitleaks pinned and checksum-verified; .gitleaks.toml allow-lists test fixtures only.
+  secrets:
+    name: Secret scanning (gitleaks, full history)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan
+        run: |
+          set -euo pipefail
+          GITLEAKS_VERSION=8.21.2
+          GITLEAKS_SHA256=5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba
+          curl -fsSL -o /tmp/gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tgz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          /tmp/gitleaks git . --config .gitleaks.toml --redact --no-banner --exit-code 1 --report-format json --report-path gitleaks.json || { node -e 'for (const f of require("./gitleaks.json")) console.log(`${f.RuleID}  ${f.File}:${f.StartLine}  commit ${f.Commit.slice(0,8)}`)'; exit 1; }
+          echo "no secrets found"
+
+  # Static analysis of the application code. Gate: findings of severity ERROR. Semgrep is pinned.
+  sast:
+    name: Static analysis (Semgrep)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Scan
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet "semgrep==1.100.0"
+          semgrep scan --metrics=off --config p/typescript --config p/nodejs --config p/expressjs --config p/jwt \
+            --exclude node_modules --exclude dist --exclude .next --exclude 'server/tests' --exclude 'packages/agent-identity/test' --exclude 'ops/tests' \
+            --severity ERROR --error --json --output semgrep.json server/src packages/agent-identity/src frontend/app frontend/components frontend/lib ops/*.mjs \
+            || { node -e 'for (const r of require("./semgrep.json").results) console.log(`${r.check_id}  ${r.path}:${r.start.line}  ${r.extra.message.split("\n")[0].slice(0,160)}`)'; exit 1; }
+          node -e 'const r=require("./semgrep.json"); console.log("semgrep: " + r.results.length + " ERROR findings")'
 
   dependencies:
     name: Known vulnerabilities in the lockfile
@@ -517,7 +573,7 @@ jobs:
   release-gate:
     name: Release gate
     runs-on: ubuntu-latest
-    needs: [deploy-scripts, dependencies, agent-identity, app, security-assessment, pilot-stack, image-scan, docker]
+    needs: [deploy-scripts, dependencies, agent-identity, app, security-assessment, pilot-stack, image-scan, docker, secrets, sast]
     if: always()
     steps:
       - uses: actions/checkout@v4
