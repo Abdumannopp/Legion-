@@ -237,7 +237,7 @@ jobs:
           set -euo pipefail
           cp deploy/pilot.env.example .env.pilot
           docker compose --env-file .env.pilot -f docker-compose.pilot.yml build
-          docker compose --env-file .env.pilot -f docker-compose.pilot.yml pull --ignore-buildable
+          docker compose --env-file .env.pilot -f docker-compose.pilot.yml pull redis   # every other image is built here
       - name: Scan (grype, pinned and checksum-verified)
         run: |
           set -euo pipefail
