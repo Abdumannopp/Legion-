@@ -22,7 +22,7 @@ expect 0 "the committed workflow passes" node .github/scripts/check-ci-gate.mjs 
 sed 's/^\(      - name: Attack assessment\)$/\1\n        continue-on-error: true/' "$wf" > "$tmp/coe.yml"
 expect 1 "continue-on-error on a step is refused" node .github/scripts/check-ci-gate.mjs "$tmp/coe.yml"
 
-sed 's/needs: \[deploy-scripts, dependencies, agent-identity, app, security-assessment, pilot-stack\]/needs: [deploy-scripts, dependencies, agent-identity, app, security-assessment]/' "$wf" > "$tmp/unhooked.yml"
+sed 's/needs: \[deploy-scripts, dependencies, agent-identity, app, security-assessment, pilot-stack, image-scan\]/needs: [deploy-scripts, dependencies, agent-identity, app, security-assessment, pilot-stack]/' "$wf" > "$tmp/unhooked.yml"
 expect 1 "release gate not waiting for the security job is refused" node .github/scripts/check-ci-gate.mjs "$tmp/unhooked.yml"
 
 sed 's/^    needs: \[release-gate\]$/    needs: [app]/' "$wf" > "$tmp/release.yml"
@@ -48,7 +48,7 @@ sed 's/npm run test:security -w server/npm test -w server -- tests\/mfa.test.ts/
 expect 1 "the security job not running the security suite is refused" node .github/scripts/check-ci-gate.mjs "$tmp/nosec.yml"
 
 echo "release-gate.mjs"
-all='{"deploy-scripts":{"result":"success"},"dependencies":{"result":"success"},"agent-identity":{"result":"success"},"app":{"result":"success"},"security-assessment":{"result":"success"},"pilot-stack":{"result":"success"}}'
+all='{"deploy-scripts":{"result":"success"},"dependencies":{"result":"success"},"agent-identity":{"result":"success"},"app":{"result":"success"},"security-assessment":{"result":"success"},"pilot-stack":{"result":"success"},"image-scan":{"result":"success"}}'
 expect 0 "all jobs succeeded → release allowed" env NEEDS="$all" node .github/scripts/release-gate.mjs
 expect 1 "security job failed → release blocked" env NEEDS="${all/\"security-assessment\":{\"result\":\"success\"}/\"security-assessment\":{\"result\":\"failure\"}}" node .github/scripts/release-gate.mjs
 expect 1 "security job skipped → release blocked" env NEEDS="${all/\"security-assessment\":{\"result\":\"success\"}/\"security-assessment\":{\"result\":\"skipped\"}}" node .github/scripts/release-gate.mjs

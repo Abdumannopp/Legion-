@@ -126,37 +126,6 @@ jobs:
             sleep 3
           done
           echo "backend health: $s"; [ "$s" = healthy ]
-      # K-3: known vulnerabilities in the images we ship and the base images we run. Gate: no CRITICAL
-      # vulnerability that has a fix (an unfixed one cannot be removed by us; it is listed, not hidden).
-      # The scanner is a pinned release verified against a checksum committed here, not a moving tag.
-      - name: Image vulnerability scan (grype, pinned)
-        run: |
-          set -euo pipefail
-          GRYPE_VERSION=0.86.1
-          GRYPE_SHA256=2d1533dae213a27b741e0cb31b2cd354159a283325475512ae90c1c2412f4098
-          curl -fsSL -o /tmp/grype.tgz "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
-          echo "${GRYPE_SHA256}  /tmp/grype.tgz" | sha256sum -c -
-          tar -xzf /tmp/grype.tgz -C /tmp grype
-          mkdir -p image-scan
-          IMAGES=$(docker compose --env-file .env.pilot -f docker-compose.pilot.yml config --images | sort -u)
-          echo "$IMAGES"
-          for img in $IMAGES; do
-            name=$(echo "$img" | tr ':/@' '___')
-            /tmp/grype "docker:$img" -o json --file "image-scan/$name.json" >/dev/null
-            echo "== $img (fixable HIGH/CRITICAL) =="
-            /tmp/grype "docker:$img" --only-fixed -o table | awk 'NR==1 || /High|Critical/' | head -40
-          done
-          fail=0
-          for img in $IMAGES; do
-            /tmp/grype "docker:$img" --only-fixed --fail-on critical -q -o table >/dev/null || { echo "::error::$img has a CRITICAL vulnerability with a fix available"; fail=1; }
-          done
-          exit $fail
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: image-scan-${{ github.sha }}
-          path: image-scan/
-          if-no-files-found: ignore
       - name: Container hardening, checked from outside
         run: |
           set -euo pipefail
@@ -254,6 +223,50 @@ jobs:
       - name: Stop and remove the stack
         if: always()
         run: docker compose --env-file .env.pilot -f docker-compose.pilot.yml down -v
+
+  # K-3: known vulnerabilities in the images we ship and the base images we run. Gate: no CRITICAL
+  # vulnerability that has a fix (an unfixed one cannot be removed by us; it is listed, not hidden).
+  # The scanner is a pinned release verified against a checksum committed here, not a moving tag.
+  image-scan:
+    name: Image vulnerability scan (shipped and base images)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the images the pilot ships, pull the ones it runs
+        run: |
+          set -euo pipefail
+          cp deploy/pilot.env.example .env.pilot
+          docker compose --env-file .env.pilot -f docker-compose.pilot.yml build
+          docker compose --env-file .env.pilot -f docker-compose.pilot.yml pull postgres redis
+      - name: Scan (grype, pinned and checksum-verified)
+        run: |
+          set -euo pipefail
+          GRYPE_VERSION=0.86.1
+          GRYPE_SHA256=2d1533dae213a27b741e0cb31b2cd354159a283325475512ae90c1c2412f4098
+          curl -fsSL -o /tmp/grype.tgz "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
+          echo "${GRYPE_SHA256}  /tmp/grype.tgz" | sha256sum -c -
+          tar -xzf /tmp/grype.tgz -C /tmp grype
+          mkdir -p image-scan
+          IMAGES=$(docker compose --env-file .env.pilot -f docker-compose.pilot.yml config --images | sort -u)
+          fail=0; summary=""
+          for img in $IMAGES; do
+            name=$(echo "$img" | tr ':/@' '___')
+            /tmp/grype "docker:$img" -q -o json --file "image-scan/$name.json" >/dev/null || true
+            crit=$(node -e 'const r=require(process.argv[1]);const m=r.matches.filter(x=>x.vulnerability.severity==="Critical"&&x.vulnerability.fix&&x.vulnerability.fix.state==="fixed");console.log(m.map(x=>x.artifact.name+"@"+x.artifact.version+" "+x.vulnerability.id+" fix:"+x.vulnerability.fix.versions.join("/")).join("; "))' "$PWD/image-scan/$name.json")
+            high=$(node -e 'const r=require(process.argv[1]);console.log(r.matches.filter(x=>x.vulnerability.severity==="High"&&x.vulnerability.fix&&x.vulnerability.fix.state==="fixed").length)' "$PWD/image-scan/$name.json")
+            summary="$summary\n$img: fixable critical=[${crit:-none}] fixable high=$high"
+            [ -n "$crit" ] && { echo "::error::$img has a CRITICAL vulnerability with a fix available: $crit"; fail=1; }
+          done
+          echo -e "$summary"
+          # Same gate, by the scanner itself (the check-ci-gate script requires this exact form).
+          [ "$fail" = 0 ] && for img in $IMAGES; do /tmp/grype "docker:$img" --only-fixed --fail-on critical -q -o table >/dev/null; done
+          exit $fail
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: image-scan-${{ github.sha }}
+          path: image-scan/
+          if-no-files-found: ignore
 
   dependencies:
     name: Known vulnerabilities in the lockfile
@@ -483,7 +496,7 @@ jobs:
   release-gate:
     name: Release gate
     runs-on: ubuntu-latest
-    needs: [deploy-scripts, dependencies, agent-identity, app, security-assessment, pilot-stack]
+    needs: [deploy-scripts, dependencies, agent-identity, app, security-assessment, pilot-stack, image-scan]
     if: always()
     steps:
       - uses: actions/checkout@v4
