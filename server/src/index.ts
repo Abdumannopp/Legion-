@@ -22,7 +22,7 @@ import * as integrations from "./integrations/registry.js";
 import * as connections from "./integrations/connections.js";
 import { ingestFindings } from "./integrations/ingest.js";
 import { wazuhAdapter } from "./integrations/wazuh.js";
-import { closePool, currentRoleAttributes, migrate, query, transaction } from "./db/pool.js";
+import { closePool, currentRoleAttributes, inTenant, migrate, query, transaction, withTenant } from "./db/pool.js";
 import { databaseRoleDecision, refusePrivilegedRole } from "./db/provision.js";
 import { SETUP_LOCK_KEY, consumeSetupToken, ensureSetupToken, removeSetupTokenFile, setupBanner } from "./setup-token.js";
 import { WEBHOOK_REJECTION_DETAIL, isKeyId } from "./webhook-auth.js";
@@ -339,7 +339,7 @@ async function authenticate(req: AuthedRequest, res: Response): Promise<boolean>
 }
 
 async function auth(req: AuthedRequest, res: Response, next: NextFunction): Promise<void> {
-  if (await authenticate(req, res)) next();
+  if (await authenticate(req, res)) withTenant(req.user!.tenant_id, next);
 }
 
 const rank: Record<Role, number> = { viewer: 0, analyst: 1, admin: 2 };
@@ -350,7 +350,8 @@ function requireRole(minimum: Role) {
       res.status(403).json({ detail: "Insufficient permissions" });
       return;
     }
-    next();
+    // F-04: everything this request does runs in its own workspace (db/rls.ts).
+    withTenant(req.user!.tenant_id, next);
   };
 }
 
@@ -362,7 +363,7 @@ function requirePermission(permission: Permission) {
       res.status(403).json({ detail: "Insufficient permissions" });
       return;
     }
-    next();
+    withTenant(req.user!.tenant_id, next);
   };
 }
 
@@ -754,6 +755,11 @@ app.post("/auth/login", authLimiter, requireHuman, loginAccountLimiter, async (r
  * the second factor is the control, this is the alarm.
  */
 async function completeSignIn(req: Request, user: User): Promise<void> {
+  // F-04: signing in has no request workspace yet; this check reads the account's own workspace.
+  return inTenant(user.tenant_id, () => completeSignInChecks(req, user));
+}
+
+async function completeSignInChecks(req: Request, user: User): Promise<void> {
   try {
     const newDevice = await rememberLoginDevice(user.id, req);
     const failures = await recentLoginFailures(user);
@@ -1173,7 +1179,8 @@ app.post("/workspaces", auth, async (req: AuthedRequest, res) => {
     return res.status(429).json({ detail: `You can belong to at most ${config.maxWorkspacesPerUser} workspaces` });
   }
   const created = await workspaces.create(req.user!, body.name, { currency: body.currency, timezone: body.timezone, locale: body.locale });
-  await store.audit({ tenant_id: created.id, user_id: req.user!.id, user_email: req.user!.email, action: "workspace.created", resource_type: "workspace", resource_id: created.id, detail: body.name, ip_address: req.ip || null });
+  // F-04: recorded in the NEW workspace, deliberately (this request runs in the current one).
+  await withTenant(created.id, () => store.audit({ tenant_id: created.id, user_id: req.user!.id, user_email: req.user!.email, action: "workspace.created", resource_type: "workspace", resource_id: created.id, detail: body.name, ip_address: req.ip || null }));
   return res.status(201).json({ id: created.id, name: created.name, role: "admin", region: config.region });
 });
 
@@ -1183,7 +1190,8 @@ app.post("/workspaces/switch", auth, async (req: AuthedRequest, res) => {
   // Not a member and not active are answered the same: no probing for workspace ids.
   if (!member || member.status !== "active") return res.status(404).json({ detail: "Workspace not found" });
   const accessToken = await startSession(req, res, member, member);
-  await store.audit({ tenant_id: member.tenant_id, user_id: member.id, user_email: member.email, action: "workspace.switched", resource_type: "workspace", resource_id: member.tenant_id, detail: null, ip_address: req.ip || null });
+  // F-04: recorded in the workspace switched TO (an active membership, checked above).
+  await withTenant(member.tenant_id, () => store.audit({ tenant_id: member.tenant_id, user_id: member.id, user_email: member.email, action: "workspace.switched", resource_type: "workspace", resource_id: member.tenant_id, detail: null, ip_address: req.ip || null }));
   const tenant = await store.getTenant(member.tenant_id);
   return res.json({ access_token: accessToken, token_type: "bearer", workspace: { id: member.tenant_id, name: tenant?.name ?? null, role: member.role } });
 });
@@ -1193,7 +1201,8 @@ app.post("/workspaces/invitations/accept", authLimiter, auth, async (req: Authed
   const accepted = await workspaces.acceptInvite(hashOneTimeToken(body.token), req.user!.id);
   // Someone else's invitation, a used one and an expired one look alike.
   if (!accepted) return res.status(400).json({ detail: "This invitation is invalid, has expired, or was sent to another account" });
-  await store.audit({ tenant_id: accepted.tenantId, user_id: req.user!.id, user_email: req.user!.email, action: "user.invite_accepted", resource_type: "user", resource_id: req.user!.id, detail: `${accepted.role} (existing account)`, ip_address: req.ip || null });
+  // F-04: recorded in the workspace that was joined (the invitation, verified above, is for it).
+  await withTenant(accepted.tenantId, () => store.audit({ tenant_id: accepted.tenantId, user_id: req.user!.id, user_email: req.user!.email, action: "user.invite_accepted", resource_type: "user", resource_id: req.user!.id, detail: `${accepted.role} (existing account)`, ip_address: req.ip || null }));
   return res.json({ workspace_id: accepted.tenantId, role: accepted.role });
 });
 
@@ -1204,7 +1213,8 @@ app.post("/workspaces/leave", auth, async (req: AuthedRequest, res) => {
   if (outcome === "home") return res.status(400).json({ detail: "This is the workspace your account belongs to; it cannot be left" });
   if (outcome === "last_admin") return res.status(400).json({ detail: "A workspace must keep at least one admin" });
   await revokeMemberSessions(req.user!.id, body.workspace_id, false);
-  await store.audit({ tenant_id: body.workspace_id, user_id: req.user!.id, user_email: req.user!.email, action: "workspace.left", resource_type: "user", resource_id: req.user!.id, detail: null, ip_address: req.ip || null });
+  // F-04: recorded in the workspace that was left (only after leave() succeeded above).
+  await withTenant(body.workspace_id, () => store.audit({ tenant_id: body.workspace_id, user_id: req.user!.id, user_email: req.user!.email, action: "workspace.left", resource_type: "user", resource_id: req.user!.id, detail: null, ip_address: req.ip || null }));
   return res.json({ status: "left" });
 });
 
@@ -2189,6 +2199,8 @@ app.post(WEBHOOK_PATH,
     return res.status(401).json({ detail: WEBHOOK_REJECTION_DETAIL[auth.reason] });
   }
   const tenantId = auth.tenantId;
+  // F-04: the rest of this request runs in the credential's workspace (db/rls.ts).
+  return withTenant(tenantId, async () => {
 
   // Only now — the bytes are proven to come from the credential's holder — is
   // the body parsed. A signed document that is not valid JSON is the sender's
@@ -2221,6 +2233,7 @@ app.post(WEBHOOK_PATH,
   const id = report.ingested[0] ?? report.duplicates[0]!;
   if (!report.ingested.length) return res.status(202).json({ status: "skipped", reason: "duplicate", alert_id: id });
   return res.status(202).json({ status: "ingested", alert_id: id });
+  });
   });
 
 // --- Attack campaigns and automatic response ---------------------------------
@@ -2329,6 +2342,8 @@ app.post(BLOCKLIST_PATH,
     console.warn(`Legion: rejected blocklist request (${authResult.cause}) key=${authResult.keyId ? authResult.keyId.slice(0, 8) : "-"} ip=${req.ip || "unknown"}`);
     return res.status(401).json({ detail: WEBHOOK_REJECTION_DETAIL[authResult.reason] });
   }
+  // F-04: the rest of this request runs in the credential's workspace (db/rls.ts).
+  return withTenant(authResult.tenantId, async () => {
   let body: { action?: unknown } = {};
   try { body = JSON.parse(rawBody!.toString("utf8")) ?? {}; } catch { /* checked below */ }
   if (body.action !== "sync-blocklist") return res.status(400).json({ detail: "Invalid request" });
@@ -2336,6 +2351,7 @@ app.post(BLOCKLIST_PATH,
   const entries = allows(await resolvePlan(authResult.tenantId), "ipBlocking") ? await blocklist.activeEntries(authResult.tenantId) : [];
   res.setHeader("Cache-Control", "no-store");
   res.json({ generated_at: new Date().toISOString(), entries });
+  });
   });
 
 // Payment check (src/payments.ts): the customer's payment software asks before
@@ -2353,6 +2369,8 @@ app.post(payments.PAYMENT_CHECK_PATH,
     console.warn(`Legion: rejected payment check (${authResult.cause}) key=${authResult.keyId ? authResult.keyId.slice(0, 8) : "-"} ip=${req.ip || "unknown"}`);
     return res.status(401).json({ detail: WEBHOOK_REJECTION_DETAIL[authResult.reason] });
   }
+  // F-04: the rest of this request runs in the credential's workspace (db/rls.ts).
+  return withTenant(authResult.tenantId, async () => {
   let body: unknown = null;
   try { body = JSON.parse(rawBody!.toString("utf8")); } catch { /* checked below */ }
   const parsed = payments.paymentCheckSchema.safeParse(body);
@@ -2381,6 +2399,7 @@ app.post(payments.PAYMENT_CHECK_PATH,
   }
   res.setHeader("Cache-Control", "no-store");
   res.json({ id: result.check.id, decision: result.check.decision, reasons: result.reasons, verify: result.verify });
+  });
   });
 
 app.get("/security/payments/consent", auth, async (req: AuthedRequest, res) => {

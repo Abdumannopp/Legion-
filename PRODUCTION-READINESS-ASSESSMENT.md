@@ -16,11 +16,13 @@ Why general production is a NO-GO — the blockers, each of them a missing *evid
 
 1. **No soak data.** Everything measured so far was measured in short CI runs and a rehearsal on a tiny dataset. There has been no 14-day run of the pilot stack (`PILOT.md` §12.3), so availability, alert delivery to a human, and the real RTO on a real dataset are unmeasured.
 2. **Security sign-off is not signed.** The sheet in §6 is complete with evidence, but no human has signed it, and there has been **no independent penetration test**. My own attack assessment is not independent.
-3. **The audit trail can be disabled by a compromised API** (R-3): the application database role owns its tables. The keyed SOC chain makes tampering *detectable*, but the plain `audit_log` is not keyed.
+3. ~~**The audit trail can be disabled by a compromised API** (R-3)~~ — **closed for the Docker installs on 2026-11-06** (F-02, `SECURITY-HARDENING-ASSESSMENT-2026-11.md` §0): the schema now belongs to `legion_owner`, which cannot log in; the API's role cannot alter, truncate or disable a trigger, and erases audit rows only through bounded database functions (never younger than 30 days). Still open for a bare-metal single-role install unless `provision-cli` runs with `DB_ROLE_SPLIT=on`; the plain `audit_log` is still not keyed.
 4. **No retention for SOC history** (measured ≈ 6.5 KB per action, unbounded; the new hourly action budget caps the rate, not the total).
 5. **No HA.** One API process (also running the worker), one Postgres, one Redis. A host loss is a restore from the nightly backup (RPO up to 24 h).
 6. **No approval/action/policy screens** in the dashboard (R-5). Approvers use the API.
 7. **The alert path to a human has never been exercised** against a real Alertmanager receiver (rules are unit-tested with `promtool`; delivery is not).
+
+Blocker 4 was closed by K-2 (SOC retention, `SOC_RETENTION_DAYS`). The verdict above is unchanged: blockers 1, 2, 5, 6 and 7 still stand.
 
 None of these is a design flaw; they are the work that a pilot is meant to produce evidence for. The rollout in §8 is ordered so that each stage closes some of them before the next begins.
 

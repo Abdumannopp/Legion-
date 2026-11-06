@@ -16,7 +16,7 @@
 import { createHash, createHmac, hkdfSync, randomUUID } from "node:crypto";
 import type pg from "pg";
 import { config } from "../config.js";
-import { queryAll, transaction } from "../db/pool.js";
+import { queryAll, transaction, withTenant } from "../db/pool.js";
 import { canonicalJson } from "../policy/canonical.js";
 import type { ActorRef } from "../policy/types.js";
 
@@ -180,8 +180,8 @@ export async function checkCheckpoint(tenantId: string, seq: number, hash: strin
 export async function auditCheckpoints(): Promise<Array<{ tenant: string; seq: number; hash: string }>> {
   const out: Array<{ tenant: string; seq: number; hash: string }> = [];
   for (const { id } of await queryAll<{ id: string }>("SELECT id FROM tenants ORDER BY id")) {
-    const head = (await queryAll<{ seq: string; hash: string }>(
-      "SELECT seq, hash FROM soc_audit_events WHERE tenant_id = $1 ORDER BY seq DESC LIMIT 1", [id]))[0];
+    const head = (await withTenant(id, () => queryAll<{ seq: string; hash: string }>(   // F-04
+      "SELECT seq, hash FROM soc_audit_events WHERE tenant_id = $1 ORDER BY seq DESC LIMIT 1", [id])))[0];
     if (head) out.push({ tenant: id, seq: Number(head.seq), hash: head.hash });
   }
   return out;

@@ -93,9 +93,28 @@ export async function freshDatabase(admin, prefix) {
 // --- the API --------------------------------------------------------------------
 
 /** Starts server/dist/index.js with `env`; resolves once /health says the database is up. */
+/**
+ * F-04: with DB_RLS=enforce, any code path that reached a row-level-security table without a
+ * workspace context — a request, a worker, a monitor — logs it. A black-box check would not see a
+ * background job fail, so the run fails here instead.
+ */
+const RLS_PROBLEM = /DB_RLS=enforce: a query on \w+|violates row-level security policy/g;
+function checkRls(name, text) {
+  if ((process.env.DB_RLS ?? "").toLowerCase() !== "enforce") return;
+  const hits = [...new Set(text.match(RLS_PROBLEM) ?? [])];
+  if (!hits.length) return;
+  console.error(`\nDB_RLS=enforce: the ${name} process logged ${hits.length} kind(s) of missing workspace context:\n  ${hits.join("\n  ")}`);
+  const one = new RegExp(RLS_PROBLEM.source);   // no /g: .test() must not carry lastIndex between lines
+  for (const line of text.split("\n").filter((l) => one.test(l)).slice(0, 10)) console.error("  | " + line.slice(0, 300));
+  rlsFailed = true;
+}
+let rlsFailed = false;
+// The test scripts end with process.exit(failures ? 1 : 0); a missing context still fails the run.
+process.on("exit", () => { if (rlsFailed) process.exitCode = 1; });
+
 export async function startApi(env, { name = "api", port } = {}) {
   const logs = [];
-  const proc = spawn("node", ["dist/index.js"], { cwd: join(REPO, "server"), env: { PATH: process.env.PATH, PORT: String(port), ...env } });
+  const proc = spawn("node", ["dist/index.js"], { cwd: join(REPO, "server"), env: { PATH: process.env.PATH, PORT: String(port), ...(process.env.DB_RLS ? { DB_RLS: process.env.DB_RLS } : {}), ...env } });
   proc.stdout.on("data", (d) => logs.push(String(d)));
   proc.stderr.on("data", (d) => logs.push(String(d)));
   let exited = null;
@@ -110,9 +129,11 @@ export async function startApi(env, { name = "api", port } = {}) {
     name, port, base, proc, logs, log: () => logs.join(""), up: Boolean(up),
     get exited() { return exited; },
     async stop(signal = "SIGTERM") {
-      if (exited) return;
-      proc.kill(signal);
-      await until(async () => exited, 15_000, 100);
+      if (!exited) {
+        proc.kill(signal);
+        await until(async () => exited, 15_000, 100);
+      }
+      checkRls(name, logs.join(""));
     },
   };
 }

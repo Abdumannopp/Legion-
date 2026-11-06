@@ -45,6 +45,8 @@ const { chromium } = loadPlaywright();
 const id = randomBytes(4).toString("hex");
 const DB = `legion_ux_${id}`;
 const APP_ROLE = `legion_app_ux_${id}`;
+const OWNER_ROLE = APP_ROLE.replace("legion_app_", "legion_own_");   // F-02: as the pilot runs
+const RLS = (process.env.DB_RLS ?? "off").toLowerCase();
 const APP_PASSWORD = randomBytes(24).toString("hex");
 const API = "http://localhost:8000";
 const WEB = "http://localhost:3000";
@@ -87,13 +89,13 @@ async function main() {
   console.log("▶ setup: fresh database, API (hosted mode, no SMTP), dashboard");
   await sql("postgres", `CREATE DATABASE "${DB}"`);
   const prov = spawnSync("node", [join(REPO, "server", "dist", "db", "provision-cli.js")], {
-    env: { PATH: process.env.PATH, DATABASE_ADMIN_URL: dbUrl(DB), APP_DB_USER: APP_ROLE, APP_DB_PASSWORD: APP_PASSWORD }, encoding: "utf8",
+    env: { PATH: process.env.PATH, DATABASE_ADMIN_URL: dbUrl(DB), APP_DB_USER: APP_ROLE, APP_DB_PASSWORD: APP_PASSWORD, DB_ROLE_SPLIT: "on", DB_OWNER_ROLE: OWNER_ROLE }, encoding: "utf8",
   });
   check("database provisioned", prov.status === 0, prov.stderr || prov.stdout);
   apiProc = spawn("node", ["dist/index.js"], {
     cwd: join(REPO, "server"),
     env: {
-      PATH: process.env.PATH, DEPLOYMENT_MODE: "saas", PORT: "8000",
+      PATH: process.env.PATH, DEPLOYMENT_MODE: "saas", PORT: "8000", DB_RLS: RLS,
       DATABASE_URL: dbUrl(DB, APP_ROLE, APP_PASSWORD), JWT_SECRET: randomBytes(32).toString("hex"), PAYMENT_HASH_KEY: randomBytes(32).toString("hex"),
       FRONTEND_URL: WEB, COOKIE_SECURE: "false", LEGION_ENCRYPTION_KEYS: `ux:${randomBytes(32).toString("hex")}`,
       SEED_DEMO_DATA: "false", DATA_FILE: join(WORK, "legion.json"), TRIAL_DAYS: "14",
@@ -462,7 +464,15 @@ try {
   await sleep(1500);
   await sql("postgres", "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", [DB]).catch(() => {});
   await sql("postgres", `DROP DATABASE IF EXISTS "${DB}"`).catch(() => {});
+  // A failed run shows what the API said last (errors are logged without secrets).
+  if (failures) console.log("\n--- API log (last 40 lines) ---\n" + apiLog.join("").split("\n").slice(-40).join("\n"));
+  // F-04: with DB_RLS=enforce, no code path may have reached a row-level-security table without a workspace.
+  if (RLS === "enforce") {
+    const hits = [...new Set(apiLog.join("").match(/DB_RLS=enforce: a query on \w+|violates row-level security policy/g) ?? [])];
+    if (hits.length) bad("no query ran without a workspace context (DB_RLS=enforce)", hits.join("; "));
+  }
   await sql("postgres", `DROP ROLE IF EXISTS "${APP_ROLE}"`).catch(() => {});
+  await sql("postgres", `DROP ROLE IF EXISTS "${OWNER_ROLE}"`).catch(() => {});
   console.log(failures ? `\n${failures} check(s) failed` : "\nAll journey checks passed");
   process.exit(failures ? 1 : 0);
 }

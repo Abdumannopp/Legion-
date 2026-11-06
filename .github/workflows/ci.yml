@@ -464,6 +464,8 @@ jobs:
       - name: End-to-end (provision-cli, API as app role, Wazuh integration, agents)
         env:
           E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+          # F-04: the API runs with row-level security enforced; a code path without a workspace context fails the step.
+          DB_RLS: enforce
         run: node ops/tests/e2e-wazuh.mjs
       # The main user journeys in a real browser against the built API and
       # dashboard: sign up, workspace, connect Wazuh, first alert, incident,
@@ -474,6 +476,8 @@ jobs:
       - name: User journeys (browser, end to end)
         env:
           E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+          # F-04: the API runs with row-level security enforced; a code path without a workspace context fails the step.
+          DB_RLS: enforce
         run: node ops/tests/e2e-journeys.mjs
       # Turnstile (CAPTCHA) on the sign-in forms: the dashboard built with a
       # site key, the API with a secret key; Cloudflare itself is stood in for.
@@ -481,6 +485,8 @@ jobs:
       - name: Turnstile on sign-in (browser, end to end)
         env:
           E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+          # F-04: the API runs with row-level security enforced; a code path without a workspace context fails the step.
+          DB_RLS: enforce
         run: node ops/tests/e2e-turnstile.mjs
       # Black-box attack on the built API in production mode: headers, CORS,
       # CSRF, cookies, forged/replayed webhooks, IDOR between two real orgs,
@@ -489,6 +495,8 @@ jobs:
       - name: Production-mode security probe (black box)
         env:
           E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+          # F-04: the API runs with row-level security enforced; a code path without a workspace context fails the step.
+          DB_RLS: enforce
         run: node ops/tests/production-probe.mjs
       # Password hashing must not stall the instance, and the per-account
       # sign-in limit must hold across instances under concurrency
@@ -496,6 +504,8 @@ jobs:
       - name: Sign-in under load (event loop, limit across instances)
         env:
           E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+          # F-04: the API runs with row-level security enforced; a code path without a workspace context fails the step.
+          DB_RLS: enforce
         run: node ops/tests/auth-load-probe.mjs
       # Denial of service, measured: a distributed flood must not cost legitimate
       # users their reads or sensor events, silent/slow connections are reaped,
@@ -507,6 +517,8 @@ jobs:
       - name: Denial-of-service resilience (API under flood, real nginx in front)
         env:
           E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+          # F-04: the API runs with row-level security enforced; a code path without a workspace context fails the step.
+          DB_RLS: enforce
           DOS_SCALE: "0.5"
         run: node ops/tests/ddos-resilience.mjs
 

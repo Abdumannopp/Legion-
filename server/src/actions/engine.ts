@@ -19,7 +19,7 @@
 import { randomUUID } from "node:crypto";
 import { config } from "../config.js";
 import type pg from "pg";
-import { queryAll, queryOne, transaction } from "../db/pool.js";
+import { queryAll, queryOne, transaction, withTenant } from "../db/pool.js";
 import { cancelApproval, consumeApproval, createApproval, getApproval, type Approval } from "../approvals/engine.js";
 import { canonicalJson, digestOf } from "../policy/canonical.js";
 import { catalogEntry } from "../policy/catalog.js";
@@ -217,17 +217,23 @@ export async function syncWithApproval(tenantId: string, actionId: string, by: A
 export async function reconcileApprovals(limitPerWorkspace = 50): Promise<number> {
   let changed = 0;
   for (const { id: tenantId } of await queryAll<{ id: string }>("SELECT id FROM tenants ORDER BY id")) {
-    await queryOne("UPDATE approval_requests SET status = 'expired', decided_at = now() WHERE tenant_id = $1 AND status = 'pending' AND expires_at <= now()", [tenantId]);
-    const due = await queryAll<{ id: string }>(
-      `SELECT r.id FROM action_requests r JOIN approval_requests a ON a.tenant_id = r.tenant_id AND a.id = r.approval_id
-        WHERE r.tenant_id = $1 AND r.status = 'awaiting_approval' AND a.status IN ('approved', 'rejected', 'expired', 'cancelled')
-        ORDER BY r.created_at LIMIT $2`,
-      [tenantId, limitPerWorkspace],
-    );
-    for (const r of due) {
-      const after = await syncWithApproval(tenantId, r.id, { kind: "system", component: "approval_reconciler" });
-      if (after && after.status !== "awaiting_approval") changed++;
-    }
+    changed += await withTenant(tenantId, () => reconcileWorkspace(tenantId, limitPerWorkspace));   // F-04: one workspace at a time
+  }
+  return changed;
+}
+
+async function reconcileWorkspace(tenantId: string, limitPerWorkspace: number): Promise<number> {
+  let changed = 0;
+  await queryOne("UPDATE approval_requests SET status = 'expired', decided_at = now() WHERE tenant_id = $1 AND status = 'pending' AND expires_at <= now()", [tenantId]);
+  const due = await queryAll<{ id: string }>(
+    `SELECT r.id FROM action_requests r JOIN approval_requests a ON a.tenant_id = r.tenant_id AND a.id = r.approval_id
+      WHERE r.tenant_id = $1 AND r.status = 'awaiting_approval' AND a.status IN ('approved', 'rejected', 'expired', 'cancelled')
+      ORDER BY r.created_at LIMIT $2`,
+    [tenantId, limitPerWorkspace],
+  );
+  for (const r of due) {
+    const after = await syncWithApproval(tenantId, r.id, { kind: "system", component: "approval_reconciler" });
+    if (after && after.status !== "awaiting_approval") changed++;
   }
   return changed;
 }

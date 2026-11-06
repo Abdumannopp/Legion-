@@ -31,7 +31,7 @@ import { chatSafe } from "./ai.js";
 import { aiPolicy, consumeAiQuota } from "./ai-policy.js";
 import { allows, planRefusal, resolvePlan } from "./plan-limits.js";
 import { Pseudonymizer } from "./ai-safety.js";
-import { pool, withLeaderLock } from "./db/pool.js";
+import { pool, withLeaderLock, withTenant } from "./db/pool.js";
 import { mailEnabled, sendMail } from "./mailer.js";
 import * as store from "./store.js";
 import { regionOf, regionUrl, servesRegion } from "./regional.js";
@@ -309,6 +309,11 @@ export function subscriptionGate(deps: Pick<AgentLayerDeps, "accessState">) {
 
 function mount(app: Application, identity: Identity, deps: AgentLayerDeps): void {
   app.use(subscriptionGate(deps));
+  // F-04: an authenticated agent (or person) on these routes works in its own workspace (db/rls.ts).
+  app.use((req, _res, next) => {
+    const tenantId = req.principal?.tenantId;
+    return typeof tenantId === "string" && UUID.test(tenantId) ? withTenant(tenantId, next) : next();
+  });
   app.use("/agent/v1", identity.agentApi);
   app.use("/agent/v1", agentRoutes(identity, deps));
   app.use("/agents", identity.agents);

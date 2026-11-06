@@ -9,7 +9,7 @@
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { config } from "./config.js";
-import { query, queryAll, queryOne, transaction } from "./db/pool.js";
+import { inTenant, query, queryAll, queryOne, transaction } from "./db/pool.js";
 import { isLocale, type Locale } from "./i18n.js";
 import { isAddonId, isPlanId } from "./plans.js";
 import type {
@@ -547,11 +547,10 @@ export async function listAlertsWithCursor(
   tenantId: string, filters: AlertFilters = {}
 ): Promise<{ alerts: Alert[]; cursor: number }> {
   return transaction(async (client) => {
-    await client.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
     const c = await client.query("SELECT alert_seq FROM tenants WHERE id = $1", [tenantId]);
     const alerts = await listAlerts(tenantId, filters, client);
     return { alerts, cursor: Number(c.rows[0]?.alert_seq ?? 0) };
-  });
+  }, { isolation: "REPEATABLE READ READ ONLY" });
 }
 
 export interface AlertSync {
@@ -663,7 +662,7 @@ export type NewAlert = Omit<Alert, "created_at" | "ai_explanation_locale" | "ai_
 export async function insertAlert(alert: NewAlert, client?: PoolClient): Promise<Alert | null> {
   const run = client
     ? async (text: string, params: unknown[]) => (await client.query(text, params)).rows[0] ?? null
-    : queryOne;
+    : (text: string, params: unknown[]) => inTenant(alert.tenant_id, () => queryOne(text, params));   // F-04: webhooks, monitors
   const row = await run(
     // The NOT EXISTS keeps a duplicate from reaching the row trigger at all, so a
     // re-sent event neither takes the tenant's cursor lock nor burns a number.
@@ -832,7 +831,8 @@ export async function upsertAsset(
 // --- Audit log ---------------------------------------------------------------
 
 export async function audit(entry: Omit<AuditLog, "id" | "created_at">): Promise<void> {
-  await query(
+  // F-04: sign-in, sign-up and webhooks write audit entries before any request workspace exists.
+  await inTenant(entry.tenant_id, () => query(
     `INSERT INTO audit_log (id, tenant_id, user_id, user_email, action,
                             resource_type, resource_id, detail, ip_address)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
@@ -840,7 +840,7 @@ export async function audit(entry: Omit<AuditLog, "id" | "created_at">): Promise
       randomUUID(), entry.tenant_id, entry.user_id, entry.user_email, entry.action,
       entry.resource_type, entry.resource_id, entry.detail, entry.ip_address,
     ]
-  );
+  ));
 }
 
 export interface AuditFilters { action?: string; resource_id?: string; limit?: number }

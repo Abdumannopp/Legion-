@@ -87,6 +87,8 @@ export const config = {
     process.env.DATABASE_URL ||
     "postgresql://legion:legion@localhost:5432/legion",
   dbPoolMax: Number(process.env.DB_POOL_MAX || 10),
+  /** F-04: "enforce" turns on row-level security for the first table group (db/rls.ts). */
+  dbRls: (process.env.DB_RLS ?? "off").toLowerCase(),
   dbSsl: process.env.DB_SSL === "true",
   /** PEM contents, or a path to a CA bundle, for providers whose certificate
    *  Node cannot chain to a public root. */
@@ -680,6 +682,9 @@ export function settingProblems(env: Record<string, string | undefined>): string
   if (!currencies.every((c) => /^[A-Z]{3}$/.test(c))) problems.push("SUPPORTED_CURRENCIES must be ISO 4217 codes separated by commas (e.g. USD,EUR)");
   const currency = (env.DEFAULT_CURRENCY || "USD").trim().toUpperCase();
   if (!currencies.includes(currency)) problems.push(`DEFAULT_CURRENCY (${currency.slice(0, 8)}) must be one of SUPPORTED_CURRENCIES`);
+  if (env.DB_RLS !== undefined && env.DB_RLS !== "" && !["off", "enforce"].includes(env.DB_RLS.toLowerCase())) {
+    problems.push(`DB_RLS must be "off" or "enforce" (got "${env.DB_RLS.slice(0, 40)}")`);
+  }
   const mode = env.DEPLOYMENT_MODE;
   if (mode !== undefined && mode !== "" && mode !== "self-hosted" && mode !== "saas") {
     problems.push(`DEPLOYMENT_MODE must be "self-hosted" or "saas" (got "${mode.slice(0, 40)}")`);

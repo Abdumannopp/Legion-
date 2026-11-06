@@ -14,7 +14,7 @@
  */
 import type { NextFunction, Response } from "express";
 import { config } from "./config.js";
-import { query, queryOne } from "./db/pool.js";
+import { query, queryOne, withTenant } from "./db/pool.js";
 import {
   ADDONS, PLANS, UNLIMITED, effectiveEntitlements, isPlanId,
   type AddonId, type EffectiveEntitlements, type Entitlements, type PlanId,
@@ -178,10 +178,10 @@ export async function pruneAlertsByPlan(now = new Date()): Promise<number> {
   for (const t of tenants.rows) {
     const plan = await resolvePlan(t.id);
     if (!plan.retentionDays) continue;
-    const r = await query(
+    const r = await withTenant(t.id, () => query(   // F-04: one workspace at a time
       `DELETE FROM alerts WHERE tenant_id = $1 AND status = 'resolved' AND created_at < $2::timestamptz - make_interval(days => $3)`,
       [t.id, now.toISOString(), plan.retentionDays],
-    );
+    ));
     removed += r.rowCount ?? 0;
   }
   return removed;

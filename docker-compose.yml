@@ -69,6 +69,8 @@ services:
       DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-self-hosted}
       # The least-privilege role created by db-provision, never the database superuser.
       DATABASE_URL: postgresql://legion_app:${APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-legion}
+      # F-04: row-level security for the workspace-first tables (TENANT-ISOLATION.md): off | enforce.
+      DB_RLS: ${DB_RLS:-off}
       REDIS_URL: redis://redis:6379
       # Reachable from the host through the published port below. Inside the
       # container 127.0.0.1 would be unreachable from outside.

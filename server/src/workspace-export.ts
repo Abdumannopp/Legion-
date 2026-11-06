@@ -8,7 +8,7 @@
  *   no payment account hashes. People appear by email, role and status.
  */
 import type { Response } from "express";
-import { query } from "./db/pool.js";
+import { inTenant, query } from "./db/pool.js";
 
 const BATCH = 1000;
 const TABLES: Array<{ name: string; table: string; key: string; strip?: string[] }> = [
@@ -23,6 +23,11 @@ const TABLES: Array<{ name: string; table: string; key: string; strip?: string[]
 export const EXPORT_FORMAT = "legion-workspace-export/1";
 
 export async function streamWorkspaceExport(tenantId: string, res: Response): Promise<Record<string, number>> {
+  // F-04: the export reads one workspace; from a request it already runs in it, from the CLI it is declared here.
+  return inTenant(tenantId, () => streamExport(tenantId, res));
+}
+
+async function streamExport(tenantId: string, res: Response): Promise<Record<string, number>> {
   const counts: Record<string, number> = {};
   const write = (text: string) => new Promise<void>((ok) => { res.write(text) ? ok() : res.once("drain", ok); });
 

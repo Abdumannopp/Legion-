@@ -15,7 +15,7 @@
  */
 import { appendFileSync, readFileSync, existsSync } from "node:fs";
 import { config } from "./config.js";
-import { pool, query } from "./db/pool.js";
+import { inTenant, pool, query } from "./db/pool.js";
 import { mailEnabled, sendMail, workspaceDeletionNoticeEmail } from "./mailer.js";
 
 export interface DeletionPlan {
@@ -41,6 +41,11 @@ async function tenantTables(client: { query: (text: string) => Promise<{ rows: A
 const ident = (name: string) => `"${name.replace(/"/g, '""')}"`;
 
 export async function planDeletion(tenantId: string, opts: { force?: boolean } = {}): Promise<DeletionPlan> {
+  // F-04: counting a workspace's rows reads that workspace (CLI and the auto-delete job have no request).
+  return inTenant(tenantId, () => planWorkspaceDeletion(tenantId, opts));
+}
+
+async function planWorkspaceDeletion(tenantId: string, opts: { force?: boolean }): Promise<DeletionPlan> {
   const tenant = (await query<{ name: string; legal_hold: boolean }>("SELECT name, legal_hold FROM tenants WHERE id = $1", [tenantId])).rows[0];
   if (!tenant) return { tenantId, name: null, blockers: ["No such workspace"], counts: {} };
   const blockers: string[] = [];

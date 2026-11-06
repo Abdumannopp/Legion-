@@ -1,12 +1,49 @@
 # Legion — Security & engineering hardening: assessment and plan (Phase 1)
 
-**Status: ASSESSMENT ONLY. No code was changed for this task. Implementation waits for your approval (§6).**
+**Status: plan approved ("Loyiham ishonchli qilb beri", with the recommended answers to §6) and implemented —
+see §0 for what was done, with evidence, and what remains. §1–§6 are the original assessment, unchanged.**
 Date: 2026-11-06. Assessed: branch `claude/laughing-clarke-cmfudk` @ `9b9c56c` (the newest code).
 
 > **Baseline warning.** `main` is at `3111404` (merge of PR #1, 2026-11-04) and is **42 commits behind** this
 > branch (197 files, +17 094 / −2 557). `main` has **no SOC core at all** (no versioned migrations, no policy /
 > approval / action engine, no audit chain) and none of the Task 13–15 fixes. Every statement below is about the
 > branch. Deploying `main` today would ship an older, less hardened product.
+
+---
+
+## 0. Implementation status (2026-11-06)
+
+Decisions taken (§6, recommended answers): plan order as proposed; 30-day floor for audit erasure; RLS behind
+`DB_RLS` with CI enforcing, rolled out by table group; Semgrep (pinned) for SAST; "set the new key to today's
+value, then rotate" for existing installs; separate commits on `claude/laughing-clarke-cmfudk`.
+CI: run **42296435340** on `5b2cefe` is green in every job, including the release gate, Semgrep, gitleaks and
+both Docker installs with the owner/runtime split. Later commits are verified locally (below) and by the next run.
+
+| PR | Finding | Status | Commit | Evidence (regression tests) |
+|---|---|---|---|---|
+| PR-10a | F-08 | Done | `be282a8`, `aa93dd3` | image-scan job green; gosu removed, Postgres uid 70 |
+| PR-4 | F-03 High | Done | `c8e3a2a` | `PAYMENT_HASH_KEY` mandatory in production, no constant, rotatable — payments (4 new), pilot-preflight |
+| PR-5 | F-05 | Not changed, by design | — | re-rated Low: the webhook secret is a deprecated id salt only; no secret derives from it |
+| PR-1 | F-01 High | Done | `3dd11a1` | default Docker API runs as `legion_app`; boot refuses a privileged role unless `NODE_ENV=development`; CI docker job asserts role, denied file/program access, no admin password in the API |
+| PR-6 | F-06 Medium | Done | `c7b88f9` | `SOC_AUDIT_KEY` mandatory in production; key ring with a chained `audit_key.rotated` event — audit-key-rotation |
+| PR-8 | F-09 Medium | Done | `0c58dfc` | acknowledged/resolved timestamps and actor, reopen needs a reason — alert-lifecycle |
+| PR-10b–e | F-07 Medium | Done | `03cecb2`, `4bb6452`, `5b2cefe` | SBOM (syft), gitleaks (full history), Semgrep ERROR rules, all pinned + checksummed and required by the release gate; first Semgrep run found a **real** AES-GCM truncated-tag acceptance (fixed, test added) and one SQL-building pattern (moved into Postgres `format`) |
+| PR-7 | IDOR | Done | `f670526` | idor-sweep: every route with a path parameter, generated from the route table; a new route fails until it has a fixture |
+| PR-9 | F-11 Low | Done | `f6e5b02` | ATT&CK technique per threat sign — campaigns (3 new) |
+| PR-11 | F-12 Low | Done | `1c1ae37` | IPs / CVEs / techniques not in the alert are marked "[not in the alert — verify]" — ai-hardening (2 new) |
+| PR-2 | F-02 High | Done | `3c0af18`, `5b2cefe` | schema owned by `legion_owner` (NOLOGIN); API role cannot ALTER/DROP/TRUNCATE/disable a trigger; erasure only through bounded `SECURITY DEFINER` functions (30-day floor, legal hold, tombstone) — db-role-split (25), CI docker jobs assert the API owns nothing |
+| PR-3a | F-04 High | Done for the first table group, **off by default** | this commit | 14 workspace-first tables under RLS (`DB_RLS=enforce`); proven as the API's role — row-level-security (12); all six end-to-end suites pass with enforcement and fail on any missing context; CI runs them enforced |
+| PR-3b/c | F-04 | Open | — | users/tenants/memberships/sessions/billing/credentials/outbox/jobs/memory: their lookups happen before the workspace is known and need their own design |
+| PR-12 | docs | Done | this commit | INSTALL, RECOVERY, TENANT-ISOLATION, this section, PRODUCTION-READINESS-ASSESSMENT |
+
+Found while implementing (fixed in the same commits): a cascade from a parent row would have let a non-owner
+erase audit rows under a `current_user` check (the check uses `session_user`); the sensor monitor read alerts of
+every workspace in one query (now one workspace at a time); a websocket test raced the one-second JWT precision.
+
+**What is still not true, after all of the above** (see also §5): RLS is off by default and covers 14 of ~35
+tenant tables; a single-role (bare-metal) install is not bound by it; the API's role can still erase a whole
+workspace through `legion_erase_tenant` (bounded: recorded, legal hold refused unless forced — and the caller
+can pass `force`); no independent penetration test; no HA. Nothing here is a SOC 2 or ISO 27001 claim.
 
 ---
 
@@ -146,6 +183,8 @@ Small and independent first; PR-2 and PR-3 change how every query reaches the da
 | Off-host audit checkpoint depends on log shipping being configured | Operator task | Ship container logs off the host (PILOT.md §9.4) |
 | SAST/secret-scan false negatives | Tool limits | Keep code review mandatory |
 | `main` divergence (F-10) | Merge is the user's decision | Review and merge PR #19 (or successors) |
+| RLS covers the first table group only, off by default (PR-3b/c open) | Identity, billing and credential lookups precede the workspace | Design per-lookup system scopes; then turn `DB_RLS=enforce` on for the pilot |
+| The API's role can erase a whole workspace through `legion_erase_tenant`, and may pass `force` past a legal hold | Auto-delete and the operator CLI run as that role | Move forced erasure to a separate operator role, or require an out-of-band confirmation |
 
 ---
 

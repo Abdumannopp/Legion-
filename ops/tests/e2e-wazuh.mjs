@@ -41,6 +41,9 @@ if (!ADMIN_URL) { console.error("Set E2E_ADMIN_DATABASE_URL (a superuser URL; a 
 const id = randomBytes(4).toString("hex");
 const DB = `legion_e2e_${id}`;
 const APP_ROLE = `legion_app_e2e_${id}`;
+const OWNER_ROLE = APP_ROLE.replace("legion_app_", "legion_own_");   // F-02: as the pilot runs
+const RLS = (process.env.DB_RLS ?? "off").toLowerCase();
+const apiLogs = [];
 const APP_PASSWORD = randomBytes(24).toString("hex");
 const WEBHOOK_SECRET = randomBytes(32).toString("hex");
 const PORT = 18000 + Math.floor(Math.random() * 2000);
@@ -126,16 +129,16 @@ async function main() {
   console.log(`▶ 1. fresh database ${DB}; db-setup creates the API role`);
   await sql("postgres", `CREATE DATABASE "${DB}"`);
   const setup = spawnSync("node", [join(REPO, "server", "dist", "db", "provision-cli.js")], {
-    env: { PATH: process.env.PATH, DATABASE_ADMIN_URL: url(DB), APP_DB_USER: APP_ROLE, APP_DB_PASSWORD: APP_PASSWORD }, encoding: "utf8",
+    env: { PATH: process.env.PATH, DATABASE_ADMIN_URL: url(DB), APP_DB_USER: APP_ROLE, APP_DB_PASSWORD: APP_PASSWORD, DB_ROLE_SPLIT: "on", DB_OWNER_ROLE: OWNER_ROLE }, encoding: "utf8",
   });
   check("db-setup succeeds", setup.status === 0, setup.stderr || setup.stdout);
 
   console.log("▶ 2. the API starts self-hosted (plain http, no SMTP), as the app role");
-  const logs = [];
+  const logs = apiLogs;
   server = spawn("node", ["dist/index.js"], {
     cwd: join(REPO, "server"),
     env: {
-      PATH: process.env.PATH, DEPLOYMENT_MODE: "self-hosted", PORT: String(PORT),
+      PATH: process.env.PATH, DEPLOYMENT_MODE: "self-hosted", PORT: String(PORT), DB_RLS: RLS,
       DATABASE_URL: url(DB, APP_ROLE, APP_PASSWORD), JWT_SECRET: randomBytes(32).toString("hex"), PAYMENT_HASH_KEY: randomBytes(32).toString("hex"),
       FRONTEND_URL: "http://localhost:3000", COOKIE_SECURE: "false", SECURITY_EVENT_WEBHOOK_SECRET: WEBHOOK_SECRET,
       LEGION_ENCRYPTION_KEYS: `e2e:${randomBytes(32).toString("hex")}`,
@@ -258,7 +261,13 @@ try {
   await new Promise((r) => setTimeout(r, 1500));
   await sql("postgres", `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1`, [DB]).catch(() => {});
   await sql("postgres", `DROP DATABASE IF EXISTS "${DB}"`).catch(() => {});
+  // F-04: with DB_RLS=enforce, no code path may have reached a row-level-security table without a workspace.
+  if (RLS === "enforce") {
+    const hits = [...new Set(apiLogs.join("").match(/DB_RLS=enforce: a query on \w+|violates row-level security policy/g) ?? [])];
+    if (hits.length) bad("no query ran without a workspace context (DB_RLS=enforce)", hits.join("; "));
+  }
   await sql("postgres", `DROP ROLE IF EXISTS "${APP_ROLE}"`).catch(() => {});
+  await sql("postgres", `DROP ROLE IF EXISTS "${OWNER_ROLE}"`).catch(() => {});
 }
 console.log(failures ? `\n✗ ${failures} check(s) failed` : "\n✓ all end-to-end checks passed");
 process.exit(failures ? 1 : 0);

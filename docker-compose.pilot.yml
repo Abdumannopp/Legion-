@@ -137,6 +137,8 @@ services:
       DB_SSL_INSECURE: "false"
       # --- wiring ---------------------------------------------------------------
       DATABASE_URL: postgresql://legion_app:${APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-legion}
+      # F-04: row-level security for the workspace-first tables (TENANT-ISOLATION.md): off | enforce.
+      DB_RLS: ${DB_RLS:-off}
       REDIS_URL: redis://redis:6379
       LEGION_BIND_ADDRESS: 0.0.0.0        # inside the container; published on loopback below
       PORT: "8000"

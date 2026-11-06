@@ -14,6 +14,7 @@ import { config } from "../config.js";
 import { failAbandoned, getAction, isPaused, MAX_RUN_ATTEMPTS, reconcileApprovals, RUNNING_STALE_SECONDS, runQueued } from "../actions/engine.js";
 import { runWorkflow } from "../orchestrator/engine.js";
 import { appendAuditEventNow } from "../audit/events.js";
+import { withTenant } from "../db/pool.js";
 import { claimJobs, completeJob, deadLetterAbandoned, deferJob, failJob, type Job, type JobKind } from "./queue.js";
 
 type Outcome = { ok: true } | { defer: number };
@@ -64,12 +65,13 @@ export async function runOnce(opts: { owner?: string; limit?: number; reconcile?
   report.claimed = jobs.length;
   for (const job of jobs) {
     try {
-      const out = await HANDLERS[job.kind](job);
+      // F-04: a job runs in its own workspace (db/rls.ts).
+      const out = await withTenant(job.tenant_id, () => HANDLERS[job.kind](job));
       if ("defer" in out) { if (await deferJob(job, out.defer)) report.deferred++; else report.lost++; continue; }
       if (await completeJob(job)) report.done++; else report.lost++;
     } catch (error) {
       const r = await failJob(job, error instanceof Error ? error.message : "job failed");
-      if (r === "dead") await appendAuditEventNow(job.tenant_id, { category: "runtime", event: "job.dead", actor: { kind: "system", component: "runtime" }, subject_type: "job", subject_id: job.id, detail: { kind: job.kind, attempts: job.attempts } }).catch(() => {});
+      if (r === "dead") await withTenant(job.tenant_id, () => appendAuditEventNow(job.tenant_id, { category: "runtime", event: "job.dead", actor: { kind: "system", component: "runtime" }, subject_type: "job", subject_id: job.id, detail: { kind: job.kind, attempts: job.attempts } })).catch(() => {});
       report[r === "retry" ? "retried" : r]++;
     }
   }

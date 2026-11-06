@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 import type { ConnectionOptions } from "node:tls";
 import pg from "pg";
 import { ownsSchema, runMigrations, schemaProblems } from "./migrator.js";
+import { currentTenant, RlsContextError, touchesRlsTable } from "./rls.js";
 import { config } from "../config.js";
+
+export { currentTenant, inTenant, withTenant } from "./rls.js";
 
 export { MIGRATION_LOCK_TIMEOUT, MIGRATIONS_DIR, migrationFiles, schemaFingerprint, type MigrationFile } from "./migrator.js";
 
@@ -78,10 +81,62 @@ pool.on("connect", (client) => {
 
 export type QueryParams = ReadonlyArray<unknown>;
 
+/*
+ * F-04 (db/rls.ts): with DB_RLS=enforce every connection says so (legion.rls), and every query
+ * carries the workspace of the current request or job (legion.tenant_id) — session-level for a
+ * single query, set and reset around it so a pooled connection never keeps one workspace's id;
+ * transaction-local inside transaction().
+ */
+export const rlsEnforced = (): boolean => config.dbRls === "enforce";
+
+if (rlsEnforced()) {
+  pool.on("connect", (client) => {
+    // Queued before anything else on this connection (a client runs its queries in order).
+    client.query("SELECT set_config('legion.rls', 'enforce', false)").catch(() => {});
+  });
+}
+
+function rlsGuard(text: string): string | null {
+  const tenant = currentTenant();
+  if (!tenant) {
+    const table = touchesRlsTable(text);
+    if (table) throw new RlsContextError(table);
+  }
+  return tenant;
+}
+
+async function rlsQuery<T extends pg.QueryResultRow>(text: string, params: QueryParams): Promise<pg.QueryResult<T>> {
+  const tenant = rlsGuard(text);
+  if (!tenant) return pool.query<T>(text, params as unknown[]);
+  const client = await pool.connect();
+  let broken = false;
+  try {
+    await client.query("SELECT set_config('legion.tenant_id', $1, false)", [tenant]);
+    return await client.query<T>(text, params as unknown[]);
+  } finally {
+    await client.query("SELECT set_config('legion.tenant_id', '', false)").catch(() => { broken = true; });
+    client.release(broken || undefined);
+  }
+}
+
+function guardedClient(client: pg.PoolClient): pg.PoolClient {
+  return new Proxy(client, {
+    get(target, prop, receiver) {
+      if (prop !== "query") return Reflect.get(target, prop, receiver);
+      return (text: unknown, ...rest: unknown[]) => {
+        const sql = typeof text === "string" ? text : (text as { text?: unknown } | null)?.text;
+        if (typeof sql === "string") rlsGuard(sql);
+        return (target.query as (...a: unknown[]) => unknown).call(target, text, ...rest);
+      };
+    },
+  });
+}
+
 export async function query<T extends pg.QueryResultRow = pg.QueryResultRow>(
   text: string,
   params: QueryParams = []
 ): Promise<pg.QueryResult<T>> {
+  if (rlsEnforced()) return rlsQuery<T>(text, params);
   return pool.query<T>(text, params as unknown[]);
 }
 
@@ -90,7 +145,7 @@ export async function queryOne<T extends pg.QueryResultRow = pg.QueryResultRow>(
   text: string,
   params: QueryParams = []
 ): Promise<T | null> {
-  const result = await pool.query<T>(text, params as unknown[]);
+  const result = await query<T>(text, params);
   return result.rows[0] ?? null;
 }
 
@@ -98,7 +153,7 @@ export async function queryAll<T extends pg.QueryResultRow = pg.QueryResultRow>(
   text: string,
   params: QueryParams = []
 ): Promise<T[]> {
-  const result = await pool.query<T>(text, params as unknown[]);
+  const result = await query<T>(text, params);
   return result.rows;
 }
 
@@ -110,13 +165,21 @@ export async function queryAll<T extends pg.QueryResultRow = pg.QueryResultRow>(
  * the transaction.
  */
 export async function transaction<T>(
-  fn: (client: pg.PoolClient) => Promise<T>
+  fn: (client: pg.PoolClient) => Promise<T>,
+  /** Set in BEGIN itself: SET TRANSACTION would have to come before any other statement. */
+  opts: { isolation?: "REPEATABLE READ READ ONLY" } = {},
 ): Promise<T> {
   const client = await pool.connect();
   let broken = false;
   try {
-    await client.query("BEGIN");
-    const result = await fn(client);
+    await client.query(opts.isolation ? `BEGIN ISOLATION LEVEL ${opts.isolation}` : "BEGIN");
+    // F-04: the workspace of this unit of work, for the transaction only. Statements inside go
+    // straight to the client, so the context is checked when the transaction starts.
+    const tenant = rlsEnforced() ? currentTenant() : null;
+    if (tenant) await client.query("SELECT set_config('legion.tenant_id', $1, true)", [tenant]);
+    // Without a workspace, a statement inside that reaches a protected table is refused as loudly as
+    // query() refuses it (the database would otherwise just return nothing).
+    const result = await fn(rlsEnforced() && !tenant ? guardedClient(client) : client);
     await client.query("COMMIT");
     return result;
   } catch (error) {
