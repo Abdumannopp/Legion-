@@ -121,6 +121,46 @@ export async function verifyAuditChain(tenantId: string): Promise<VerifyResult> 
   return { ok: true, events: rows.length, head: prev, broken_at: null, reason: null };
 }
 
+/**
+ * K-6 / K-1: tamper evidence that does not live in the same database.
+ *
+ * verifyAuditChain proves the events that are THERE were not changed. It cannot see events deleted
+ * from the END of the chain, or a whole chain rebuilt by someone who holds the key. A checkpoint — the
+ * (seq, hash) of the head on some earlier day, kept OFF this host — closes that: the chain must still
+ * contain that exact event. auditCheckpoints() writes one line per workspace to the log every 6 hours
+ * (ship the log off the host); GET /soc/audit/verify?checkpoint_seq=&checkpoint_hash= compares.
+ *
+ *   match    the event is still there with that hash
+ *   pruned   retention removed it; only the last pruned event (the anchor) can still be compared
+ *   missing  the chain is now shorter than the checkpoint: events were removed from the end
+ *   mismatch the event at that position has another hash: history was rewritten
+ */
+export type CheckpointStatus = "match" | "pruned" | "missing" | "mismatch";
+
+export async function checkCheckpoint(tenantId: string, seq: number, hash: string): Promise<CheckpointStatus> {
+  const row = (await queryAll<{ hash: string }>("SELECT hash FROM soc_audit_events WHERE tenant_id = $1 AND seq = $2", [tenantId, seq]))[0];
+  if (row) return row.hash === hash ? "match" : "mismatch";
+  const anchor = (await queryAll<{ anchor_hash: string; pruned_through_seq: string }>(
+    "SELECT anchor_hash, pruned_through_seq FROM chain_prune_anchors WHERE table_name = 'soc_audit_events' AND tenant_id = $1", [tenantId],
+  ))[0];
+  if (anchor && seq <= Number(anchor.pruned_through_seq)) {
+    if (seq === Number(anchor.pruned_through_seq)) return anchor.anchor_hash === hash ? "match" : "mismatch";
+    return "pruned";
+  }
+  return "missing";
+}
+
+/** The head of every workspace's chain, for the off-host checkpoint log. */
+export async function auditCheckpoints(): Promise<Array<{ tenant: string; seq: number; hash: string }>> {
+  const out: Array<{ tenant: string; seq: number; hash: string }> = [];
+  for (const { id } of await queryAll<{ id: string }>("SELECT id FROM tenants ORDER BY id")) {
+    const head = (await queryAll<{ seq: string; hash: string }>(
+      "SELECT seq, hash FROM soc_audit_events WHERE tenant_id = $1 ORDER BY seq DESC LIMIT 1", [id]))[0];
+    if (head) out.push({ tenant: id, seq: Number(head.seq), hash: head.hash });
+  }
+  return out;
+}
+
 export async function listAuditEvents(tenantId: string, opts: { category?: string; limit: number; beforeSeq?: number }) {
   const rows = await queryAll<Row>(
     `SELECT tenant_id, seq, id, at, category, event, actor, subject_type, subject_id, detail, key_id, prev_hash, hash

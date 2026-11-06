@@ -195,7 +195,7 @@ Rows: **Pilot safety** (live actions must be 0; emergency stop; API up; worker r
 - **API down:** `docker compose ps`; `docker compose logs --tail 100 backend` (a refusal to start prints the exact reason); `curl -s 127.0.0.1:8000/health`; if the database is down, §11 level B/C. The worker is in the same process.
 - **Approve / reject an action (no dashboard screen exists yet — R-5):** list `GET /approvals?status=pending`; read `GET /approvals/{id}` (action, risk, summary, digest); decide with `POST /approvals/{id}/decision {"decision":"approve","action_digest":"<from the request>","mfa_code":"123456"}` (the code is required for critical actions). Simulated actions then show `status: simulated`.
 - **Dead job:** `GET /runtime/status?status=dead`; the cause is in `last_error`; fix, then it can be re-proposed (jobs are never silently retried forever).
-- **Audit verify:** `GET /soc/audit/verify` → `{ok:true,events:N,head:…}`; store `head` off-host daily.
+- **Audit verify:** `GET /soc/audit/verify` → `{ok:true,events:N,head:…}`. The backend logs a `soc_audit_checkpoint` line (workspace, `seq`, `hash`) every 6 hours: **ship the container log off the host** (or copy one line a day). To check, pass a stored line back: `GET /soc/audit/verify?checkpoint_seq=<seq>&checkpoint_hash=<hash>` → `checkpoint.status` `match` (good), `pruned` (removed by retention), `missing` (events were cut from the end) or `mismatch` (history rewritten). The plain verify cannot see a cut end; the checkpoint can.
 
 ## 10. Kill switches (use the lowest level that stops the harm)
 

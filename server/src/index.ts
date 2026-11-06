@@ -33,6 +33,7 @@ import * as payments from "./payments.js";
 import { rejectNul } from "./text.js";
 import { accessLog } from "./access-log.js";
 import { runRetention } from "./retention.js";
+import { auditCheckpoints } from "./audit/events.js";
 import { autoDeleteExpired } from "./tenant-deletion.js";
 import { streamWorkspaceExport } from "./workspace-export.js";
 import { adminSeatFree, allows, classifyPrices, offeredPriceIds, planRefusal, pruneAlertsByPlan, resolvePlan, usageOf } from "./plan-limits.js";
@@ -2677,6 +2678,9 @@ if (process.env.NODE_ENV !== "test") {
       if (aged > 0) console.info(`Removed ${aged} resolved alert(s) older than their plan's retention.`);
       const erased = await autoDeleteExpired(undefined, (id, on) => console.info(`Workspace ${id} is locked for more than ${config.tenantAutoDeleteDays} days: its administrators were warned; it will be erased on ${on.toISOString().slice(0, 10)}.`));
       if (erased.length) console.info(`Erased ${erased.length} workspace(s) locked for more than ${config.tenantAutoDeleteDays} days.`);
+      // K-6: one line per workspace with the head of its SOC audit chain. Ship the log off this host;
+      // GET /soc/audit/verify?checkpoint_seq=&checkpoint_hash= then proves nothing was cut or rewritten since.
+      for (const c of await auditCheckpoints()) console.info(JSON.stringify({ t: new Date().toISOString(), msg: "soc_audit_checkpoint", tenant: c.tenant, seq: c.seq, hash: c.hash }));
       const kept = await runRetention();
       if (kept.payments || kept.audit) console.info(`Retention: ${kept.payments} payment check(s) deleted, ${kept.audit} audit entr${kept.audit === 1 ? "y" : "ies"} anonymised.`);
       const socRemoved = Object.values(kept.soc).reduce((a, b) => a + b, 0);

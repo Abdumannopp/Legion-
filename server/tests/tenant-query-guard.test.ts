@@ -75,6 +75,8 @@ const REVIEWED: Exception[] = [
     reason: "deadLetterAbandoned(): marks jobs whose worker died on their last attempt as dead, in every workspace; returns nothing" },
   { file: "actions/engine.ts", table: "tenants", match: /^SELECT id FROM tenants ORDER BY id$/i,
     reason: "reconcileApprovals(): visits every workspace once a minute; every query after it is scoped to that workspace (K-8)" },
+  { file: "audit/events.ts", table: "tenants", match: /^SELECT id FROM tenants ORDER BY id$/i,
+    reason: "auditCheckpoints(): visits every workspace to log its chain head off-host (K-6); every query after it is scoped" },
   { file: "memory/store.ts", table: "soc_memory", match: /^DELETE FROM soc_memory WHERE expires_at <= now\(\)$/i,
     reason: "pruneExpiredMemory(): retention sweep deleting expired entries in every workspace; returns a count only" },
   // --- found when the scan became recursive / the table list complete (Task 10, B-01)

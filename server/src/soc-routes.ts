@@ -22,7 +22,7 @@ import { listJobs, runtimeStatus } from "./runtime/queue.js";
 import { actionConnectors, connectedFor, connectorsFor } from "./integrations/action-connectors.js";
 import { addMemory, forget, listMemory, MAX_TTL_DAYS, MEMORY_KINDS, MemoryError, SUBJECT_TYPES, type SubjectType } from "./memory/store.js";
 import { learningSummary } from "./memory/learning.js";
-import { listAuditEvents, verifyAuditChain } from "./audit/events.js";
+import { checkCheckpoint, listAuditEvents, verifyAuditChain } from "./audit/events.js";
 import { socMetrics } from "./audit/metrics.js";
 
 type AuthedRequest = Request & { user?: User };
@@ -254,9 +254,17 @@ export function registerSocRoutes(app: Express, { requirePermission, parse, log,
   });
 
   app.get("/soc/audit/verify", requirePermission("audit:read"), async (req: AuthedRequest, res) => {
+    const cp = req.query.checkpoint_seq !== undefined || req.query.checkpoint_hash !== undefined
+      ? { seq: Number(req.query.checkpoint_seq), hash: String(req.query.checkpoint_hash ?? "") } : null;
+    if (cp && (!Number.isSafeInteger(cp.seq) || cp.seq < 1 || !/^[0-9a-f]{64}$/.test(cp.hash))) {
+      return res.status(422).json({ detail: "checkpoint_seq must be a positive integer and checkpoint_hash 64 hex characters" });
+    }
     const result = await verifyAuditChain(req.user!.tenant_id);
-    await log(req, "soc_audit.verified", "tenant", req.user!.tenant_id, result.ok ? `ok (${result.events})` : `BROKEN at ${result.broken_at}`);
-    res.json(result);
+    const checkpoint = cp ? await checkCheckpoint(req.user!.tenant_id, cp.seq, cp.hash) : undefined;
+    const tampered = checkpoint === "missing" || checkpoint === "mismatch";
+    await log(req, "soc_audit.verified", "tenant", req.user!.tenant_id,
+      (result.ok ? `ok (${result.events})` : `BROKEN at ${result.broken_at}`) + (checkpoint ? `; checkpoint ${cp!.seq}: ${checkpoint.toUpperCase()}` : ""));
+    res.json(checkpoint ? { ...result, ok: result.ok && !tampered, checkpoint: { seq: cp!.seq, status: checkpoint } } : result);
   });
 
   app.get("/soc/metrics", requirePermission("runtime:read"), async (req: AuthedRequest, res) => {
