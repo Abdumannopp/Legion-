@@ -511,8 +511,13 @@ describe("multiple browser tabs", () => {
     await ingest("m1");
     await until(() => [t1, t2, t3].every((t) => t.delivered().length === 1), 5_000, "all tabs to see m1");
 
+    // Held offline while m2/m3 arrive (as in "disconnect and reconnect"): with a 40 ms backoff it could
+    // otherwise reconnect first and get them live, and the test would then prove nothing about catching up.
+    t2.offline = true;
     for (const s of t2.sockets) s.terminate();
+    await until(() => !t2.client.state.connected, 3_000, "t2's drop to be noticed");
     await ingest("m2"); await ingest("m3");
+    t2.offline = false;
     await until(async () => (await Promise.all([t1, t2, t3].map((t) => t.converged()))).every(Boolean), 10_000, "all tabs to converge");
     for (const t of [t1, t2, t3]) expect(new Set(t.delivered()).size).toBe(t.delivered().length);
     expect(t1.events.every((e) => e.source === "live")).toBe(true); // the undisturbed tabs never needed a catch-up
