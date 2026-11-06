@@ -35,6 +35,7 @@ export const common = defineMessages({
     genericError: "Something went wrong. Please try again.",
     captchaUnavailable: "The security check could not load. Check your connection or turn off content blockers for this site, then reload the page.",
     networkError: "Can't reach the Legion server. Check your connection and try again.",
+    reopenReasonPrompt: "Why is this resolved alert being reopened? (kept in the audit log)",
     severity: {
       critical: "Critical",
       high: "High",

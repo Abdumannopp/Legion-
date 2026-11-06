@@ -323,7 +323,7 @@ jobs:
           curl -fsSL -o /tmp/gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tgz" | sha256sum -c -
           tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
-          /tmp/gitleaks git . --config .gitleaks.toml --redact --no-banner --exit-code 1 --report-format json --report-path gitleaks.json || { node -e 'for (const f of require("./gitleaks.json")) console.log(`${f.RuleID}  ${f.File}:${f.StartLine}  commit ${f.Commit.slice(0,8)}`)'; exit 1; }
+          /tmp/gitleaks git . --config .gitleaks.toml --gitleaks-ignore-path .gitleaksignore --redact --no-banner --exit-code 1 --report-format json --report-path gitleaks.json || { node -e 'for (const f of require("./gitleaks.json")) console.log(`${f.RuleID}  ${f.File}:${f.StartLine}  commit ${f.Commit.slice(0,8)}`)'; exit 1; }
           echo "no secrets found"
 
   # Static analysis of the application code. Gate: findings of severity ERROR. Semgrep is pinned.
@@ -338,7 +338,8 @@ jobs:
       - name: Scan
         run: |
           set -euo pipefail
-          python -m pip install --quiet "semgrep==1.100.0"
+          # semgrep 1.100 imports pkg_resources, which Python 3.12 no longer ships: setuptools provides it (pinned, <81 still has it).
+          python -m pip install --quiet "setuptools==75.8.0" "semgrep==1.100.0"
           semgrep scan --metrics=off --config p/typescript --config p/nodejs --config p/expressjs --config p/jwt \
             --exclude node_modules --exclude dist --exclude .next --exclude 'server/tests' --exclude 'packages/agent-identity/test' --exclude 'ops/tests' \
             --severity ERROR --error --json --output semgrep.json server/src packages/agent-identity/src frontend/app frontend/components frontend/lib ops/*.mjs \

@@ -542,7 +542,7 @@ export function updateAlertStatus(
 /** Asks why a resolved alert is being reopened. Null: the person cancelled (nothing is changed). */
 export function reopenReason(from: Alert["status"] | undefined, to: Alert["status"]): string | null | undefined {
   if (from !== "resolved" || to === "resolved") return undefined;
-  const r = typeof window === "undefined" ? null : window.prompt("Why is this resolved alert being reopened? (kept in the audit log)");
+  const r = typeof window === "undefined" ? null : window.prompt(translations[apiLocale].common.reopenReasonPrompt);
   return r && r.trim() ? r.trim().slice(0, 500) : null;
 }
 

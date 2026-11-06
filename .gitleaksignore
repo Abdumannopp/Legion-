@@ -1,0 +1,24 @@
+# Reviewed gitleaks findings (2026-11-06). Each line is ONE finding (commit:file:rule:line), so a new
+# secret in the same file is still reported. All are fake values written for tests or placeholders in docs:
+#  - veyra/test/messaging-tenant.test.js: test-only keys ('a-test-key-that-is-long-enough-…', a passphrase fixture)
+#  - DEPLOY-ONLINE.md: placeholder "TURNSTILE_SECRET_KEY=0x4AAAA...sizning-secret-key"
+#  - AI-AGENT-SECURITY-ASSESSMENT-2026-09.md, assessment/results.jsonl: credentialId/tokenId record UUIDs, not secrets
+#  - 05-secret-access.assess.ts: planted fakes ("sk-live-abc123", "FAKEFAKEFAKE" key) the assessment must refuse to read
+#  - red-team.ts: synthetic key "MIIredteamfake" that the detectors must flag
+# Do not add a line here without checking the value is fake; a real secret is rotated, not ignored.
+5f5f55fae12e7d32ba033c9b9e1ef12f91155cc4:veyra/test/messaging-tenant.test.js:generic-api-key:20
+5f5f55fae12e7d32ba033c9b9e1ef12f91155cc4:veyra/test/messaging-tenant.test.js:generic-api-key:86
+31bf95e9fbb3c65a443d1c7310c483bda2b9c92a:DEPLOY-ONLINE.md:generic-api-key:401
+bcbe9b52fa83135c0ee54e34f6153198b2fd518f:AI-AGENT-SECURITY-ASSESSMENT-2026-09.md:generic-api-key:349
+bcbe9b52fa83135c0ee54e34f6153198b2fd518f:packages/agent-identity/assessment/05-secret-access.assess.ts:private-key:114
+bcbe9b52fa83135c0ee54e34f6153198b2fd518f:packages/agent-identity/assessment/05-secret-access.assess.ts:generic-api-key:112
+bcbe9b52fa83135c0ee54e34f6153198b2fd518f:packages/agent-identity/assessment/results.jsonl:generic-api-key:38
+bcbe9b52fa83135c0ee54e34f6153198b2fd518f:packages/agent-identity/assessment/results.jsonl:generic-api-key:84
+bcbe9b52fa83135c0ee54e34f6153198b2fd518f:packages/agent-identity/assessment/results.jsonl:generic-api-key:150
+9621649350a5ebf1d79df95ebc500b61a2f89817:AI-AGENT-SECURITY-ASSESSMENT-2026-09.md:generic-api-key:349
+9621649350a5ebf1d79df95ebc500b61a2f89817:packages/agent-identity/assessment/05-secret-access.assess.ts:private-key:114
+9621649350a5ebf1d79df95ebc500b61a2f89817:packages/agent-identity/assessment/05-secret-access.assess.ts:generic-api-key:112
+9621649350a5ebf1d79df95ebc500b61a2f89817:packages/agent-identity/assessment/results.jsonl:generic-api-key:38
+9621649350a5ebf1d79df95ebc500b61a2f89817:packages/agent-identity/assessment/results.jsonl:generic-api-key:84
+9621649350a5ebf1d79df95ebc500b61a2f89817:packages/agent-identity/assessment/results.jsonl:generic-api-key:150
+bcbe9b52fa83135c0ee54e34f6153198b2fd518f:packages/agent-identity/src/skills/builtin/red-team.ts:private-key:66
