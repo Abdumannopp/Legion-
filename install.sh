@@ -53,6 +53,8 @@ WEBHOOK_SECRET="$(existing SECURITY_EVENT_WEBHOOK_SECRET)"
 ENCRYPTION_KEYS="$(existing LEGION_ENCRYPTION_KEYS)"
 # Recognises bank accounts in the payment check without storing them (HMAC key). Its own secret.
 PAYMENT_HASH_KEY="$(existing PAYMENT_HASH_KEY)"
+# The API's own database role (legion_app). The Postgres admin password stays with the database.
+APP_DB_PASSWORD="$(existing APP_DB_PASSWORD)"
 
 NEW_INSTALL=false
 if [[ -z "$JWT_SECRET" ]]; then
@@ -71,6 +73,16 @@ if [[ -z "$ENCRYPTION_KEYS" ]]; then
     # Installations made before this key existed: add it, keep everything else.
     printf 'LEGION_ENCRYPTION_KEYS=%s\n' "$ENCRYPTION_KEYS" >> "$ENV_FILE"
     ok "Added LEGION_ENCRYPTION_KEYS to $ENV_FILE"
+  fi
+fi
+
+if [[ -z "$APP_DB_PASSWORD" ]]; then
+  APP_DB_PASSWORD="$(random_hex 24)"
+  if [[ "$NEW_INSTALL" != true ]]; then
+    # Installations from before the API had its own role: db-provision creates it and moves the
+    # tables to it on the next start; the API stops using the database superuser.
+    printf 'APP_DB_PASSWORD=%s\n' "$APP_DB_PASSWORD" >> "$ENV_FILE"
+    ok "Added APP_DB_PASSWORD to $ENV_FILE (the API now uses its own least-privilege database role)"
   fi
 fi
 
@@ -146,6 +158,7 @@ POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 SECURITY_EVENT_WEBHOOK_SECRET=$WEBHOOK_SECRET
 LEGION_ENCRYPTION_KEYS=$ENCRYPTION_KEYS
 PAYMENT_HASH_KEY=$PAYMENT_HASH_KEY
+APP_DB_PASSWORD=$APP_DB_PASSWORD
 EOF
   chmod 600 "$ENV_FILE"
   ok "Wrote $ENV_FILE (permissions 600)"

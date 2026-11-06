@@ -63,6 +63,26 @@ jobs:
         run: |
           curl -fsS http://localhost:8000/health
           curl -fsS -o /dev/null http://localhost:3000/login
+      - name: The API holds a least-privilege database role, not the superuser (F-01)
+        run: |
+          set -euo pipefail
+          docker compose exec -T backend node -e '
+            const pg = require("pg");
+            (async () => {
+              const c = new pg.Client({ connectionString: process.env.DATABASE_URL }); await c.connect();
+              const r = (await c.query("SELECT current_user u, rolsuper s, rolcreaterole cr, rolcreatedb cd, rolbypassrls b, rolreplication rp FROM pg_roles WHERE rolname = current_user")).rows[0];
+              console.log(JSON.stringify(r));
+              if (r.u !== "legion_app" || r.s || r.cr || r.cd || r.b || r.rp) throw new Error("the API holds a privileged role");
+              for (const sql of ["SELECT pg_read_file(\u0027/etc/passwd\u0027)", "COPY (SELECT 1) TO PROGRAM \u0027true\u0027", "CREATE ROLE ci_probe"]) {
+                let denied = false; try { await c.query(sql); } catch { denied = true; }
+                if (!denied) throw new Error("allowed: " + sql);
+              }
+              await c.end();
+            })().catch((e) => { console.error(e.message); process.exit(1); });'
+          ! docker compose exec -T backend env | grep -q POSTGRES_PASSWORD
+          [ "$(docker compose exec -T postgres id -u)" = 70 ]
+          bash install.sh >/dev/null   # re-running is safe: secrets kept, role re-checked
+          curl -fsS http://localhost:8000/health
       - name: Logs on failure
         if: failure()
         run: docker compose logs --tail=200
@@ -497,7 +517,7 @@ jobs:
   release-gate:
     name: Release gate
     runs-on: ubuntu-latest
-    needs: [deploy-scripts, dependencies, agent-identity, app, security-assessment, pilot-stack, image-scan]
+    needs: [deploy-scripts, dependencies, agent-identity, app, security-assessment, pilot-stack, image-scan, docker]
     if: always()
     steps:
       - uses: actions/checkout@v4

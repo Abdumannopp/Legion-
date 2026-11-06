@@ -23,7 +23,7 @@ import * as connections from "./integrations/connections.js";
 import { ingestFindings } from "./integrations/ingest.js";
 import { wazuhAdapter } from "./integrations/wazuh.js";
 import { closePool, currentRoleAttributes, migrate, query, transaction } from "./db/pool.js";
-import { databaseRoleDecision } from "./db/provision.js";
+import { databaseRoleDecision, refusePrivilegedRole } from "./db/provision.js";
 import { SETUP_LOCK_KEY, consumeSetupToken, ensureSetupToken, removeSetupTokenFile, setupBanner } from "./setup-token.js";
 import { WEBHOOK_REJECTION_DETAIL, isKeyId } from "./webhook-auth.js";
 import { webhookFailureGate } from "./webhook-guard.js";
@@ -2592,8 +2592,10 @@ wss.on("connection", (ws: WebSocket & { tenantId?: string; grant?: realtime.Sock
 if (process.env.NODE_ENV !== "test") {
   // The API must not hold the database superuser (db/provision.ts). Refused
   // in production; said out loud everywhere else.
+  // F-01: refused everywhere except an explicit NODE_ENV=development (a laptop), not only in
+  // production — the default Docker install did not set NODE_ENV and ran as the superuser.
   const roleDecision = databaseRoleDecision(await currentRoleAttributes(), {
-    production: config.isProduction, allowPrivileged: config.dbAllowPrivilegedRole,
+    production: refusePrivilegedRole(process.env.NODE_ENV), allowPrivileged: config.dbAllowPrivilegedRole,
   });
   if (roleDecision.action === "refuse") throw new Error(`Refusing to start: ${roleDecision.message}`);
   if (roleDecision.action === "warn") console.warn(`Legion: WARNING — ${roleDecision.message}`);

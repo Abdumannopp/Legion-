@@ -153,3 +153,12 @@ export function databaseRoleDecision(
   if (env.production && !env.allowPrivileged) return { action: "refuse", message: `${message} (DB_ALLOW_PRIVILEGED_ROLE=true overrides this.)` };
   return { action: "warn", message };
 }
+
+/**
+ * F-01: when the boot check refuses a privileged role. Everywhere except an explicit
+ * NODE_ENV=development (a developer's laptop): the default Docker install sets no NODE_ENV, and
+ * treating "unset" as "development" is how it ran as the database superuser.
+ */
+export function refusePrivilegedRole(nodeEnv: string | undefined): boolean {
+  return nodeEnv !== "development";
+}

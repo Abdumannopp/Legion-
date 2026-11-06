@@ -98,6 +98,7 @@ POSTGRES_PASSWORD=$pgPassword
 SECURITY_EVENT_WEBHOOK_SECRET=$webhook
 LEGION_ENCRYPTION_KEYS=$keys
 PAYMENT_HASH_KEY=$(New-Hex 32)
+APP_DB_PASSWORD=$(New-Hex 24)
 "@
     [System.IO.File]::WriteAllText($envPath, $text, $utf8)
     Ok "Created .env with new secrets"
@@ -108,6 +109,11 @@ PAYMENT_HASH_KEY=$(New-Hex 32)
         $addition = "LEGION_ENCRYPTION_KEYS=k1:" + (New-Hex 32)
         [System.IO.File]::AppendAllText($envPath, "`r`n$addition`r`n", $utf8)
         Ok "Added LEGION_ENCRYPTION_KEYS to .env"
+    }
+    if ((Existing $lines "APP_DB_PASSWORD") -eq "") {
+        # Installations from before the API had its own database role: created on the next start.
+        [System.IO.File]::AppendAllText($envPath, "`r`nAPP_DB_PASSWORD=" + (New-Hex 24) + "`r`n", $utf8)
+        Ok "Added APP_DB_PASSWORD to .env (the API now uses its own least-privilege database role)"
     }
     if ((Existing $lines "PAYMENT_HASH_KEY") -eq "") {
         # Before this key existed, payment hashes used the webhook secret (or a built-in value).
