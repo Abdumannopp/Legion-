@@ -55,6 +55,11 @@ if (!/provenance\.mjs validate[^\n]*--require-clean[^\n]*--expect-commit/.test(t
   problems.push("the security job no longer validates the assessment run with --require-clean and --expect-commit");
 }
 
+// K-3: the pilot-stack job keeps scanning the shipped images and fails on a fixable CRITICAL.
+if (!/grype[^\n]*--only-fixed --fail-on critical/.test(text) || !/sha256sum -c/.test(text)) {
+  problems.push("the image vulnerability scan (grype --only-fixed --fail-on critical, checksum-verified) is missing");
+}
+
 // 3. The security suites keep every regression test for a fixed finding.
 //    Dropping one from `test:security` (or deleting its file) quietly removes
 //    the guard against that finding coming back.

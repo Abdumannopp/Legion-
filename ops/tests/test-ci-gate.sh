@@ -28,6 +28,9 @@ expect 1 "release gate not waiting for the security job is refused" node .github
 sed 's/^    needs: \[release-gate\]$/    needs: [app]/' "$wf" > "$tmp/release.yml"
 expect 1 "release not depending on the gate is refused" node .github/scripts/check-ci-gate.mjs "$tmp/release.yml"
 
+sed 's/ --fail-on critical//' "$wf" > "$tmp/noscan.yml"
+expect 1 "dropping the image-scan gate is refused" node .github/scripts/check-ci-gate.mjs "$tmp/noscan.yml"
+
 sed 's/ --require-clean//' "$wf" > "$tmp/lax.yml"
 expect 1 "dropping provenance checks from validation is refused" node .github/scripts/check-ci-gate.mjs "$tmp/lax.yml"
 
