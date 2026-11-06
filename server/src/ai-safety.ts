@@ -199,7 +199,7 @@ export function redactSecrets(input: string, extra: string[] = []): Redaction {
 
 // --- untrusted OUTPUT --------------------------------------------------------
 
-export type OutputFlag = "html_removed" | "image_removed" | "link_defanged" | "url_defanged" | "secret_redacted" | "truncated" | "hidden_characters";
+export type OutputFlag = "html_removed" | "image_removed" | "link_defanged" | "url_defanged" | "secret_redacted" | "truncated" | "hidden_characters" | "unverified_reference";
 
 export type OutputResult =
   | { ok: true; text: string; flags: OutputFlag[] }
@@ -315,4 +315,28 @@ export class Pseudonymizer {
   }
 
   get size(): number { return this.back.size; }
+}
+
+/**
+ * F-12: a model can name an address, a CVE or an ATT&CK technique that is not in what it was given —
+ * and an analyst acting on "block 203.0.113.9" or "patch CVE-2024-1234" acts on an invention. Every
+ * such reference that does not appear in the evidence is kept (it may still be useful) but marked
+ * in place, so it is never mistaken for a fact from the alert.
+ */
+export const UNVERIFIED_MARK = " [not in the alert — verify]";
+const REFERENCE = /\b(?:CVE-\d{4}-\d{4,7}|T\d{4}(?:\.\d{3})?|(?:\d{1,3}\.){3}\d{1,3}|(?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{0,4})\b/gi;
+
+export function markUnverifiedReferences(text: string, evidence: string): { text: string; unverified: string[] } {
+  const known = evidence.toLowerCase();
+  const unverified = new Set<string>();
+  const out = text.replace(REFERENCE, (ref: string) => {
+    const isAddress = /^[\d.]+$/.test(ref) || ref.includes(":");
+    if (isAddress && isIP(ref) === 0) return ref;              // a version number or a time, not an address
+    // A sub-technique counts as present when its parent is (T1110.001 when the alert says T1110).
+    const parent = /^T\d{4}\.\d{3}$/i.test(ref) ? ref.slice(0, 5) : null;
+    if (known.includes(ref.toLowerCase()) || (parent && known.includes(parent.toLowerCase()))) return ref;
+    unverified.add(ref);
+    return ref + UNVERIFIED_MARK;
+  });
+  return { text: out, unverified: [...unverified] };
 }

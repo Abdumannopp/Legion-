@@ -679,3 +679,28 @@ describe("a hosted workspace starts in strict mode", () => {
     expect(await mode(never)).toBe("standard");
   });
 });
+
+describe("F-12: references the model invents are marked, never passed off as facts", () => {
+  it("an address, CVE or technique not in the alert is marked in place; ones from the alert are left alone", async () => {
+    await alert("SEC-H1");
+    reply = () => ok("Source 198.51.100.7 hit web-01 (T1110, sub-technique T1110.001). Also block 203.0.113.9 and patch CVE-2024-12345 (T1059). Version 1.2.3 is fine.");
+    const r = await explain(analyst, "SEC-H1").expect(200);
+    const text: string = r.body.ai_explanation;
+    expect(text).toContain("198.51.100.7 hit");                                 // in the alert: unchanged
+    expect(text).toContain("T1110, sub-technique T1110.001)");                 // parent in the alert: unchanged
+    expect(text).toContain("203.0.113.9 [not in the alert — verify]");
+    expect(text).toContain("CVE-2024-12345 [not in the alert — verify]");
+    expect(text).toContain("T1059 [not in the alert — verify]");
+    expect(text).toContain("Version 1.2.3 is fine");                           // not an address
+    expect(text).not.toMatch(/198\.51\.100\.7 \[not in/);
+  });
+
+  it("copilot: references from the question or the listed alerts count as evidence; others are marked", async () => {
+    await alert("SEC-H2", { source_ip: "192.0.2.44" });
+    reply = () => ok("192.0.2.44 is the attacker; 10.9.8.7 is its relay.");
+    const r = await copilot(analyst, "Who is attacking from 192.0.2.44?").expect(200);
+    const answer = JSON.stringify(r.body);
+    expect(answer).toContain("192.0.2.44 is the attacker");
+    expect(answer).toContain("10.9.8.7 [not in the alert — verify]");
+  });
+});
