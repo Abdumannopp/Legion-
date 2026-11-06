@@ -91,6 +91,19 @@ role `legion_app` (no superuser, `CREATEROLE`, `CREATEDB`, `BYPASSRLS` or
 role; the Postgres admin password never reaches the API. An existing Docker
 installation is moved to it the next time you run `./install.sh`.
 
+**The API's role does not own the schema (Docker installs).** The tables,
+triggers and functions belong to `legion_owner`, a role that cannot log in.
+`db-provision` applies every migration as that owner and then gives
+`legion_app` data privileges only (read, insert, update, delete). So even with
+the API fully compromised, its database connection cannot `ALTER`, `DROP` or
+`TRUNCATE` a table, disable the audit log's append-only trigger, or delete
+audit history younger than 30 days: retention and workspace deletion run as
+fixed functions inside the database (`0008_bounded_erasure.sql`) that enforce
+those limits and always leave a record. At start the API checks that the
+schema is the one it expects and refuses to start otherwise — after an
+upgrade, `db-provision` (run by `./install.sh` / `docker compose up`) migrates
+first. `DB_ROLE_SPLIT=off` in `.env` returns to the single-role model.
+
 The API refuses to start if it is connected as a role with superuser,
 `CREATEROLE`, `CREATEDB`, `BYPASSRLS` or `REPLICATION` privileges — in every
 mode except an explicit `NODE_ENV=development`. `DB_ALLOW_PRIVILEGED_ROLE=true`
@@ -115,6 +128,11 @@ then point `DATABASE_URL` in `.env` at that role instead. It's idempotent and
 safe to re-run: it re-checks (and strips) any privilege that drifted since
 the last run, and on an existing installation transfers ownership of Legion's
 tables to the new role automatically.
+
+Add `DB_ROLE_SPLIT=on` to that command for the owner/runtime split described
+above (the schema then belongs to `legion_owner`). With the split, the API no
+longer migrates at start: run the same command again after every upgrade,
+before starting the new version.
 
 ### On Windows
 

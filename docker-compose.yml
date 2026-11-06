@@ -55,6 +55,9 @@ services:
       DATABASE_ADMIN_URL: postgresql://${POSTGRES_USER:-legion}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-legion}
       APP_DB_USER: legion_app
       APP_DB_PASSWORD: ${APP_DB_PASSWORD:?run ./install.sh (or start-docker.ps1) to generate secrets}
+      # F-02: the schema belongs to legion_owner (cannot log in); this step migrates as it,
+      # and legion_app gets data privileges only. The API checks the schema at boot.
+      DB_ROLE_SPLIT: ${DB_ROLE_SPLIT:-on}
     depends_on:
       postgres:
         condition: service_healthy

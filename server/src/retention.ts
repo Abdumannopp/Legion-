@@ -12,13 +12,12 @@
  * Hosted installations only: a self-hosted customer keeps their own data as long
  * as they choose. A workspace on a legal hold is skipped by every job.
  *
- * The audit log is append-only; these jobs are the deliberate, documented
- * erasure the database allows through its transaction-local switch.
+ * The audit log and the chained logs are append-only; these jobs are the deliberate,
+ * documented erasure, done by bounded functions inside the database (migration
+ * 0008_bounded_erasure.sql): never younger than 30 days, never a workspace on a legal hold.
  */
 import { config } from "./config.js";
-import { pool, query } from "./db/pool.js";
-
-const EMAIL = "[[:alnum:]._%+-]+@[[:alnum:].-]+";
+import { query } from "./db/pool.js";
 
 async function activeTenants(): Promise<string[]> {
   return (await query<{ id: string }>("SELECT id FROM tenants WHERE NOT legal_hold")).rows.map((r) => r.id);
@@ -41,27 +40,9 @@ export async function prunePaymentChecks(months = config.retentionPaymentMonths)
 export async function pseudonymiseAudit(months = config.retentionAuditMonths): Promise<number> {
   if (config.deploymentMode === "self-hosted" || !(months > 0)) return 0;
   let changed = 0;
+  // F-02: the database does it (migration 0008), never touching entries younger than 30 days.
   for (const tenantId of await activeTenants()) {
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      await client.query("SELECT set_config('legion.audit_erasure', 'on', true)");
-      const r = await client.query(
-        `UPDATE audit_log
-            SET user_email = NULL, ip_address = NULL,
-                detail = CASE WHEN detail IS NULL THEN NULL ELSE regexp_replace(detail, '${EMAIL}', '[removed]', 'g') END
-          WHERE tenant_id = $1 AND created_at < now() - make_interval(months => $2)
-            AND (user_email IS NOT NULL OR ip_address IS NOT NULL OR detail ~ '${EMAIL}')`,
-        [tenantId, Math.floor(months)],
-      );
-      await client.query("COMMIT");
-      changed += r.rowCount ?? 0;
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => {});
-      throw error;
-    } finally {
-      client.release();
-    }
+    changed += (await query<{ n: number }>("SELECT legion_pseudonymise_audit($1, $2) AS n", [tenantId, Math.floor(months)])).rows[0]!.n;
   }
   return changed;
 }
@@ -82,41 +63,11 @@ export const PRUNABLE_CHAINS = ["principal_audit_log", "firewall_decisions", "co
 export async function pruneAgentLogs(months = config.retentionAgentLogMonths): Promise<number> {
   if (config.deploymentMode === "self-hosted" || !(months > 0)) return 0;
   let removed = 0;
+  // F-02: legion_prune_chain (migration 0008) applies the rules above inside the database,
+  // with a 30-day floor; the API's role cannot delete chain rows itself.
   for (const tenantId of await activeTenants()) {
     for (const table of PRUNABLE_CHAINS) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        await client.query("SELECT set_config('legion.audit_erasure', 'on', true)");
-        await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`${table}:${tenantId}`]);
-        // First row still inside the window; if every row is old, keep the newest one.
-        const boundary = (await client.query<{ seq: string }>(
-          `SELECT coalesce(
-              (SELECT min(seq) FROM ${table} WHERE chain_key = $1 AND occurred_at >= now() - make_interval(months => $2)),
-              (SELECT max(seq) FROM ${table} WHERE chain_key = $1)) AS seq`,
-          [tenantId, Math.floor(months)])).rows[0]?.seq;
-        if (boundary) {
-          const last = (await client.query<{ seq: string; hash: string }>(
-            `SELECT seq, hash FROM ${table} WHERE chain_key = $1 AND seq < $2 ORDER BY seq DESC LIMIT 1`, [tenantId, boundary])).rows[0];
-          if (last) {
-            const r = await client.query(`DELETE FROM ${table} WHERE chain_key = $1 AND seq < $2`, [tenantId, boundary]);
-            await client.query(
-              `INSERT INTO chain_prune_anchors (table_name, tenant_id, anchor_hash, pruned_through_seq, pruned_rows)
-               VALUES ($1, $2, $3, $4, $5)
-               ON CONFLICT (table_name, tenant_id) DO UPDATE
-                 SET anchor_hash = EXCLUDED.anchor_hash, pruned_through_seq = EXCLUDED.pruned_through_seq,
-                     pruned_rows = chain_prune_anchors.pruned_rows + EXCLUDED.pruned_rows, pruned_at = now()`,
-              [table, tenantId, last.hash, last.seq, r.rowCount ?? 0]);
-            removed += r.rowCount ?? 0;
-          }
-        }
-        await client.query("COMMIT");
-      } catch (error) {
-        await client.query("ROLLBACK").catch(() => {});
-        throw error;
-      } finally {
-        client.release();
-      }
+      removed += (await query<{ n: number }>("SELECT legion_prune_chain($1, $2, $3) AS n", [table, tenantId, Math.floor(months)])).rows[0]!.n;
     }
   }
   return removed;
@@ -138,52 +89,11 @@ export const SOC_TERMINAL_ACTIONS = ["denied", "recorded", "rejected", "expired"
 export async function pruneSocHistory(days = config.retentionSocDays): Promise<Record<string, number>> {
   const counts: Record<string, number> = { soc_jobs: 0, action_requests: 0, approval_requests: 0, policy_decisions: 0, workflow_runs: 0, soc_audit_events: 0 };
   if (!(days > 0)) return counts;
-  const d = Math.floor(days);
+  // F-02: legion_prune_soc (migration 0008) does the whole pass in one transaction, with the
+  // finished states fixed in SQL and a 30-day floor.
   for (const tenantId of await activeTenants()) {
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      await client.query("SELECT set_config('legion.audit_erasure', 'on', true)");
-      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`soc_retention:${tenantId}`]);
-      const run = async (key: string, sql: string, params: unknown[] = []) => {
-        counts[key] = (counts[key] ?? 0) + ((await client.query(sql, [tenantId, d, ...params])).rowCount ?? 0);
-      };
-      await run("soc_jobs", "DELETE FROM soc_jobs WHERE tenant_id = $1 AND status IN ('done', 'dead') AND coalesce(finished_at, updated_at) < now() - make_interval(days => $2)");
-      // Cascades to action_events.
-      await run("action_requests", "DELETE FROM action_requests WHERE tenant_id = $1 AND status = ANY($3) AND created_at < now() - make_interval(days => $2)", [SOC_TERMINAL_ACTIONS]);
-      // Only approvals no surviving action still points at (the foreign key has no cascade, on purpose).
-      await run("approval_requests", `DELETE FROM approval_requests a WHERE a.tenant_id = $1 AND a.status <> 'pending' AND a.created_at < now() - make_interval(days => $2)
-          AND NOT EXISTS (SELECT 1 FROM action_requests r WHERE r.tenant_id = a.tenant_id AND r.approval_id = a.id)`);
-      await run("policy_decisions", "DELETE FROM policy_decisions WHERE tenant_id = $1 AND created_at < now() - make_interval(days => $2)");
-      await run("workflow_runs", "DELETE FROM workflow_runs WHERE tenant_id = $1 AND status <> 'running' AND coalesce(finished_at, created_at) < now() - make_interval(days => $2)");
-
-      // Audit events: the first event still inside the window; if all are old, keep the newest one.
-      const boundary = (await client.query<{ seq: string | null }>(
-        `SELECT coalesce(
-            (SELECT min(seq) FROM soc_audit_events WHERE tenant_id = $1 AND at >= now() - make_interval(days => $2)),
-            (SELECT max(seq) FROM soc_audit_events WHERE tenant_id = $1)) AS seq`, [tenantId, d])).rows[0]?.seq;
-      if (boundary) {
-        const last = (await client.query<{ seq: string; hash: string }>(
-          "SELECT seq, hash FROM soc_audit_events WHERE tenant_id = $1 AND seq < $2 ORDER BY seq DESC LIMIT 1", [tenantId, boundary])).rows[0];
-        if (last) {
-          const r = await client.query("DELETE FROM soc_audit_events WHERE tenant_id = $1 AND seq < $2", [tenantId, boundary]);
-          await client.query(
-            `INSERT INTO chain_prune_anchors (table_name, tenant_id, anchor_hash, pruned_through_seq, pruned_rows)
-             VALUES ('soc_audit_events', $1, $2, $3, $4)
-             ON CONFLICT (table_name, tenant_id) DO UPDATE
-               SET anchor_hash = EXCLUDED.anchor_hash, pruned_through_seq = EXCLUDED.pruned_through_seq,
-                   pruned_rows = chain_prune_anchors.pruned_rows + EXCLUDED.pruned_rows, pruned_at = now()`,
-            [tenantId, last.hash, last.seq, r.rowCount ?? 0]);
-          counts.soc_audit_events! += r.rowCount ?? 0;
-        }
-      }
-      await client.query("COMMIT");
-    } catch (error) {
-      await client.query("ROLLBACK").catch(() => {});
-      throw error;
-    } finally {
-      client.release();
-    }
+    const r = (await query<{ c: Record<string, number> }>("SELECT legion_prune_soc($1, $2) AS c", [tenantId, Math.floor(days)])).rows[0]!.c;
+    for (const [k, n] of Object.entries(r)) counts[k] = (counts[k] ?? 0) + n;
   }
   return counts;
 }

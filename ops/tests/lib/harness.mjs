@@ -72,10 +72,11 @@ export async function sql(admin, db, text, params = []) {
 /** A fresh database and the API's own (non-superuser) role, via the real provision-cli. */
 export async function freshDatabase(admin, prefix) {
   const id = randomBytes(4).toString("hex");
-  const db = `${prefix}_${id}`, role = `${prefix}_app_${id}`, password = randomBytes(24).toString("hex");
+  const db = `${prefix}_${id}`, role = `${prefix}_app_${id}`, owner = `${prefix}_own_${id}`, password = randomBytes(24).toString("hex");
   await sql(admin, "postgres", `CREATE DATABASE "${db}"`);
   const r = spawnSync("node", [join(REPO, "server", "dist", "db", "provision-cli.js")], {
-    env: { PATH: process.env.PATH, DATABASE_ADMIN_URL: dbUrl(admin, db), APP_DB_USER: role, APP_DB_PASSWORD: password }, encoding: "utf8",
+    // F-02: as the pilot runs — the schema belongs to a separate owner role, migrated here.
+    env: { PATH: process.env.PATH, DATABASE_ADMIN_URL: dbUrl(admin, db), APP_DB_USER: role, APP_DB_PASSWORD: password, DB_ROLE_SPLIT: "on", DB_OWNER_ROLE: owner }, encoding: "utf8",
   });
   if (r.status !== 0) throw new Error(`provision failed: ${r.stderr || r.stdout}`);
   return {
@@ -84,6 +85,7 @@ export async function freshDatabase(admin, prefix) {
       await sql(admin, "postgres", "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", [db]).catch(() => {});
       await sql(admin, "postgres", `DROP DATABASE IF EXISTS "${db}"`).catch(() => {});
       await sql(admin, "postgres", `DROP ROLE IF EXISTS "${role}"`).catch(() => {});
+      await sql(admin, "postgres", `DROP ROLE IF EXISTS "${owner}"`).catch(() => {});
     },
   };
 }

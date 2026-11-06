@@ -35,6 +35,7 @@ const id = randomBytes(4).toString("hex");
 const DB = `legion_pilot_${id}`;
 const DB_RESTORED = `legion_pilot_dr_${id}`;
 const APP_USER = `legion_app_${id}`;
+const OWNER_ROLE = `legion_own_${id}`;
 const hex = () => randomBytes(32).toString("hex");
 const SECRETS = { JWT_SECRET: hex(), SOC_AUDIT_KEY: hex(), PAYMENT_HASH_KEY: hex(), HEALTH_METRICS_TOKEN: hex(), APP_PW: hex(), LEGION_ENCRYPTION_KEYS: `k1:${hex()}` };
 const WORK = mkdtempSync(join(tmpdir(), "legion-rehearsal-"));
@@ -135,7 +136,7 @@ async function main() {
 
   await step("create an empty database and provision the least-privilege role (db/provision-cli)", async () => {
     await adminPg("postgres", (c) => c.query(`CREATE DATABASE ${DB}`));
-    const r = spawnSync("node", [join(ROOT, "server", "dist", "db", "provision-cli.js")], { env: { PATH: process.env.PATH, DATABASE_ADMIN_URL: adminUrlFor(DB), APP_DB_USER: APP_USER, APP_DB_PASSWORD: SECRETS.APP_PW }, encoding: "utf8" });
+    const r = spawnSync("node", [join(ROOT, "server", "dist", "db", "provision-cli.js")], { env: { PATH: process.env.PATH, DATABASE_ADMIN_URL: adminUrlFor(DB), APP_DB_USER: APP_USER, APP_DB_PASSWORD: SECRETS.APP_PW, DB_ROLE_SPLIT: "on", DB_OWNER_ROLE: OWNER_ROLE }, encoding: "utf8" });
     must(r.status === 0, `provision-cli exit ${r.status}: ${r.stderr}`);
     return r.stdout.trim();
   });
@@ -418,7 +419,7 @@ async function main() {
     await adminPg("postgres", (c) => c.query(`CREATE DATABASE ${DB}`));
     const r = spawnSync("bash", [join(ROOT, "ops", "restore.sh"), backupFile, "--yes"], { encoding: "utf8", env: { PATH: process.env.PATH, DATABASE_URL: adminUrlFor(DB), BACKUP_AGE_IDENTITY_FILE: ageKeyFile } });
     must(r.status === 0, `restore.sh exit ${r.status}: ${(r.stdout + r.stderr).slice(-500)}`);
-    const pr = spawnSync("node", [join(ROOT, "server", "dist", "db", "provision-cli.js")], { env: { PATH: process.env.PATH, DATABASE_ADMIN_URL: adminUrlFor(DB), APP_DB_USER: APP_USER, APP_DB_PASSWORD: SECRETS.APP_PW }, encoding: "utf8" });
+    const pr = spawnSync("node", [join(ROOT, "server", "dist", "db", "provision-cli.js")], { env: { PATH: process.env.PATH, DATABASE_ADMIN_URL: adminUrlFor(DB), APP_DB_USER: APP_USER, APP_DB_PASSWORD: SECRETS.APP_PW, DB_ROLE_SPLIT: "on", DB_OWNER_ROLE: OWNER_ROLE }, encoding: "utf8" });
     must(pr.status === 0, `re-provision: ${pr.stderr}`);
     startServer(); await waitHealthy();
     results.measurements.rto_ms = Math.round(performance.now() - disasterAt);
@@ -494,6 +495,7 @@ async function cleanup() {
   await adminPg("postgres", async (c) => {
     await c.query(`DROP OWNED BY ${APP_USER}`).catch(() => {});
     await c.query(`DROP ROLE IF EXISTS ${APP_USER}`);
+    await c.query(`DROP ROLE IF EXISTS ${OWNER_ROLE}`);
   }).catch(() => {});
   try { copyFileSync(join(WORK, "server.log"), join(OUT, "rehearsal-server.log.tmp")); const t = readFileSync(join(OUT, "rehearsal-server.log.tmp"), "utf8").replace(/(postgres(ql)?|https?):\/\/[^@\s]*@/g, "$1://***@"); writeFileSync(join(OUT, "rehearsal-server.log"), t.split("\n").slice(-400).join("\n")); rmSync(join(OUT, "rehearsal-server.log.tmp")); } catch { /* no log */ }
   rmSync(WORK, { recursive: true, force: true });

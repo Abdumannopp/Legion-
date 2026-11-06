@@ -20,6 +20,8 @@ import type pg from "pg";
  */
 
 export const DEFAULT_APP_ROLE = "legion_app";
+/** F-02: the role that owns the schema when the owner/runtime split is on. It cannot log in. */
+export const DEFAULT_OWNER_ROLE = "legion_owner";
 const IDENTIFIER = /^[a-z_][a-z0-9_]{0,62}$/;
 
 /** A string literal Postgres will accept where a bind parameter is not allowed (ALTER ROLE … PASSWORD). */
@@ -40,15 +42,21 @@ export interface ProvisionResult {
   transferred: string[];
   /** Role memberships that were removed from the app role. */
   revokedMemberships: string[];
+  /** The role that now owns the schema: the app role itself, or the separate owner role (split). */
+  owner: string;
 }
 
 export async function provisionAppRole(
   admin: pg.ClientBase,
-  opts: { appUser?: string; appPassword: string; schema?: string },
+  opts: { appUser?: string; appPassword: string; schema?: string; split?: boolean; ownerRole?: string },
 ): Promise<ProvisionResult> {
   const role = opts.appUser ?? DEFAULT_APP_ROLE;
   const schema = opts.schema ?? "public";
+  const split = opts.split === true;
+  const owner = split ? (opts.ownerRole ?? DEFAULT_OWNER_ROLE) : role;
   if (!IDENTIFIER.test(role)) throw new Error(`Refusing unsafe role name ${JSON.stringify(role)}`);
+  if (!IDENTIFIER.test(owner)) throw new Error(`Refusing unsafe role name ${JSON.stringify(owner)}`);
+  if (split && owner === role) throw new Error("The owner role must differ from the app role.");
   if (!IDENTIFIER.test(schema)) throw new Error(`Refusing unsafe schema name ${JSON.stringify(schema)}`);
   if (typeof opts.appPassword !== "string" || opts.appPassword.length < 16) {
     throw new Error("APP_DB_PASSWORD must be at least 16 characters (openssl rand -hex 24 generates one).");
@@ -76,7 +84,24 @@ export async function provisionAppRole(
 
     const db = (await admin.query<{ db: string }>("SELECT current_database() AS db")).rows[0]!.db;
     await admin.query(`GRANT CONNECT, TEMPORARY ON DATABASE ${q(db)} TO ${q(role)}`);
-    await admin.query(`GRANT USAGE, CREATE ON SCHEMA ${q(schema)} TO ${q(role)}`);
+    if (split) {
+      // The owner: holds the schema, cannot log in, and nobody (the app role least of all) is a member.
+      const ownerExists = (await admin.query("SELECT 1 FROM pg_roles WHERE rolname = $1", [owner])).rowCount! > 0;
+      if (!ownerExists) await admin.query(`CREATE ROLE ${q(owner)}`);
+      await admin.query(`ALTER ROLE ${q(owner)} WITH NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`);
+      const members = (await admin.query<{ rolname: string }>(
+        "SELECT u.rolname FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid JOIN pg_roles u ON u.oid = m.member WHERE g.rolname = $1 AND NOT u.rolsuper",
+        [owner],
+      )).rows.map((r) => r.rolname);
+      for (const m of members) await admin.query(`REVOKE ${q(owner)} FROM ${q(m)}`);
+      await admin.query(`GRANT USAGE, CREATE ON SCHEMA ${q(schema)} TO ${q(owner)}`);
+      // The runtime may use the schema, not add to it.
+      await admin.query(`GRANT USAGE ON SCHEMA ${q(schema)} TO ${q(role)}`);
+      await admin.query(`REVOKE CREATE ON SCHEMA ${q(schema)} FROM ${q(role)}`);
+      await admin.query(`REVOKE CREATE ON SCHEMA ${q(schema)} FROM PUBLIC`);
+    } else {
+      await admin.query(`GRANT USAGE, CREATE ON SCHEMA ${q(schema)} TO ${q(role)}`);
+    }
 
     // Existing installs: tables, views, sequences, functions and types the
     // superuser created. Extension members are left alone. A sequence owned
@@ -90,11 +115,11 @@ export async function provisionAppRole(
           AND NOT (c.relkind = 'r' AND c.relispartition)
           AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = c.oid AND d.classid = 'pg_class'::regclass AND d.deptype IN ('e', 'a', 'i'))
         ORDER BY c.relkind, c.relname`,
-      [schema, role],
+      [schema, owner],
     )).rows;
     const verb: Record<string, string> = { r: "TABLE", p: "TABLE", f: "FOREIGN TABLE", v: "VIEW", m: "MATERIALIZED VIEW", S: "SEQUENCE" };
     for (const r of relations) {
-      await admin.query(`ALTER ${verb[r.kind]} ${q(schema)}.${q(r.name)} OWNER TO ${q(role)}`);
+      await admin.query(`ALTER ${verb[r.kind]} ${q(schema)}.${q(r.name)} OWNER TO ${q(owner)}`);
       transferred.push(`${verb[r.kind]!.toLowerCase()} ${r.name}`);
     }
     const routines = (await admin.query<{ name: string; args: string }>(
@@ -102,10 +127,10 @@ export async function provisionAppRole(
          FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
         WHERE n.nspname = $1 AND pg_get_userbyid(p.proowner) <> $2
           AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.classid = 'pg_proc'::regclass AND d.deptype = 'e')`,
-      [schema, role],
+      [schema, owner],
     )).rows;
     for (const r of routines) {
-      await admin.query(`ALTER ROUTINE ${q(schema)}.${q(r.name)}(${r.args}) OWNER TO ${q(role)}`);
+      await admin.query(`ALTER ROUTINE ${q(schema)}.${q(r.name)}(${r.args}) OWNER TO ${q(owner)}`);
       transferred.push(`function ${r.name}`);
     }
     const types = (await admin.query<{ name: string }>(
@@ -113,15 +138,64 @@ export async function provisionAppRole(
         WHERE n.nspname = $1 AND t.typtype IN ('e', 'd', 'c') AND (t.typrelid = 0 OR (SELECT relkind FROM pg_class WHERE oid = t.typrelid) = 'c')
           AND pg_get_userbyid(t.typowner) <> $2
           AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = t.oid AND d.classid = 'pg_type'::regclass AND d.deptype = 'e')`,
-      [schema, role],
+      [schema, owner],
     )).rows;
     for (const t of types) {
-      await admin.query(`ALTER TYPE ${q(schema)}.${q(t.name)} OWNER TO ${q(role)}`);
+      await admin.query(`ALTER TYPE ${q(schema)}.${q(t.name)} OWNER TO ${q(owner)}`);
       transferred.push(`type ${t.name}`);
     }
 
     await admin.query("COMMIT");
-    return { role, created: !exists, transferred, revokedMemberships: memberships };
+    return { role, created: !exists, transferred, revokedMemberships: memberships, owner };
+  } catch (err) {
+    await admin.query("ROLLBACK").catch(() => {});
+    throw err;
+  }
+}
+
+/**
+ * Tables the runtime may read but never write with the split: the schema bookkeeping, the
+ * erasure context, and what the bounded erasure functions record (anchors, tombstones).
+ * Readable, so the backup (pg_dump as the API's role, ops/backup.sh) still covers them.
+ */
+export const RUNTIME_READ_ONLY_TABLES = ["legion_schema_state", "legion_migrations", "legion_erasure_context", "chain_prune_anchors", "tenant_deletions"] as const;
+/** Functions only the bounded erasure functions (running as the owner) may call. */
+export const OWNER_ONLY_FUNCTIONS = ["legion_erasure_begin(text)", "legion_erasure_end()"] as const;
+
+/**
+ * F-02, after the owner has migrated the schema: what the runtime role may do with it. Data
+ * (SELECT/INSERT/UPDATE/DELETE — the append-only triggers still refuse changes to audit rows),
+ * sequences, and EXECUTE on functions (the bounded erasure functions among them). Never
+ * TRUNCATE, REFERENCES or TRIGGER, and no ownership, so no ALTER, DROP or DISABLE TRIGGER.
+ * Re-run after every migration; it also strips privileges added by hand.
+ */
+export async function grantRuntimePrivileges(admin: pg.ClientBase, opts: { appUser?: string; ownerRole?: string; schema?: string } = {}): Promise<void> {
+  const role = opts.appUser ?? DEFAULT_APP_ROLE;
+  const owner = opts.ownerRole ?? DEFAULT_OWNER_ROLE;
+  const schema = opts.schema ?? "public";
+  for (const r of [role, owner, schema]) if (!IDENTIFIER.test(r)) throw new Error(`Refusing unsafe name ${JSON.stringify(r)}`);
+  const s = q(schema);
+  await admin.query("BEGIN");
+  try {
+    await admin.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${s} FROM ${q(role)}`);
+    await admin.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${s} TO ${q(role)}`);
+    for (const t of RUNTIME_READ_ONLY_TABLES) {
+      if ((await admin.query("SELECT to_regclass($1) AS r", [`${schema}.${t}`])).rows[0].r) {
+        await admin.query(`REVOKE INSERT, UPDATE, DELETE ON ${s}.${q(t)} FROM ${q(role)}`);
+      }
+    }
+    await admin.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${s} FROM ${q(role)}`);
+    await admin.query(`GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA ${s} TO ${q(role)}`);
+    await admin.query(`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ${s} TO ${q(role)}`);
+    for (const f of OWNER_ONLY_FUNCTIONS) {
+      if ((await admin.query("SELECT to_regprocedure($1) AS p", [`${schema}.${f}`])).rows[0].p) {
+        await admin.query(`REVOKE ALL ON FUNCTION ${s}.${f} FROM PUBLIC, ${q(role)}`);
+      }
+    }
+    // Objects a later migration creates get the same data privileges until this runs again.
+    await admin.query(`ALTER DEFAULT PRIVILEGES FOR ROLE ${q(owner)} IN SCHEMA ${s} GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${q(role)}`);
+    await admin.query(`ALTER DEFAULT PRIVILEGES FOR ROLE ${q(owner)} IN SCHEMA ${s} GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO ${q(role)}`);
+    await admin.query("COMMIT");
   } catch (err) {
     await admin.query("ROLLBACK").catch(() => {});
     throw err;

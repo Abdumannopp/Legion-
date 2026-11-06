@@ -9,9 +9,9 @@
  *  - leaves a tombstone (tenant_deletions) with no personal data, and appends a
  *    line to DELETION_LEDGER_FILE so a restored backup can replay the deletion.
  *
- * The audit logs are append-only; the deletion transaction sets the
- * transaction-local switch (legion.audit_erasure) the database requires, drops
- * the workspace's whole chain as a unit, and nothing else can.
+ * The audit logs are append-only; the erasure runs inside the database as
+ * legion_erase_tenant (migration 0008), which drops the workspace's whole
+ * chains as a unit and records the tombstone in the same transaction.
  */
 import { appendFileSync, readFileSync, existsSync } from "node:fs";
 import { config } from "./config.js";
@@ -71,42 +71,10 @@ export async function deleteTenant(
   if (plan.blockers.length) throw new Error(`Refused: ${plan.blockers.join("; ")}`);
   if (opts.confirmName !== undefined && opts.confirmName !== plan.name) throw new Error("Refused: the confirmation does not match the workspace name");
 
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    await client.query("SELECT set_config('legion.audit_erasure', 'on', true)");
-    // Tables without a foreign key to tenants (the agent layer) and any with one: try each,
-    // and retry the ones a foreign key held back until a pass makes no progress.
-    let pending = await tenantTables(client);
-    while (pending.length) {
-      const stuck: string[] = [];
-      for (const table of pending) {
-        await client.query("SAVEPOINT t");
-        try {
-          await client.query(`DELETE FROM ${ident(table)} WHERE tenant_id::text = $1`, [tenantId]);
-          await client.query("RELEASE SAVEPOINT t");
-        } catch (error) {
-          await client.query("ROLLBACK TO SAVEPOINT t");
-          if ((error as { code?: string }).code !== "23503") throw error;
-          stuck.push(table);
-        }
-      }
-      if (stuck.length === pending.length) break;
-      pending = stuck;
-    }
-    await client.query("DELETE FROM users WHERE tenant_id = $1", [tenantId]);
-    await client.query("DELETE FROM tenants WHERE id = $1", [tenantId]);
-    await client.query(
-      "INSERT INTO tenant_deletions (tenant_id, deleted_by, reason, counts) VALUES ($1, $2, $3, $4)",
-      [tenantId, opts.by.slice(0, 80), opts.reason?.slice(0, 300) ?? null, JSON.stringify(plan.counts)],
-    );
-    await client.query("COMMIT");
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => {});
-    throw error;
-  } finally {
-    client.release();
-  }
+  // F-02: the erasure itself runs inside the database (legion_erase_tenant, migration 0008):
+  // one transaction, refused under a legal hold unless forced, always recorded in tenant_deletions.
+  await query("SELECT legion_erase_tenant($1, $2, $3, $4, $5)",
+    [tenantId, opts.by.slice(0, 80), opts.reason?.slice(0, 300) ?? null, JSON.stringify(plan.counts), opts.force === true]);
 
   // After the commit: a ledger line for a workspace that still existed would make a replay delete it.
   const file = opts.ledgerFile === undefined ? config.deletionLedgerFile : opts.ledgerFile;

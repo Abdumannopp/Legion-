@@ -109,7 +109,9 @@ describe("growth budget (measured)", () => {
     const perAction = Math.round((await size() - before) / N);
     // Does any retention job touch these tables?  Read the code, not the docs.
     const { readFileSync } = await import("node:fs");
-    const retention = readFileSync(join(__dirname, "..", "src", "retention.ts"), "utf8") + readFileSync(join(__dirname, "..", "src", "plan-limits.ts"), "utf8");
+    // F-02: the SOC pass itself runs in the database (legion_prune_soc, migration 0008).
+    const retention = readFileSync(join(__dirname, "..", "src", "retention.ts"), "utf8") + readFileSync(join(__dirname, "..", "src", "plan-limits.ts"), "utf8")
+      + readFileSync(join(__dirname, "..", "src", "db", "migrations", "0008_bounded_erasure.sql"), "utf8");
     const pruned = ["action_requests", "action_events", "policy_decisions", "soc_audit_events", "soc_jobs", "approval_requests", "workflow_runs"].filter((t) => retention.includes(t));
     writeFileSync(join(OUT, "growth.json"), JSON.stringify({ actions: N, bytes_per_action_incl_indexes: perAction, rows, tables_pruned_by_retention: pruned, request_limit_per_minute: config.apiRateLimit,
       worst_case_per_client_per_day_mb: Math.round((perAction * config.apiRateLimit * 60 * 24) / 1_048_576) }, null, 2));

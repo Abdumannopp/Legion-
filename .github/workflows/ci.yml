@@ -73,10 +73,14 @@ jobs:
               const r = (await c.query("SELECT current_user u, rolsuper s, rolcreaterole cr, rolcreatedb cd, rolbypassrls b, rolreplication rp FROM pg_roles WHERE rolname = current_user")).rows[0];
               console.log(JSON.stringify(r));
               if (r.u !== "legion_app" || r.s || r.cr || r.cd || r.b || r.rp) throw new Error("the API holds a privileged role");
-              for (const sql of ["SELECT pg_read_file(\u0027/etc/passwd\u0027)", "COPY (SELECT 1) TO PROGRAM \u0027true\u0027", "CREATE ROLE ci_probe"]) {
+              for (const sql of ["SELECT pg_read_file(\u0027/etc/passwd\u0027)", "COPY (SELECT 1) TO PROGRAM \u0027true\u0027", "CREATE ROLE ci_probe",
+                                 "TRUNCATE audit_log", "ALTER TABLE soc_audit_events DISABLE TRIGGER soc_audit_events_append_only", "CREATE TABLE ci_probe (x int)"]) {
                 let denied = false; try { await c.query(sql); } catch { denied = true; }
                 if (!denied) throw new Error("allowed: " + sql);
               }
+              // F-02: the owner/runtime split — the API role owns no table, so it cannot alter or drop one.
+              const owned = (await c.query("SELECT count(*)::int n FROM pg_class c JOIN pg_namespace s ON s.oid = c.relnamespace WHERE s.nspname = \u0027public\u0027 AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)")).rows[0].n;
+              if (owned !== 0) throw new Error("the API role owns " + owned + " relation(s)");
               await c.end();
             })().catch((e) => { console.error(e.message); process.exit(1); });'
           ! docker compose exec -T backend env | grep -q POSTGRES_PASSWORD
@@ -193,10 +197,14 @@ jobs:
               const r = (await c.query("SELECT current_user u, rolsuper s, rolcreaterole cr, rolcreatedb cd, rolbypassrls b, rolreplication rp FROM pg_roles WHERE rolname = current_user")).rows[0];
               console.log(JSON.stringify(r));
               if (r.u !== "legion_app" || r.s || r.cr || r.cd || r.b || r.rp) throw new Error("role has elevated attributes");
-              for (const sql of ["SELECT pg_read_file(\u0027/etc/passwd\u0027)", "COPY (SELECT 1) TO PROGRAM \u0027true\u0027", "CREATE ROLE ci_probe"]) {
+              for (const sql of ["SELECT pg_read_file(\u0027/etc/passwd\u0027)", "COPY (SELECT 1) TO PROGRAM \u0027true\u0027", "CREATE ROLE ci_probe",
+                                 "TRUNCATE audit_log", "ALTER TABLE soc_audit_events DISABLE TRIGGER soc_audit_events_append_only", "CREATE TABLE ci_probe (x int)"]) {
                 let denied = false; try { await c.query(sql); } catch { denied = true; }
                 if (!denied) throw new Error("allowed: " + sql);
               }
+              // F-02: the owner/runtime split — the API role owns no table, so it cannot alter or drop one.
+              const owned = (await c.query("SELECT count(*)::int n FROM pg_class c JOIN pg_namespace s ON s.oid = c.relnamespace WHERE s.nspname = \u0027public\u0027 AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)")).rows[0].n;
+              if (owned !== 0) throw new Error("the API role owns " + owned + " relation(s)");
               const m = (await c.query("SELECT count(*)::int n FROM legion_migrations")).rows[0].n; console.log("migrations applied:", m);
               await c.end();
             })().catch((e) => { console.error(e.message); process.exit(1); });'

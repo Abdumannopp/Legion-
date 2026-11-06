@@ -681,15 +681,36 @@ CREATE INDEX IF NOT EXISTS payment_checks_lookup_idx ON payment_checks (tenant_i
 
 -- Audit P2-12: the audit log is append-only. An UPDATE or DELETE — a bug, or SQL
 -- injection reaching DML — is refused by the database itself. A deliberate,
--- documented erasure (GDPR, tenant offboarding) must set
--- legion.audit_erasure = 'on' in its own transaction, so it cannot happen by
--- accident. TRUNCATE stays available to the owner for test and recovery tooling;
--- an attacker able to run DDL as the owner is out of this trigger's reach
--- (see audit P1-11: role split).
+-- documented erasure (GDPR pseudonymisation, tenant offboarding) goes through
+-- the bounded functions of migration 0008, which open an erasure context; see
+-- legion_erasure_allowed() in the agent schema for the full rule (F-02).
+-- TRUNCATE stays available to the owner for test and recovery tooling; with the
+-- owner/runtime split (db/provision.ts) the API's role is not the owner.
+--
+-- The erasure context: one row per transaction that is inside a bounded erasure
+-- function. Written only by legion_erasure_begin/end, which run as the owner;
+-- the API's role has no privilege on it.
+CREATE TABLE IF NOT EXISTS legion_erasure_context (
+  txid      bigint      PRIMARY KEY,
+  purpose   text        NOT NULL CHECK (length(purpose) <= 40),
+  opened_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE OR REPLACE FUNCTION legion_erasure_begin(p_purpose text) RETURNS void
+LANGUAGE sql SET search_path = public, pg_temp AS $$
+  INSERT INTO legion_erasure_context (txid, purpose) VALUES (txid_current(), p_purpose)
+  ON CONFLICT (txid) DO UPDATE SET purpose = EXCLUDED.purpose
+$$;
+CREATE OR REPLACE FUNCTION legion_erasure_end() RETURNS void
+LANGUAGE sql SET search_path = public, pg_temp AS $$
+  DELETE FROM legion_erasure_context WHERE txid = txid_current()
+$$;
+REVOKE ALL ON FUNCTION legion_erasure_begin(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION legion_erasure_end() FROM PUBLIC;
+
 CREATE OR REPLACE FUNCTION audit_log_append_only() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
-  IF coalesce(current_setting('legion.audit_erasure', true), '') = 'on' THEN
+  IF legion_erasure_allowed(TG_RELID) THEN
     RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
   END IF;
   RAISE EXCEPTION 'audit_log is append-only (% refused)', TG_OP USING ERRCODE = 'insufficient_privilege';
