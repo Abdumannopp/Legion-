@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { z } from "zod";
 import { config } from "../config.js";
-import { failAbandoned, getAction, isPaused, MAX_RUN_ATTEMPTS, RUNNING_STALE_SECONDS, runQueued } from "../actions/engine.js";
+import { failAbandoned, getAction, isPaused, MAX_RUN_ATTEMPTS, reconcileApprovals, RUNNING_STALE_SECONDS, runQueued } from "../actions/engine.js";
 import { runWorkflow } from "../orchestrator/engine.js";
 import { appendAuditEventNow } from "../audit/events.js";
 import { claimJobs, completeJob, deadLetterAbandoned, deferJob, failJob, type Job, type JobKind } from "./queue.js";
@@ -48,14 +48,18 @@ const HANDLERS: Record<JobKind, Handler> = {
   },
 };
 
-export interface RunReport { claimed: number; done: number; deferred: number; retried: number; dead: number; lost: number }
+export interface RunReport { claimed: number; done: number; deferred: number; retried: number; dead: number; lost: number; /** Actions brought up to date with an approval that was decided or expired. */ reconciled: number }
 
 export const workerId = (): string => `${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
 
-export async function runOnce(opts: { owner?: string; limit?: number } = {}): Promise<RunReport> {
+let lastReconcileAt = 0;
+
+export async function runOnce(opts: { owner?: string; limit?: number; reconcile?: boolean } = {}): Promise<RunReport> {
   const owner = opts.owner ?? workerId();
-  const report: RunReport = { claimed: 0, done: 0, deferred: 0, retried: 0, dead: 0, lost: 0 };
+  const report: RunReport = { claimed: 0, done: 0, deferred: 0, retried: 0, dead: 0, lost: 0, reconciled: 0 };
   report.dead += await deadLetterAbandoned();
+  // Once a minute per instance is enough: an approval's deadline is measured in minutes, not seconds.
+  if (opts.reconcile ?? Date.now() - lastReconcileAt >= 60_000) { lastReconcileAt = Date.now(); report.reconciled = await reconcileApprovals(); }
   const jobs = await claimJobs(owner, opts.limit ?? 20);
   report.claimed = jobs.length;
   for (const job of jobs) {

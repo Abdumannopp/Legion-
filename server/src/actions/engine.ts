@@ -208,6 +208,31 @@ export async function syncWithApproval(tenantId: string, actionId: string, by: A
 }
 
 /**
+ * K-8 / R-6: approvals expired, and decided approvals were applied, only when someone READ them, so an
+ * action could sit in awaiting_approval forever after its approval expired (and an approved one waited
+ * for a reader). The worker now calls this every tick: it expires overdue approvals in every workspace
+ * and brings each affected action up to date through syncWithApproval (its own transaction, its own
+ * audit event, the tenant taken from the row). Bounded per tick; safe to run on every instance at once.
+ */
+export async function reconcileApprovals(limitPerWorkspace = 50): Promise<number> {
+  let changed = 0;
+  for (const { id: tenantId } of await queryAll<{ id: string }>("SELECT id FROM tenants ORDER BY id")) {
+    await queryOne("UPDATE approval_requests SET status = 'expired', decided_at = now() WHERE tenant_id = $1 AND status = 'pending' AND expires_at <= now()", [tenantId]);
+    const due = await queryAll<{ id: string }>(
+      `SELECT r.id FROM action_requests r JOIN approval_requests a ON a.tenant_id = r.tenant_id AND a.id = r.approval_id
+        WHERE r.tenant_id = $1 AND r.status = 'awaiting_approval' AND a.status IN ('approved', 'rejected', 'expired', 'cancelled')
+        ORDER BY r.created_at LIMIT $2`,
+      [tenantId, limitPerWorkspace],
+    );
+    for (const r of due) {
+      const after = await syncWithApproval(tenantId, r.id, { kind: "system", component: "approval_reconciler" });
+      if (after && after.status !== "awaiting_approval") changed++;
+    }
+  }
+  return changed;
+}
+
+/**
  * Simulates a queued action, at most once: the queued → running move is a
  * compare-and-set, so concurrent callers cannot both run it.
  */
