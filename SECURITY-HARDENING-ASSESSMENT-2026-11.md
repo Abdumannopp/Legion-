@@ -65,7 +65,7 @@ No Critical finding was confirmed.
 | **F-05** | Medium | Alert ids (dedup key) are derived with `webhookSecret \|\| "legion-webhook-event-id"` | `server/src/integrations/ingest.ts:22` | Rotating the webhook secret changes ids → the same Wazuh event re-ingests as a **duplicate** alert (and duplicate e-mail); ids are predictable when the secret is unset |
 | **F-06** | Medium | `SOC_AUDIT_KEY` is optional (derived from `JWT_SECRET`) and has **no rotation** | `server/src/audit/events.ts:41-42`, `config.ts:326`; PILOT.md §6 "do not rotate" | Rotating `JWT_SECRET` (a normal action) changes the audit key → audited actions fail closed (availability). A leaked audit key cannot be replaced |
 | **F-07** | Medium | CI has no SAST, no secret scanning, no SBOM; the `docker` (install.sh) job is **not** required by the release gate; the default-stack images are unpinned and unscanned | `.github/workflows/ci.yml` jobs list; release-gate `needs` at `ci.yml:499` lacks `docker`; `docker-compose.yml:10,30` (`postgres:16-alpine`, `redis:7-alpine`) | Leaked keys or a vulnerable default-install image would not fail CI. The gosu CRITICAL (CVE-2025-68121) found in the pilot Postgres image almost certainly exists in the default install's Postgres too |
-| **F-08** | Medium | Image scan job: in progress (Task 15) — first real finding fixed for the pilot (gosu removed, Postgres non-root, no caps); final green evidence still pending | runs 42226015143 (finding), 42227474485 (pilot-stack green with non-root Postgres), 42230208099 (pending) | Until green, the release gate is red by design |
+| F-08 | Resolved | Image scan job works and is green for the pilot stack (gosu CRITICAL removed, Postgres non-root, no caps) | run 42230208099 @ 9b9c56c: image-scan, pilot-stack, app (incl. DoS), security, Release gate all success | Covered; the default stack remains F-07 |
 | **F-09** | Medium | Incident lifecycle is unconstrained: any status → any status, no `acknowledged_at` / `resolved_at` / `resolved_by`, no reason on reopen | `server/src/index.ts:1395-1403`; `db/schema.sql:118-119` | No MTTA/MTTR, SLA reports measure only open age; reopen/resolve churn is invisible except in the plain audit log |
 | **F-10** | Medium | `main` is 42 commits behind; it lacks the SOC core and every fix since 2026-11-04 | `git log origin/main..HEAD` | Anyone deploying `main` gets an older, weaker product |
 | F-11 | Low | MITRE ATT&CK comes only from Wazuh rules; Legion's own detections mostly carry no technique (only `credential_attack` → T1110) | `server/src/campaigns.ts:113-236`, `integrations/wazuh.ts:74` | Weaker reporting / coverage view; no security impact |
@@ -97,7 +97,7 @@ No Critical finding was confirmed.
 | 2.6 | Route audit (authN/authZ/IDOR/tenant) | Strong; IDOR sweep is per-resource, not generated from the route table | PR-7 |
 | 2.7 | WebSocket | Sound | (test added in PR-7) |
 | 2.8 | Audit integrity + secret rotation | SOC chain keyed + off-host checkpoints; plain log not keyed; no audit-key rotation (F-02, F-06) | PR-2, PR-6 |
-| 3.1–3.2 | Fix image scan; scan exact local images | Done in Task 15 for the pilot; evidence pending (F-08); default stack not scanned (F-07) | PR-10a |
+| 3.1–3.2 | Fix image scan; scan exact local images | Done and green for the pilot (run 42230208099); default stack not scanned (F-07) | PR-10a |
 | 3.3 | SBOM + dependency scan | npm audit gate yes; SBOM no | PR-10b |
 | 3.4 | Secret scanning + SAST | No | PR-10c/d |
 | 3.5 | Pin production images by digest | Pilot + monitoring: yes; default stack: no | PR-10a |
