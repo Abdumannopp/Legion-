@@ -122,6 +122,72 @@ export async function pruneAgentLogs(months = config.retentionAgentLogMonths): P
   return removed;
 }
 
-export async function runRetention(): Promise<{ payments: number; audit: number; agentLogs: number }> {
-  return { payments: await prunePaymentChecks(), audit: await pseudonymiseAudit(), agentLogs: await pruneAgentLogs() };
+/**
+ * SOC history (Task 10 core) grows with every alert: a policy decision per covered call, an action
+ * request with its events, approvals, workflow runs, jobs and audit events — about 6.5 KB per action
+ * (rate-limits-and-budgets.test.ts). Without a limit the database fills the disk and Legion stops.
+ *
+ * After SOC_RETENTION_DAYS this removes only what has FINISHED: pending approvals, queued or running
+ * actions and jobs, and running workflows are never touched, whatever their age. The oldest SOC audit
+ * events are removed like the agent logs: the hash of the last removed event is kept in
+ * chain_prune_anchors, so verifyAuditChain() still proves the remaining chain (and still fails if a
+ * surviving event was changed). The newest audit event is always kept. Legal holds are skipped.
+ */
+export const SOC_TERMINAL_ACTIONS = ["denied", "recorded", "rejected", "expired", "cancelled", "simulated", "failed"] as const;
+
+export async function pruneSocHistory(days = config.retentionSocDays): Promise<Record<string, number>> {
+  const counts: Record<string, number> = { soc_jobs: 0, action_requests: 0, approval_requests: 0, policy_decisions: 0, workflow_runs: 0, soc_audit_events: 0 };
+  if (!(days > 0)) return counts;
+  const d = Math.floor(days);
+  for (const tenantId of await activeTenants()) {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT set_config('legion.audit_erasure', 'on', true)");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`soc_retention:${tenantId}`]);
+      const run = async (key: string, sql: string, params: unknown[] = []) => {
+        counts[key] = (counts[key] ?? 0) + ((await client.query(sql, [tenantId, d, ...params])).rowCount ?? 0);
+      };
+      await run("soc_jobs", "DELETE FROM soc_jobs WHERE tenant_id = $1 AND status IN ('done', 'dead') AND coalesce(finished_at, updated_at) < now() - make_interval(days => $2)");
+      // Cascades to action_events.
+      await run("action_requests", "DELETE FROM action_requests WHERE tenant_id = $1 AND status = ANY($3) AND created_at < now() - make_interval(days => $2)", [SOC_TERMINAL_ACTIONS]);
+      // Only approvals no surviving action still points at (the foreign key has no cascade, on purpose).
+      await run("approval_requests", `DELETE FROM approval_requests a WHERE a.tenant_id = $1 AND a.status <> 'pending' AND a.created_at < now() - make_interval(days => $2)
+          AND NOT EXISTS (SELECT 1 FROM action_requests r WHERE r.tenant_id = a.tenant_id AND r.approval_id = a.id)`);
+      await run("policy_decisions", "DELETE FROM policy_decisions WHERE tenant_id = $1 AND created_at < now() - make_interval(days => $2)");
+      await run("workflow_runs", "DELETE FROM workflow_runs WHERE tenant_id = $1 AND status <> 'running' AND coalesce(finished_at, created_at) < now() - make_interval(days => $2)");
+
+      // Audit events: the first event still inside the window; if all are old, keep the newest one.
+      const boundary = (await client.query<{ seq: string | null }>(
+        `SELECT coalesce(
+            (SELECT min(seq) FROM soc_audit_events WHERE tenant_id = $1 AND at >= now() - make_interval(days => $2)),
+            (SELECT max(seq) FROM soc_audit_events WHERE tenant_id = $1)) AS seq`, [tenantId, d])).rows[0]?.seq;
+      if (boundary) {
+        const last = (await client.query<{ seq: string; hash: string }>(
+          "SELECT seq, hash FROM soc_audit_events WHERE tenant_id = $1 AND seq < $2 ORDER BY seq DESC LIMIT 1", [tenantId, boundary])).rows[0];
+        if (last) {
+          const r = await client.query("DELETE FROM soc_audit_events WHERE tenant_id = $1 AND seq < $2", [tenantId, boundary]);
+          await client.query(
+            `INSERT INTO chain_prune_anchors (table_name, tenant_id, anchor_hash, pruned_through_seq, pruned_rows)
+             VALUES ('soc_audit_events', $1, $2, $3, $4)
+             ON CONFLICT (table_name, tenant_id) DO UPDATE
+               SET anchor_hash = EXCLUDED.anchor_hash, pruned_through_seq = EXCLUDED.pruned_through_seq,
+                   pruned_rows = chain_prune_anchors.pruned_rows + EXCLUDED.pruned_rows, pruned_at = now()`,
+            [tenantId, last.hash, last.seq, r.rowCount ?? 0]);
+          counts.soc_audit_events! += r.rowCount ?? 0;
+        }
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  return counts;
+}
+
+export async function runRetention(): Promise<{ payments: number; audit: number; agentLogs: number; soc: Record<string, number> }> {
+  return { payments: await prunePaymentChecks(), audit: await pseudonymiseAudit(), agentLogs: await pruneAgentLogs(), soc: await pruneSocHistory() };
 }

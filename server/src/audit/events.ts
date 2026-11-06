@@ -100,8 +100,12 @@ export async function verifyAuditChain(tenantId: string): Promise<VerifyResult> 
        FROM soc_audit_events WHERE tenant_id = $1 ORDER BY seq`, [tenantId],
   );
   const { id: keyId, key: k } = key();
-  let prev = GENESIS;
-  let expectedSeq = 1;
+  // Retention may have removed the oldest events (pruneSocHistory); the chain then starts at the anchor.
+  const anchor = (await queryAll<{ anchor_hash: string; pruned_through_seq: string }>(
+    "SELECT anchor_hash, pruned_through_seq FROM chain_prune_anchors WHERE table_name = 'soc_audit_events' AND tenant_id = $1", [tenantId],
+  ))[0];
+  let prev = anchor ? anchor.anchor_hash : GENESIS;
+  let expectedSeq = anchor ? Number(anchor.pruned_through_seq) + 1 : 1;
   for (const r of rows) {
     const seq = Number(r.seq);
     const fail = (reason: string): VerifyResult => ({ ok: false, events: rows.length, head: prev, broken_at: seq, reason });

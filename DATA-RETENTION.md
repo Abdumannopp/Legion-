@@ -78,3 +78,21 @@ Only one instance runs the job at a time, so one warning is sent. There is no se
 - A person with write access to the database can edit `chain_prune_anchors` together with the log, as they can already switch the erasure flag on. The chain protects against edits by the application, not against a database administrator.
 - A backup older than 12 months is gone; younger ones can hold deleted data until they expire, hence the replay step.
 - Legal retention duties (tax, disputes) are for a lawyer to decide: see LEGAL-DECISIONS.md.
+
+## SOC history (policy decisions, actions, approvals, workflows, jobs, SOC audit events)
+
+Every alert produces SOC records (about 6.5 KB per action). Without a limit they fill the disk.
+`SOC_RETENTION_DAYS` (default 365 hosted, 0 = keep forever self-hosted; the pilot compose sets 365)
+deletes, every 6 hours, only **finished** history older than the limit:
+
+- finished jobs (`done`, `dead`), actions in a final state (with their events), approvals that are no
+  longer pending and that no surviving action points at, policy decisions, finished workflow runs;
+- the oldest SOC audit events. The hash of the last deleted event is kept in `chain_prune_anchors`, so
+  `GET /soc/audit/verify` still proves the rest of the chain, and still reports any changed event or a
+  changed anchor. The newest event is always kept.
+
+Never deleted, whatever their age: pending approvals, actions that are waiting, queued or running,
+running jobs and workflows. Workspaces on a legal hold are skipped.
+
+Honest limit: an attacker with database access could delete the oldest events and write a matching
+anchor. Keep the chain head off the host (`PILOT.md` §9.4) to detect that.

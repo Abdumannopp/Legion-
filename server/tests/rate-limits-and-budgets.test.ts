@@ -89,7 +89,7 @@ describe("payload and body budgets", () => {
 });
 
 describe("growth budget (measured)", () => {
-  it("records how much storage one action costs, and shows nothing prunes the SOC history tables", async () => {
+  it("records how much storage one action costs, and the retention job covers every SOC history table", async () => {
     const N = 100;
     await store.insertAlert({ id: "SEC-G", tenant_id: tenant, title: "t", severity: "high", agent: "Sentinel", status: "open", summary: "s", confidence: 60, ai_explanation: null, explained_at: null, source_ip: null, target: null, mitre_technique: null, source: "wazuh" });
     const size = async () => Number((await query("SELECT sum(pg_total_relation_size(c.oid))::bigint AS b FROM pg_class c WHERE c.relname IN ('action_requests','action_events','policy_decisions','soc_audit_events','soc_jobs','approval_requests','approval_decisions')")).rows[0].b);
@@ -116,7 +116,7 @@ describe("growth budget (measured)", () => {
     expect(perAction).toBeGreaterThan(0);
     expect(rows.action_requests).toBe(N);
     expect(rows.soc_audit_events).toBeGreaterThanOrEqual(N * 3);
-    // Documented gap (K-2 in PRODUCTION-READINESS-ASSESSMENT.md): no retention on the SOC history tables yet.
-    expect(pruned).toEqual([]);
+    // K-2 (PRODUCTION-READINESS-ASSESSMENT.md) closed: pruneSocHistory covers every table that grows (behaviour: soc-retention.test.ts).
+    expect(pruned.sort()).toEqual(["action_events", "action_requests", "approval_requests", "policy_decisions", "soc_audit_events", "soc_jobs", "workflow_runs"]);
   }, 120_000);
 });

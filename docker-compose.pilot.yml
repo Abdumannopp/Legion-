@@ -151,6 +151,8 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-Legion Pilot <no-reply@example.com>}
       ALERT_EMAIL_MIN_SEVERITY: ${ALERT_EMAIL_MIN_SEVERITY:-high}
+      # Finished SOC history older than this is deleted (0 = keep forever and let the disk fill).
+      SOC_RETENTION_DAYS: ${SOC_RETENTION_DAYS:-365}
       AI_PROVIDER: ${AI_PROVIDER:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}

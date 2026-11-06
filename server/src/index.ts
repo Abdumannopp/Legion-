@@ -2679,6 +2679,8 @@ if (process.env.NODE_ENV !== "test") {
       if (erased.length) console.info(`Erased ${erased.length} workspace(s) locked for more than ${config.tenantAutoDeleteDays} days.`);
       const kept = await runRetention();
       if (kept.payments || kept.audit) console.info(`Retention: ${kept.payments} payment check(s) deleted, ${kept.audit} audit entr${kept.audit === 1 ? "y" : "ies"} anonymised.`);
+      const socRemoved = Object.values(kept.soc).reduce((a, b) => a + b, 0);
+      if (socRemoved) console.info(`Retention: removed ${socRemoved} finished SOC record(s) older than ${config.retentionSocDays} days (${Object.entries(kept.soc).filter(([, n]) => n).map(([t, n]) => `${t} ${n}`).join(", ")}).`);
     } catch (error) {
       console.error("Session prune failed:", error instanceof Error ? error.message : error);
     }

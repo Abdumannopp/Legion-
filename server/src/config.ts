@@ -296,6 +296,12 @@ export const config = {
   /** Hosted only: after this many months the email and IP address in a workspace audit-log entry are removed (0 = keep). */
   retentionAgentLogMonths: Math.max(0, Math.floor(Number(process.env.RETENTION_AGENT_LOG_MONTHS ?? 24)) || 0),
   /**
+   * SOC history (policy decisions, finished actions and approvals, workflow runs, finished jobs, the
+   * oldest SOC audit events) is deleted after this many days; 0 = keep forever. Hosted default 365.
+   * Self-hosted default 0 (the customer decides), but an unbounded history fills the disk — set it.
+   */
+  retentionSocDays: Math.max(0, Math.floor(Number(process.env.SOC_RETENTION_DAYS ?? ((process.env.DEPLOYMENT_MODE ?? "self-hosted") === "saas" ? 365 : 0))) || 0),
+  /**
    * Task 10 Policy Engine v0. "shadow" (default): every covered action is also
    * evaluated by the policy engine and the would-be decision is recorded —
    * the decision never changes what happens. "off": nothing is evaluated.
