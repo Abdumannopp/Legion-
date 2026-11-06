@@ -106,43 +106,40 @@ export async function provisionAppRole(
     // Existing installs: tables, views, sequences, functions and types the
     // superuser created. Extension members are left alone. A sequence owned
     // by a table column moves with its table.
-    const transferred: string[] = [];
-    const relations = (await admin.query<{ name: string; kind: string }>(
-      `SELECT c.relname AS name, c.relkind AS kind
+    // Postgres builds each statement itself (format %I and the reg* casts quote every name), so no
+    // catalog name is ever spliced into SQL here.
+    const relations = (await admin.query<{ label: string; stmt: string }>(
+      `SELECT lower(v.verb) || ' ' || c.relname AS label,
+              format('ALTER %s %s OWNER TO %I', v.verb, c.oid::regclass, $2::text) AS stmt
          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = $1 AND c.relkind IN ('r','p','v','m','f','S')
+         JOIN (VALUES ('r', 'TABLE'), ('p', 'TABLE'), ('f', 'FOREIGN TABLE'), ('v', 'VIEW'), ('m', 'MATERIALIZED VIEW'), ('S', 'SEQUENCE')) AS v(kind, verb)
+           ON v.kind = c.relkind::text
+        WHERE n.nspname = $1
           AND pg_get_userbyid(c.relowner) <> $2
           AND NOT (c.relkind = 'r' AND c.relispartition)
           AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = c.oid AND d.classid = 'pg_class'::regclass AND d.deptype IN ('e', 'a', 'i'))
         ORDER BY c.relkind, c.relname`,
       [schema, owner],
     )).rows;
-    const verb: Record<string, string> = { r: "TABLE", p: "TABLE", f: "FOREIGN TABLE", v: "VIEW", m: "MATERIALIZED VIEW", S: "SEQUENCE" };
-    for (const r of relations) {
-      await admin.query(`ALTER ${verb[r.kind]} ${q(schema)}.${q(r.name)} OWNER TO ${q(owner)}`);
-      transferred.push(`${verb[r.kind]!.toLowerCase()} ${r.name}`);
-    }
-    const routines = (await admin.query<{ name: string; args: string }>(
-      `SELECT p.proname AS name, pg_get_function_identity_arguments(p.oid) AS args
+    const routines = (await admin.query<{ label: string; stmt: string }>(
+      `SELECT 'function ' || p.proname AS label, format('ALTER ROUTINE %s OWNER TO %I', p.oid::regprocedure, $2::text) AS stmt
          FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
         WHERE n.nspname = $1 AND pg_get_userbyid(p.proowner) <> $2
           AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = p.oid AND d.classid = 'pg_proc'::regclass AND d.deptype = 'e')`,
       [schema, owner],
     )).rows;
-    for (const r of routines) {
-      await admin.query(`ALTER ROUTINE ${q(schema)}.${q(r.name)}(${r.args}) OWNER TO ${q(owner)}`);
-      transferred.push(`function ${r.name}`);
-    }
-    const types = (await admin.query<{ name: string }>(
-      `SELECT t.typname AS name FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+    const types = (await admin.query<{ label: string; stmt: string }>(
+      `SELECT 'type ' || t.typname AS label, format('ALTER TYPE %s OWNER TO %I', t.oid::regtype, $2::text) AS stmt
+         FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
         WHERE n.nspname = $1 AND t.typtype IN ('e', 'd', 'c') AND (t.typrelid = 0 OR (SELECT relkind FROM pg_class WHERE oid = t.typrelid) = 'c')
           AND pg_get_userbyid(t.typowner) <> $2
           AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.objid = t.oid AND d.classid = 'pg_type'::regclass AND d.deptype = 'e')`,
       [schema, owner],
     )).rows;
-    for (const t of types) {
-      await admin.query(`ALTER TYPE ${q(schema)}.${q(t.name)} OWNER TO ${q(owner)}`);
-      transferred.push(`type ${t.name}`);
+    const transferred: string[] = [];
+    for (const o of [...relations, ...routines, ...types]) {
+      await admin.query(o.stmt);
+      transferred.push(o.label);
     }
 
     await admin.query("COMMIT");

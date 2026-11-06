@@ -55,8 +55,11 @@ describe("socket lifetime", () => {
   });
 
   it("revalidation also closes an expired grant (the backstop if a timer was lost)", async () => {
-    const tap = await open(tokenFor(user, 1)) as Tap;
-    await new Promise((r) => setTimeout(r, 1_200));
+    // 2 s, not 1: exp has whole-second precision, so a 1 s token minted late in a second is
+    // already expired when the socket connects (the upgrade is refused and the test fails at once).
+    const tap = await open(tokenFor(user, 2)) as Tap;
+    expect(typeof tap).toBe("object");
+    await new Promise((r) => setTimeout(r, 2_200));
     await realtime.revalidateOnce(socketGrantsStillValid);
     expect(await within(tap.closed, 1_000)).toBe(realtime.CLOSE_SESSION_REVOKED);
   });
@@ -78,7 +81,8 @@ describe("socket lifetime", () => {
   });
 
   it("a live session keeps working: after a refresh the client reconnects with the new cookie", async () => {
-    const first = await open(tokenFor(user, 1)) as Tap;
+    const first = await open(tokenFor(user, 2)) as Tap;   // 2 s: see above
+    expect(typeof first).toBe("object");
     expect(await within(first.closed, 4_000)).toBe(realtime.CLOSE_SESSION_REVOKED);
     // What the dashboard does next: an HTTP request refreshes the session, and the reconnect uses the new cookie.
     const renewed = await open(tokenFor(user, 900)) as Tap;
