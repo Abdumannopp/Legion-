@@ -392,18 +392,24 @@ function agentRoutes(identity: Identity, deps: AgentLayerDeps): Router {
     res.json({ trust: "untrusted_external_content", alert: agentAlert(alert) });
   });
 
-  const statusBody = z.strictObject({ status: z.enum(["open", "investigating", "resolved"]) });
+  const statusBody = z.strictObject({ status: z.enum(["open", "investigating", "resolved"]), reason: z.string().trim().min(1).max(500).optional() });
   r.patch("/alerts/:id/status", g.requirePermission("alerts:update_status", { resource: (req) => ({ type: "alert", id: String(req.params.id) }) }), async (req, res) => {
     const body = statusBody.safeParse(req.body ?? {});
     if (!body.success) return res.status(400).json({ error: { code: "invalid_request", message: body.error.issues[0]?.message ?? "invalid" } });
     if (!(await allowed(req, res, true))) return;
     const p = me(req);
-    const alert = await store.updateAlertStatus(p.tenantId, String(req.params.id).slice(0, 200), body.data.status);
+    let alert;
+    try {
+      alert = await store.updateAlertStatus(p.tenantId, String(req.params.id).slice(0, 200), body.data.status, { by: `agent:${p.id}`, reason: body.data.reason });
+    } catch (error) {
+      if (error instanceof store.AlertTransitionError) return res.status(422).json({ error: { code: error.code, message: "Reopening a resolved alert needs a reason." } });
+      throw error;
+    }
     if (!alert) return res.status(404).json({ error: { code: "not_found", message: "Alert not found." } });
     // Legion's own audit log, next to the people's changes: who (the agent) and on whose behalf (its owner).
     await store.audit({
       tenant_id: p.tenantId, user_id: null, user_email: null, action: "alert.status_updated", resource_type: "alert",
-      resource_id: alert.id, detail: `${body.data.status} (by ${p.type} ${p.displayName} ${p.id}, owner ${p.ownerUserId})`, ip_address: req.ip || null,
+      resource_id: alert.id, detail: `${body.data.status}${body.data.reason ? `: ${body.data.reason}` : ""} (by ${p.type} ${p.displayName} ${p.id}, owner ${p.ownerUserId})`, ip_address: req.ip || null,
     });
     deps.onAlertUpdated(alert);
     res.json({ alert: agentAlert(alert) });

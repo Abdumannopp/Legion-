@@ -83,7 +83,7 @@ export async function checkSensors(opts: {
         AND c.last_used_at >= to_timestamp(split_part(a.id, '-', 4)::bigint + 1)`,
   );
   for (const r of back.rows) {
-    if (await store.updateAlertStatus(r.tenant_id, r.id, "resolved")) report.resolved++;
+    if (await store.updateAlertStatus(r.tenant_id, r.id, "resolved", { by: "system:sensor_monitor" })) report.resolved++;
   }
   return report;
 }

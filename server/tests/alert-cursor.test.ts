@@ -221,7 +221,7 @@ describe("GET /alerts/sync", () => {
 
   it("an updated alert appears once, as its latest version", async () => {
     await store.updateAlertStatus(tenantA, "s2", "resolved");
-    await store.updateAlertStatus(tenantA, "s2", "investigating");
+    await store.updateAlertStatus(tenantA, "s2", "investigating", { reason: "reopened for the sync test" });
     const res = await request(app).get("/alerts/sync?after=1").set(...auth(adminA)).expect(200);
     const s2 = res.body.alerts.filter((a: { id: string }) => a.id === "s2");
     expect(s2).toHaveLength(1);

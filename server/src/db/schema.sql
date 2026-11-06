@@ -768,3 +768,12 @@ END $$;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS payment_ack_at timestamptz;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS payment_ack_by text;
 ALTER TABLE tenants ADD COLUMN IF NOT EXISTS payment_ack_version text;
+
+-- F-09: the incident lifecycle is recorded, not just the current status. acknowledged_at: the first
+-- time the alert left "open"; resolved_at / resolved_by: the current resolution (cleared on reopen);
+-- reopened_count: how often a resolved alert came back. Reopening needs a reason (in the audit log).
+-- Alerts from before this change keep NULL timestamps: their history is not known.
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS acknowledged_at timestamptz;
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS resolved_at timestamptz;
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS resolved_by text CHECK (resolved_by IS NULL OR length(resolved_by) <= 120);
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS reopened_count int NOT NULL DEFAULT 0 CHECK (reopened_count >= 0);

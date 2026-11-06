@@ -23,6 +23,7 @@ import {
   getAlert,
   explainAlert,
   updateAlertStatus,
+  reopenReason,
   isLoggedIn,
   ApiError,
   SuggestedAction,
@@ -117,9 +118,11 @@ export default function IncidentDetailsPage() {
 
   async function handleStatusChange(status: Alert["status"]) {
     if (!alert) return;
+    const reason = reopenReason(alert.status, status);
+    if (reason === null) return;
     setUpdating(true);
     try {
-      const updated = await updateAlertStatus(alert.id, status);
+      const updated = await updateAlertStatus(alert.id, status, reason);
       setAlert(updated);
     } catch (err) {
       setError(err);

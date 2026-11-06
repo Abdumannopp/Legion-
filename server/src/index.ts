@@ -1394,11 +1394,17 @@ app.get("/alerts/:id", auth, async (req: AuthedRequest, res) => {
 });
 
 app.patch("/alerts/:id/status", requireRole("analyst"), async (req: AuthedRequest, res) => {
-  const body = parse(z.object({ status: z.enum(["open", "investigating", "resolved"]) }), req.body, res); if (!body) return;
-  const alert = await store.updateAlertStatus(req.user!.tenant_id, String(req.params.id), body.status);
+  const body = parse(z.object({ status: z.enum(["open", "investigating", "resolved"]), reason: z.string().trim().min(1).max(500).optional() }), req.body, res); if (!body) return;
+  let alert;
+  try {
+    alert = await store.updateAlertStatus(req.user!.tenant_id, String(req.params.id), body.status, { by: `user:${req.user!.id}`, reason: body.reason });
+  } catch (error) {
+    if (error instanceof store.AlertTransitionError) return res.status(422).json({ detail: "Reopening a resolved alert needs a reason (\"reason\")", code: error.code });
+    throw error;
+  }
   if (!alert) return res.status(404).json({ detail: "Alert not found" });
   shadowEvaluate(req.user!.tenant_id, { call_site: "route:alert_status", action_id: "alert.set_status", actor: { kind: "human", user_id: req.user!.id, role: req.user!.role }, origin: "human", input: { alert_id: alert.id, status: body.status }, legacy_outcome: "updated" });
-  await log(req, "alert.status_updated", "alert", alert.id, body.status);
+  await log(req, "alert.status_updated", "alert", alert.id, body.reason ? `${body.status}: ${body.reason}` : body.status);
   broadcast(alert.tenant_id, { type: "alert.status_updated", alert: outputAlert(alert) });
   return res.json(outputAlert(alert));
 });

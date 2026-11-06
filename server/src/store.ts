@@ -84,6 +84,8 @@ const toAlert = (r: any): Alert => ({
   seq: Number(r.seq), created_seq: Number(r.created_seq),
   source_ip: r.source_ip, target: r.target, mitre_technique: r.mitre_technique,
   source: r.source, occurred_at: iso(r.occurred_at ?? null),
+  acknowledged_at: iso(r.acknowledged_at ?? null), resolved_at: iso(r.resolved_at ?? null),
+  resolved_by: r.resolved_by ?? null, reopened_count: Number(r.reopened_count ?? 0),
 });
 
 const toAsset = (r: any): Asset => ({
@@ -649,7 +651,7 @@ export async function listVulnerabilityAlerts(tenantId: string, limit: number): 
   return rows.map(toAlert);
 }
 
-export type NewAlert = Omit<Alert, "created_at" | "ai_explanation_locale" | "ai_explanation_source" | "seq" | "created_seq" | "occurred_at"> & { created_at?: string; ai_explanation_locale?: Locale | null; occurred_at?: string | null };
+export type NewAlert = Omit<Alert, "created_at" | "ai_explanation_locale" | "ai_explanation_source" | "seq" | "created_seq" | "occurred_at" | "acknowledged_at" | "resolved_at" | "resolved_by" | "reopened_count"> & { created_at?: string; ai_explanation_locale?: Locale | null; occurred_at?: string | null };
 
 /**
  * Inserts an alert, returning null if that (tenant, id) already exists.
@@ -683,12 +685,33 @@ export async function insertAlert(alert: NewAlert, client?: PoolClient): Promise
   return row ? toAlert(row) : null;
 }
 
+/** F-09: reopening a resolved alert without saying why is refused. */
+export class AlertTransitionError extends Error {
+  constructor(readonly code: "reason_required") { super("Reopening a resolved alert needs a reason"); this.name = "AlertTransitionError"; }
+}
+
+/**
+ * Moves an alert through its lifecycle (open → investigating → resolved, and back with a reason).
+ * Records when it was first acknowledged, when and by whom it was resolved, and how often it was
+ * reopened. The same status again is a no-op. `by`: user:<id>, agent:<id> or system:<component>.
+ */
 export async function updateAlertStatus(
-  tenantId: string, id: string, status: AlertStatus
+  tenantId: string, id: string, status: AlertStatus, opts: { by?: string; reason?: string } = {},
 ): Promise<Alert | null> {
+  if (status !== "resolved" && !opts.reason?.trim()) {
+    const current = await queryOne<{ status: string }>("SELECT status FROM alerts WHERE tenant_id = $1 AND id = $2", [tenantId, id]);
+    if (!current) return null;
+    if (current.status === "resolved") throw new AlertTransitionError("reason_required");
+  }
   const row = await queryOne(
-    "UPDATE alerts SET status = $3 WHERE tenant_id = $1 AND id = $2 RETURNING *",
-    [tenantId, id, status]
+    `UPDATE alerts SET
+        status = $3,
+        acknowledged_at = CASE WHEN acknowledged_at IS NULL AND $3 <> 'open' THEN now() ELSE acknowledged_at END,
+        resolved_at = CASE WHEN $3 = 'resolved' THEN CASE WHEN status = 'resolved' THEN resolved_at ELSE now() END ELSE NULL END,
+        resolved_by = CASE WHEN $3 = 'resolved' THEN CASE WHEN status = 'resolved' THEN resolved_by ELSE $4 END ELSE NULL END,
+        reopened_count = reopened_count + CASE WHEN status = 'resolved' AND $3 <> 'resolved' THEN 1 ELSE 0 END
+      WHERE tenant_id = $1 AND id = $2 RETURNING *`,
+    [tenantId, id, status, opts.by ? opts.by.slice(0, 120) : null]
   );
   return row ? toAlert(row) : null;
 }

@@ -527,14 +527,23 @@ export function getStats(): Promise<AlertStats> {
   return request<AlertStats>("/alerts/stats");
 }
 
+/** Reopening a resolved alert needs a reason (recorded in the audit log). */
 export function updateAlertStatus(
   id: string,
-  status: Alert["status"]
+  status: Alert["status"],
+  reason?: string
 ): Promise<Alert> {
   return request<Alert>(`/alerts/${id}/status`, {
     method: "PATCH",
-    body: JSON.stringify({ status }),
+    body: JSON.stringify(reason ? { status, reason } : { status }),
   });
+}
+
+/** Asks why a resolved alert is being reopened. Null: the person cancelled (nothing is changed). */
+export function reopenReason(from: Alert["status"] | undefined, to: Alert["status"]): string | null | undefined {
+  if (from !== "resolved" || to === "resolved") return undefined;
+  const r = typeof window === "undefined" ? null : window.prompt("Why is this resolved alert being reopened? (kept in the audit log)");
+  return r && r.trim() ? r.trim().slice(0, 500) : null;
 }
 
 export function explainAlert(id: string, force = false): Promise<Alert> {
