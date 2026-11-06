@@ -28,7 +28,7 @@
  * The account number itself is never stored: only a keyed hash (to recognise
  * it again) and its last four characters (for a person to recognise it).
  */
-import { createHmac, randomBytes } from "node:crypto";
+import { createHmac, hkdfSync, randomBytes } from "node:crypto";
 import { z } from "zod";
 import { clip } from "./ai-safety.js";
 import { config } from "./config.js";
@@ -75,9 +75,33 @@ export function normaliseAccount(account: string): string {
   return account.replace(/[\s.-]/g, "").toUpperCase();
 }
 
-/** Recognises the account again without storing it. */
-export function beneficiaryHash(tenantId: string, account: string): string {
-  return createHmac("sha256", config.webhookSecret || "legion-payments").update(`${tenantId}:${normaliseAccount(account)}`).digest("hex");
+/**
+ * The keys accounts are hashed with: the current one first, then previous ones (still matched, never
+ * written). Production refuses to start without PAYMENT_HASH_KEY (config.ts). Outside production
+ * only, a missing key is derived from JWT_SECRET (never a built-in constant) and said out loud once.
+ * A changed key makes known accounts look new: payments are held for a phone check, never let through.
+ */
+let warnedDerived = false;
+export function paymentHashKeys(): string[] {
+  let current = config.paymentHashKey;
+  if (!current) {
+    current = Buffer.from(hkdfSync("sha256", config.jwtSecret, "legion-payment-hash", "payment hash dev key v1", 32)).toString("hex");
+    if (!warnedDerived && process.env.NODE_ENV !== "test") {
+      warnedDerived = true;
+      console.warn("Legion: WARNING — PAYMENT_HASH_KEY is not set; payment hashes use a key derived from JWT_SECRET (development only; production refuses to start).");
+    }
+  }
+  return [current, ...config.paymentHashPreviousKeys.filter((k) => k !== current)];
+}
+
+/** Recognises the account again without storing it (current key). */
+export function beneficiaryHash(tenantId: string, account: string, key = paymentHashKeys()[0]!): string {
+  return createHmac("sha256", key).update(`${tenantId}:${normaliseAccount(account)}`).digest("hex");
+}
+
+/** The hashes this account may be stored under: current key first, then each previous key. */
+export function beneficiaryHashes(tenantId: string, account: string): string[] {
+  return paymentHashKeys().map((k) => beneficiaryHash(tenantId, account, k));
 }
 
 export function accountHint(account: string): string {
@@ -111,7 +135,8 @@ export class PaymentRateLimited extends Error {
 }
 
 export async function checkPayment(tenantId: string, input: PaymentCheckInput): Promise<{ check: PaymentCheck; reasons: { code: HoldReason; message: string }[]; verify: string | null }> {
-  const hash = beneficiaryHash(tenantId, input.beneficiary.account);
+  const hashes = beneficiaryHashes(tenantId, input.beneficiary.account);
+  const hash = hashes[0]!;
   const currency = input.currency.toUpperCase();
   const amount = Math.round(input.amount * 100) / 100;
   const requester = input.requestedBy?.toLowerCase() ?? null;
@@ -125,19 +150,29 @@ export async function checkPayment(tenantId: string, input: PaymentCheckInput): 
   if ((recent?.minute ?? 0) >= CHECKS_PER_MINUTE) throw new PaymentRateLimited();
   const quietAlerts = (recent?.holds ?? 0) >= ALERTS_PER_HOUR;
 
+  // An account confirmed under a previous key stays confirmed: its confirmation is carried to the
+  // row under the current key (the old row is left as it was).
+  const before = hashes.length > 1 ? await queryOne<{ verified_at: Date | null; verified_by: string | null }>(
+    `SELECT verified_at, verified_by FROM payment_beneficiaries
+      WHERE tenant_id = $1 AND beneficiary_hash = ANY($2::text[]) AND verified_at IS NOT NULL
+      ORDER BY verified_at DESC LIMIT 1`,
+    [tenantId, hashes],
+  ) : null;
   const ben = await queryOne<{ verified_at: Date | null }>(
-    `INSERT INTO payment_beneficiaries (tenant_id, beneficiary_hash) VALUES ($1, $2)
-     ON CONFLICT (tenant_id, beneficiary_hash) DO UPDATE SET last_seen = now()
+    `INSERT INTO payment_beneficiaries (tenant_id, beneficiary_hash, verified_at, verified_by) VALUES ($1, $2, $3, $4)
+     ON CONFLICT (tenant_id, beneficiary_hash) DO UPDATE SET last_seen = now(),
+       verified_at = coalesce(payment_beneficiaries.verified_at, EXCLUDED.verified_at),
+       verified_by = coalesce(payment_beneficiaries.verified_by, EXCLUDED.verified_by)
      RETURNING verified_at`,
-    [tenantId, hash],
+    [tenantId, hash, before?.verified_at ?? null, before?.verified_by ?? null],
   );
   // The same payment, already decided by a person.
   const earlier = await queryOne<{ resolution: "released" | "rejected" }>(
     `SELECT resolution FROM payment_checks
-      WHERE tenant_id = $1 AND beneficiary_hash = $2 AND amount = $3 AND currency = $4 AND resolution IS NOT NULL
+      WHERE tenant_id = $1 AND beneficiary_hash = ANY($2::text[]) AND amount = $3 AND currency = $4 AND resolution IS NOT NULL
         AND resolved_at > now() - make_interval(days => $5)
       ORDER BY resolved_at DESC LIMIT 1`,
-    [tenantId, hash, amount, currency, RELEASE_VALID_DAYS],
+    [tenantId, hashes, amount, currency, RELEASE_VALID_DAYS],
   );
 
   const reasons: HoldReason[] = [];
@@ -178,7 +213,7 @@ export async function checkPayment(tenantId: string, input: PaymentCheckInput): 
   if (decision === "hold" && !quietAlerts) {
     // One alert per payment per day, however often the payment software asks.
     const day = new Date().toISOString().slice(0, 10);
-    const alertId = `PAY-${createHmac("sha256", config.webhookSecret || "legion-payments").update(`${tenantId}:${hash}:${amount}:${currency}:${day}`).digest("hex").slice(0, 16).toUpperCase()}`;
+    const alertId = `PAY-${createHmac("sha256", hash).update(`${tenantId}:${amount}:${currency}:${day}`).digest("hex").slice(0, 16).toUpperCase()}`;
     const who = input.beneficiary.name ? ` (${clip(input.beneficiary.name, 80)})` : "";
     await outbox.insertAlertAndNotify({
       id: alertId, tenant_id: tenantId, status: "open", agent: "Vanguard",

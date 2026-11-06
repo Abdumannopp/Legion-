@@ -55,7 +55,7 @@ async function main() {
   const port = await freePort();
   Object.assign(env, {
     NODE_ENV: "production", DEPLOYMENT_MODE: "self-hosted", DATABASE_URL: db.url,
-    JWT_SECRET: randomBytes(48).toString("hex"), LEGION_ENCRYPTION_KEYS: `wz:${randomBytes(32).toString("hex")}`,
+    JWT_SECRET: randomBytes(48).toString("hex"), PAYMENT_HASH_KEY: randomBytes(32).toString("hex"), LEGION_ENCRYPTION_KEYS: `wz:${randomBytes(32).toString("hex")}`,
     FRONTEND_URL: FRONTEND, COOKIE_SECURE: "true", SMTP_HOST: "127.0.0.1", SMTP_PORT: String(smtp.port),
     NOTIFY_POLL_SECONDS: "2", ALERT_EMAIL_MIN_SEVERITY: "high",
   });

@@ -301,6 +301,11 @@ async function main() {
   // ADD to an existing install: secrets written before it are still readable and
   // are re-encrypted under it at the next start.
   const encryptionKeys = existingEnvValue("LEGION_ENCRYPTION_KEYS") || `k1:${randomHex(32)}`;
+  // Payment-check account hashes (HMAC key). Installs from before it existed hashed with the webhook
+  // secret (or a built-in value); that becomes the previous key so confirmed accounts still match.
+  const paymentHashKey = existingEnvValue("PAYMENT_HASH_KEY") || randomHex(32);
+  const paymentHashPrevious = existingEnvValue("PAYMENT_HASH_PREVIOUS_KEYS") ||
+    (reusing && !existingEnvValue("PAYMENT_HASH_KEY") ? (existingEnvValue("SECURITY_EVENT_WEBHOOK_SECRET") || "legion-payments") : "");
   // Superseded by LEGION_ENCRYPTION_KEYS; only carried over if an install has one.
   const webhookKey = existingEnvValue("WEBHOOK_ENCRYPTION_KEY");
   const dbPassword = existingEnvValue("__DB_PASSWORD") || randomHex(16);
@@ -342,6 +347,9 @@ JWT_SECRET=${jwtSecret}
 # with two-factor sign-in. To rotate, put a new "id:key" FIRST and keep the old
 # one after it (see INSTALL.md, "Encryption keys").
 LEGION_ENCRYPTION_KEYS=${encryptionKeys}
+# Recognises bank accounts in the payment check without storing them. Back it up with .env.
+PAYMENT_HASH_KEY=${paymentHashKey}
+${paymentHashPrevious ? `# Older payment hashes (kept matching; remove after 24 months).\nPAYMENT_HASH_PREVIOUS_KEYS=${paymentHashPrevious}` : ""}
 ${webhookKey ? `# Legacy, read-only: lets webhook secrets from before LEGION_ENCRYPTION_KEYS be
 # re-encrypted. Safe to delete once "npm run secrets -w server -- status" shows no legacy-v1.
 WEBHOOK_ENCRYPTION_KEY=${webhookKey}` : ""}

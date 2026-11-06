@@ -101,6 +101,7 @@ jobs:
           JWT_SECRET=$(r)
           LEGION_ENCRYPTION_KEYS=k1:$(r)
           SOC_AUDIT_KEY=$(r)
+          PAYMENT_HASH_KEY=$(r)
           HEALTH_METRICS_TOKEN=$(r)
           FRONTEND_URL=https://pilot.ci-legion.test
           CORS_ORIGINS=https://pilot.ci-legion.test

@@ -179,7 +179,7 @@ async function partA() {
   const db = await freshDatabase(ADMIN, "legion_dos");
   const port = await freePort();
   const env = {
-    NODE_ENV: "production", DEPLOYMENT_MODE: "self-hosted", DATABASE_URL: db.url, JWT_SECRET: randomBytes(48).toString("hex"),
+    NODE_ENV: "production", DEPLOYMENT_MODE: "self-hosted", DATABASE_URL: db.url, JWT_SECRET: randomBytes(48).toString("hex"), PAYMENT_HASH_KEY: randomBytes(32).toString("hex"),
     LEGION_ENCRYPTION_KEYS: `dos:${randomBytes(32).toString("hex")}`, FRONTEND_URL: FRONTEND, COOKIE_SECURE: "true", SMTP_HOST: "127.0.0.1", SMTP_PORT: "9",
     // Tuning experiments: DOS_API_ENV='{"PASSWORD_HASH_WORKERS":"2"}'
     ...JSON.parse(process.env.DOS_API_ENV || "{}"),
@@ -350,7 +350,7 @@ async function partB() {
   const db = await freshDatabase(ADMIN, "legion_dosb");
   const apiPort = await freePort();
   const api = await startApi({
-    NODE_ENV: "production", DEPLOYMENT_MODE: "self-hosted", DATABASE_URL: db.url, JWT_SECRET: randomBytes(48).toString("hex"),
+    NODE_ENV: "production", DEPLOYMENT_MODE: "self-hosted", DATABASE_URL: db.url, JWT_SECRET: randomBytes(48).toString("hex"), PAYMENT_HASH_KEY: randomBytes(32).toString("hex"),
     LEGION_ENCRYPTION_KEYS: `dosb:${randomBytes(32).toString("hex")}`, FRONTEND_URL: FRONTEND, COOKIE_SECURE: "true", SMTP_HOST: "127.0.0.1", SMTP_PORT: "9",
   }, { port: apiPort });
   const dash = await startDashboardStub();

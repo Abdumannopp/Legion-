@@ -97,6 +97,7 @@ JWT_SECRET=$jwt
 POSTGRES_PASSWORD=$pgPassword
 SECURITY_EVENT_WEBHOOK_SECRET=$webhook
 LEGION_ENCRYPTION_KEYS=$keys
+PAYMENT_HASH_KEY=$(New-Hex 32)
 "@
     [System.IO.File]::WriteAllText($envPath, $text, $utf8)
     Ok "Created .env with new secrets"
@@ -107,6 +108,15 @@ LEGION_ENCRYPTION_KEYS=$keys
         $addition = "LEGION_ENCRYPTION_KEYS=k1:" + (New-Hex 32)
         [System.IO.File]::AppendAllText($envPath, "`r`n$addition`r`n", $utf8)
         Ok "Added LEGION_ENCRYPTION_KEYS to .env"
+    }
+    if ((Existing $lines "PAYMENT_HASH_KEY") -eq "") {
+        # Before this key existed, payment hashes used the webhook secret (or a built-in value).
+        # Keep that as the previous key so confirmed accounts are still recognised.
+        $legacy = Existing $lines "SECURITY_EVENT_WEBHOOK_SECRET"
+        if ($legacy -eq "") { $legacy = "legion-payments" }
+        $addition = "PAYMENT_HASH_KEY=" + (New-Hex 32) + "`r`nPAYMENT_HASH_PREVIOUS_KEYS=" + $legacy
+        [System.IO.File]::AppendAllText($envPath, "`r`n$addition`r`n", $utf8)
+        Ok "Added PAYMENT_HASH_KEY to .env (the old payment key is kept as PAYMENT_HASH_PREVIOUS_KEYS)"
     }
 }
 

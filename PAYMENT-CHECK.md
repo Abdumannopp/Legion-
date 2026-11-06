@@ -95,3 +95,22 @@ recognise it). The hash is different for every organisation.
   looks only at the organisation's own history and active attacks.
 - The confirmation call is a human step. Clicking "release" without making it
   defeats the protection.
+
+
+## The hash key (`PAYMENT_HASH_KEY`)
+
+Legion never stores an account number. It stores an HMAC of it so the same account is recognised
+next time. An account number has little entropy, so whoever knows the key can recover accounts from
+the hashes by trying them all. Therefore:
+
+- `PAYMENT_HASH_KEY` (32+ random characters, `openssl rand -hex 32`) is **required in production**;
+  the API refuses to start without it, with a placeholder, or with a value reused from `JWT_SECRET`
+  or `SECURITY_EVENT_WEBHOOK_SECRET`. Back it up with `.env`, not with the database.
+- Before 2026-11 the hash used the webhook secret, or a built-in value when none was set. `install.sh`,
+  `start-docker.ps1` and `npm run setup` add a new key to an existing installation and keep the old
+  one as `PAYMENT_HASH_PREVIOUS_KEYS`, so accounts already confirmed are still recognised. Remove the
+  previous key after the payment-record retention period (24 months).
+- Rotating: put the new key in `PAYMENT_HASH_KEY` and the old one first in `PAYMENT_HASH_PREVIOUS_KEYS`.
+  A confirmation is carried to the new hash the next time the account is checked.
+- A lost key fails safe: known accounts look new, so payments to them are **held** for a phone check,
+  never let through.

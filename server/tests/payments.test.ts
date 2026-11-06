@@ -260,3 +260,65 @@ describe("the payment-check notice: a new hosted workspace confirms it in writin
     await request(app).post("/security-events/payment-check").set("content-type", "application/json").send(pay()).expect(401);
   });
 });
+
+describe("F-03: the payment hash key is its own secret, mandatory in production, and rotatable", () => {
+  const saved = { key: config.paymentHashKey, prev: config.paymentHashPreviousKeys, webhook: config.webhookSecret };
+  const restore = () => { config.paymentHashKey = saved.key; config.paymentHashPreviousKeys = saved.prev; config.webhookSecret = saved.webhook; };
+
+  it("production refuses a missing, placeholder or reused key, and accepts a proper one", async () => {
+    const { paymentHashKeyProblems } = await import("../src/config.js");
+    const jwt = "j".repeat(10) + randomUUID() + randomUUID();
+    const good = randomUUID() + randomUUID();
+    expect(paymentHashKeyProblems({ paymentHashKey: "", paymentHashPreviousKeys: [], jwtSecret: jwt, webhookSecret: "" }).join()).toMatch(/PAYMENT_HASH_KEY is required/);
+    expect(paymentHashKeyProblems({ paymentHashKey: "change-me", paymentHashPreviousKeys: [], jwtSecret: jwt, webhookSecret: "" }).join()).toMatch(/long random value/);
+    expect(paymentHashKeyProblems({ paymentHashKey: jwt, paymentHashPreviousKeys: [], jwtSecret: jwt, webhookSecret: "" }).join()).toMatch(/its own value/);
+    expect(paymentHashKeyProblems({ paymentHashKey: good, paymentHashPreviousKeys: [], jwtSecret: jwt, webhookSecret: good }).join()).toMatch(/its own value/);
+    expect(paymentHashKeyProblems({ paymentHashKey: good, paymentHashPreviousKeys: [good], jwtSecret: jwt, webhookSecret: "" }).join()).toMatch(/must not contain the current/);
+    expect(paymentHashKeyProblems({ paymentHashKey: good, paymentHashPreviousKeys: [], jwtSecret: jwt, webhookSecret: "w".repeat(40) })).toEqual([]);
+  });
+
+  it("no built-in constant: without a key the hash is not the old HMAC('legion-payments'), and the webhook secret has no effect", async () => {
+    const { createHmac } = await import("node:crypto");
+    try {
+      config.paymentHashKey = ""; config.paymentHashPreviousKeys = []; config.webhookSecret = "";
+      const legacy = createHmac("sha256", "legion-payments").update(`${tenantA}:DE89370400440532013000`).digest("hex");
+      const h = beneficiaryHash(tenantA, IBAN);
+      expect(h).not.toBe(legacy);
+      config.webhookSecret = "a-new-webhook-secret-after-rotation-0123456789";
+      expect(beneficiaryHash(tenantA, IBAN)).toBe(h);           // rotating the webhook secret changes nothing
+      config.paymentHashKey = randomUUID() + randomUUID();
+      expect(beneficiaryHash(tenantA, IBAN)).not.toBe(h);       // the key is what counts
+    } finally { restore(); }
+  });
+
+  it("rotation: an account confirmed under the old key stays confirmed when the old key is listed as previous", async () => {
+    const keyA = randomUUID() + randomUUID(); const keyB = randomUUID() + randomUUID();
+    try {
+      config.paymentHashKey = keyA; config.paymentHashPreviousKeys = [];
+      const first = await check(credA, pay()).expect(200);
+      expect(first.body.decision).toBe("hold");
+      await release(adminA, first.body.id).expect(200);
+      expect((await check(credA, pay({ amount: 99 })).expect(200)).body.decision).toBe("allow");
+
+      config.paymentHashKey = keyB; config.paymentHashPreviousKeys = [keyA];
+      expect((await check(credA, pay({ amount: 98 })).expect(200)).body.decision).toBe("allow");
+      // New rows are written under the new key only.
+      const rows = (await query("SELECT beneficiary_hash, verified_at FROM payment_beneficiaries WHERE tenant_id = $1", [tenantA])).rows;
+      expect(rows.map((r) => r.beneficiary_hash).sort()).toEqual([beneficiaryHash(tenantA, IBAN, keyA), beneficiaryHash(tenantA, IBAN, keyB)].sort());
+      expect(rows.every((r) => r.verified_at)).toBe(true);
+      // Once the old key is dropped, the confirmation carried to the new row is kept.
+      config.paymentHashPreviousKeys = [];
+      expect((await check(credA, pay({ amount: 97 })).expect(200)).body.decision).toBe("allow");
+    } finally { restore(); }
+  });
+
+  it("a lost key fails safe: the account looks new and the payment is held, never let through", async () => {
+    try {
+      config.paymentHashKey = randomUUID() + randomUUID(); config.paymentHashPreviousKeys = [];
+      const first = await check(credA, pay()).expect(200);
+      await release(adminA, first.body.id).expect(200);
+      config.paymentHashKey = randomUUID() + randomUUID();    // the old key is gone and not listed
+      expect((await check(credA, pay({ amount: 96 })).expect(200)).body).toMatchObject({ decision: "hold", reasons: [{ code: "new_beneficiary" }] });
+    } finally { restore(); }
+  });
+});

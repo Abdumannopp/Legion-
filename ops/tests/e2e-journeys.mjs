@@ -94,7 +94,7 @@ async function main() {
     cwd: join(REPO, "server"),
     env: {
       PATH: process.env.PATH, DEPLOYMENT_MODE: "saas", PORT: "8000",
-      DATABASE_URL: dbUrl(DB, APP_ROLE, APP_PASSWORD), JWT_SECRET: randomBytes(32).toString("hex"),
+      DATABASE_URL: dbUrl(DB, APP_ROLE, APP_PASSWORD), JWT_SECRET: randomBytes(32).toString("hex"), PAYMENT_HASH_KEY: randomBytes(32).toString("hex"),
       FRONTEND_URL: WEB, COOKIE_SECURE: "false", LEGION_ENCRYPTION_KEYS: `ux:${randomBytes(32).toString("hex")}`,
       SEED_DEMO_DATA: "false", DATA_FILE: join(WORK, "legion.json"), TRIAL_DAYS: "14",
     },

@@ -57,6 +57,9 @@ services:
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       SECURITY_EVENT_WEBHOOK_SECRET: ${SECURITY_EVENT_WEBHOOK_SECRET:-}
+      # Payment-check account hashes (install.sh generates it). Production refuses to start without it.
+      PAYMENT_HASH_KEY: ${PAYMENT_HASH_KEY:-}
+      PAYMENT_HASH_PREVIOUS_KEYS: ${PAYMENT_HASH_PREVIOUS_KEYS:-}
       AI_PROVIDER: ${AI_PROVIDER:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-}

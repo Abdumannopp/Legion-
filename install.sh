@@ -51,6 +51,8 @@ WEBHOOK_SECRET="$(existing SECURITY_EVENT_WEBHOOK_SECRET)"
 # "<id>:<64 hex>". Encrypts TOTP seeds and webhook secrets at rest. Losing it
 # makes them unreadable, so it is generated once and never regenerated.
 ENCRYPTION_KEYS="$(existing LEGION_ENCRYPTION_KEYS)"
+# Recognises bank accounts in the payment check without storing them (HMAC key). Its own secret.
+PAYMENT_HASH_KEY="$(existing PAYMENT_HASH_KEY)"
 
 NEW_INSTALL=false
 if [[ -z "$JWT_SECRET" ]]; then
@@ -69,6 +71,18 @@ if [[ -z "$ENCRYPTION_KEYS" ]]; then
     # Installations made before this key existed: add it, keep everything else.
     printf 'LEGION_ENCRYPTION_KEYS=%s\n' "$ENCRYPTION_KEYS" >> "$ENV_FILE"
     ok "Added LEGION_ENCRYPTION_KEYS to $ENV_FILE"
+  fi
+fi
+
+if [[ -z "$PAYMENT_HASH_KEY" ]]; then
+  PAYMENT_HASH_KEY="$(random_hex 32)"
+  if [[ "$NEW_INSTALL" != true ]]; then
+    # Before this key existed, payment hashes used the webhook secret, or a built-in value when none
+    # was set. List that as the previous key so accounts already confirmed are still recognised;
+    # every new hash uses the new key. Remove the previous key after the retention period (24 months).
+    LEGACY="${WEBHOOK_SECRET:-legion-payments}"
+    printf 'PAYMENT_HASH_KEY=%s\nPAYMENT_HASH_PREVIOUS_KEYS=%s\n' "$PAYMENT_HASH_KEY" "$LEGACY" >> "$ENV_FILE"
+    ok "Added PAYMENT_HASH_KEY to $ENV_FILE (the old payment key is kept as PAYMENT_HASH_PREVIOUS_KEYS)"
   fi
 fi
 
@@ -131,6 +145,7 @@ JWT_SECRET=$JWT_SECRET
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 SECURITY_EVENT_WEBHOOK_SECRET=$WEBHOOK_SECRET
 LEGION_ENCRYPTION_KEYS=$ENCRYPTION_KEYS
+PAYMENT_HASH_KEY=$PAYMENT_HASH_KEY
 EOF
   chmod 600 "$ENV_FILE"
   ok "Wrote $ENV_FILE (permissions 600)"

@@ -53,7 +53,8 @@ function configChecks(env) {
   check(strong(env.POSTGRES_ADMIN_PASSWORD), A, "pg-admin-pw", "database admin password is strong", "POSTGRES_ADMIN_PASSWORD is missing or weak");
   check(strong(env.APP_DB_PASSWORD), A, "pg-app-pw", "application database password is strong", "APP_DB_PASSWORD is missing or weak");
 
-  const secrets = { JWT_SECRET: env.JWT_SECRET, SOC_AUDIT_KEY: env.SOC_AUDIT_KEY, HEALTH_METRICS_TOKEN: env.HEALTH_METRICS_TOKEN, POSTGRES_ADMIN_PASSWORD: env.POSTGRES_ADMIN_PASSWORD, APP_DB_PASSWORD: env.APP_DB_PASSWORD };
+  check(strong(env.PAYMENT_HASH_KEY), A, "payment-hash-key", "PAYMENT_HASH_KEY is set and strong", "PAYMENT_HASH_KEY must be set (32+ random chars): it protects the bank accounts the payment check recognises, and production refuses to start without it");
+  const secrets = { JWT_SECRET: env.JWT_SECRET, SOC_AUDIT_KEY: env.SOC_AUDIT_KEY, PAYMENT_HASH_KEY: env.PAYMENT_HASH_KEY, HEALTH_METRICS_TOKEN: env.HEALTH_METRICS_TOKEN, POSTGRES_ADMIN_PASSWORD: env.POSTGRES_ADMIN_PASSWORD, APP_DB_PASSWORD: env.APP_DB_PASSWORD };
   const present = Object.entries(secrets).filter(([, v]) => v);
   const dup = present.filter(([, v], i) => present.findIndex(([, w]) => w === v) !== i).map(([k]) => k);
   check(dup.length === 0, A, "secrets-distinct", "every secret is different from every other", `these secrets reuse another secret's value: ${dup.join(", ")}`);

@@ -36,7 +36,7 @@ const DB = `legion_pilot_${id}`;
 const DB_RESTORED = `legion_pilot_dr_${id}`;
 const APP_USER = `legion_app_${id}`;
 const hex = () => randomBytes(32).toString("hex");
-const SECRETS = { JWT_SECRET: hex(), SOC_AUDIT_KEY: hex(), HEALTH_METRICS_TOKEN: hex(), APP_PW: hex(), LEGION_ENCRYPTION_KEYS: `k1:${hex()}` };
+const SECRETS = { JWT_SECRET: hex(), SOC_AUDIT_KEY: hex(), PAYMENT_HASH_KEY: hex(), HEALTH_METRICS_TOKEN: hex(), APP_PW: hex(), LEGION_ENCRYPTION_KEYS: `k1:${hex()}` };
 const WORK = mkdtempSync(join(tmpdir(), "legion-rehearsal-"));
 chmodSync(WORK, 0o755);
 const STATE = join(WORK, "state"); mkdirSync(STATE); chownSync(STATE, 65534, 65534);
@@ -70,7 +70,7 @@ function serverEnv(over = {}) {
     DATABASE_URL: appUrlFor(DB), PORT: String(PORT), LEGION_BIND_ADDRESS: "127.0.0.1",
     DEPLOYMENT_MODE: "self-hosted", SEED_DEMO_DATA: "false", COOKIE_SECURE: "true",
     FRONTEND_URL: "https://pilot.acme-soc.test", CORS_ORIGINS: "https://pilot.acme-soc.test", TRUSTED_PROXIES: "127.0.0.1", REFRESH_COOKIE_PATH: "/api/auth",
-    JWT_SECRET: SECRETS.JWT_SECRET, LEGION_ENCRYPTION_KEYS: SECRETS.LEGION_ENCRYPTION_KEYS, SOC_AUDIT_KEY: SECRETS.SOC_AUDIT_KEY, HEALTH_METRICS_TOKEN: SECRETS.HEALTH_METRICS_TOKEN,
+    JWT_SECRET: SECRETS.JWT_SECRET, LEGION_ENCRYPTION_KEYS: SECRETS.LEGION_ENCRYPTION_KEYS, SOC_AUDIT_KEY: SECRETS.SOC_AUDIT_KEY, PAYMENT_HASH_KEY: SECRETS.PAYMENT_HASH_KEY, HEALTH_METRICS_TOKEN: SECRETS.HEALTH_METRICS_TOKEN,
     SMTP_HOST: "127.0.0.1", SMTP_PORT: "2525", ALERT_EMAIL_MIN_SEVERITY: "critical",
     POLICY_ENGINE_MODE: "shadow", ORCHESTRATOR_AUTO_MODE: "shadow", RUNTIME_WORKER: "on", RUNTIME_POLL_SECONDS: "1",
     SETUP_TOKEN_FILE: join(STATE, ".legion-setup-token"), ACCESS_LOG: "on",

@@ -19,7 +19,7 @@ function goodEnv(): Record<string, string> {
   const base = readFileSync(join(ROOT, "deploy", "pilot.env.example"), "utf8").replaceAll("legion-pilot.example.com", "pilot.acme-soc.test");
   const env: Record<string, string> = {};
   for (const l of base.split("\n")) { const m = /^([A-Z_]+)=(.*)$/.exec(l); if (m) env[m[1]!] = m[2]!; }
-  Object.assign(env, { POSTGRES_ADMIN_PASSWORD: hex(), APP_DB_PASSWORD: hex(), JWT_SECRET: hex(), LEGION_ENCRYPTION_KEYS: `k1:${hex()}`, SOC_AUDIT_KEY: hex(), HEALTH_METRICS_TOKEN: hex(), SMTP_HOST: "smtp.mail.test" });
+  Object.assign(env, { POSTGRES_ADMIN_PASSWORD: hex(), APP_DB_PASSWORD: hex(), JWT_SECRET: hex(), LEGION_ENCRYPTION_KEYS: `k1:${hex()}`, SOC_AUDIT_KEY: hex(), PAYMENT_HASH_KEY: hex(), HEALTH_METRICS_TOKEN: hex(), SMTP_HOST: "smtp.mail.test" });
   return env;
 }
 function run(env: Record<string, string>, extra: string[] = []) {
@@ -58,6 +58,7 @@ describe("pilot preflight", () => {
     ["a placeholder JWT secret", (e) => { e.JWT_SECRET = "CHANGE-ME"; }, "jwt"],
     ["a short JWT secret", (e) => { e.JWT_SECRET = "abc123"; }, "jwt"],
     ["no audit-chain key", (e) => { delete e.SOC_AUDIT_KEY; }, "soc-audit-key"],
+    ["no payment hash key", (e) => { delete e.PAYMENT_HASH_KEY; }, "payment-hash-key"],
     ["no metrics token", (e) => { e.HEALTH_METRICS_TOKEN = ""; }, "metrics-token"],
     ["the same value reused for two secrets", (e) => { e.SOC_AUDIT_KEY = e.JWT_SECRET!; }, "secrets-distinct"],
     ["the API sharing the admin database password", (e) => { e.APP_DB_PASSWORD = e.POSTGRES_ADMIN_PASSWORD!; }, "secrets-distinct"],

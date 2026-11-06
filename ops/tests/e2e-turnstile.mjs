@@ -103,7 +103,7 @@ try {
   verify = await startSiteverify();
   db = await freshDatabase(ADMIN, "legion_captcha");
   api = await startApi({
-    NODE_ENV: "development", DEPLOYMENT_MODE: "self-hosted", DATABASE_URL: db.url, JWT_SECRET: randomBytes(48).toString("hex"),
+    NODE_ENV: "development", DEPLOYMENT_MODE: "self-hosted", DATABASE_URL: db.url, JWT_SECRET: randomBytes(48).toString("hex"), PAYMENT_HASH_KEY: randomBytes(32).toString("hex"),
     LEGION_ENCRYPTION_KEYS: `cap:${randomBytes(32).toString("hex")}`, FRONTEND_URL: WEB, COOKIE_SECURE: "false",
     TURNSTILE_SECRET_KEY: SECRET, TURNSTILE_VERIFY_URL: verify.url,
   }, { port: apiPort });

@@ -36,6 +36,7 @@ const SECRETS = {
   JWT_SECRET: randomBytes(48).toString("hex"),
   ENC: randomBytes(32).toString("hex"),
   METRICS: randomBytes(24).toString("hex"),
+  PAY: randomBytes(32).toString("hex"),
 };
 const seen = []; // every response body, for the leak scan
 const ipOf = (() => { let n = 10; return () => `198.51.100.${n++}`; })();
@@ -48,7 +49,7 @@ async function main() {
   const port = await freePort();
   const env = {
     NODE_ENV: "production", DEPLOYMENT_MODE: "saas", DATABASE_URL: db.url,
-    JWT_SECRET: SECRETS.JWT_SECRET, LEGION_ENCRYPTION_KEYS: `probe:${SECRETS.ENC}`,
+    JWT_SECRET: SECRETS.JWT_SECRET, PAYMENT_HASH_KEY: SECRETS.PAY, LEGION_ENCRYPTION_KEYS: `probe:${SECRETS.ENC}`,
     FRONTEND_URL: FRONTEND, COOKIE_SECURE: "true", SMTP_HOST: "127.0.0.1", SMTP_PORT: String(smtp.port),
     SMTP_FROM: "Legion <no-reply@legion.test>", HEALTH_METRICS_TOKEN: SECRETS.METRICS, SEED_DEMO_DATA: "true",
   };
@@ -349,7 +350,7 @@ async function main() {
   // ---------------------------------------------------------------------------
   section("secret leakage");
   const log = api.log();
-  const issued = [credA.body.secret, credB.body.secret, bAgent.body.credential?.secret, setup.body.secret, A.password, Bo.password, SECRETS.JWT_SECRET, SECRETS.ENC, SECRETS.METRICS].filter(Boolean);
+  const issued = [credA.body.secret, credB.body.secret, bAgent.body.credential?.secret, setup.body.secret, A.password, Bo.password, SECRETS.JWT_SECRET, SECRETS.ENC, SECRETS.METRICS, SECRETS.PAY].filter(Boolean);
   check("no secret, password or key appears in the server log", issued.every((s) => !log.includes(s)), issued.filter((s) => log.includes(s)).map((s) => s.slice(0, 6) + "…").join(","));
   check("no secret appears in any non-issuing response", issued.every((s) => !seen.join("\n").includes(s)));
   const credRow = await sql(ADMIN, db.db, "SELECT row_to_json(c)::text AS r FROM webhook_credentials c WHERE key_id = $1", [credA.body.id]);

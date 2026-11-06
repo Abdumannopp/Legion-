@@ -136,7 +136,7 @@ async function main() {
     cwd: join(REPO, "server"),
     env: {
       PATH: process.env.PATH, DEPLOYMENT_MODE: "self-hosted", PORT: String(PORT),
-      DATABASE_URL: url(DB, APP_ROLE, APP_PASSWORD), JWT_SECRET: randomBytes(32).toString("hex"),
+      DATABASE_URL: url(DB, APP_ROLE, APP_PASSWORD), JWT_SECRET: randomBytes(32).toString("hex"), PAYMENT_HASH_KEY: randomBytes(32).toString("hex"),
       FRONTEND_URL: "http://localhost:3000", COOKIE_SECURE: "false", SECURITY_EVENT_WEBHOOK_SECRET: WEBHOOK_SECRET,
       LEGION_ENCRYPTION_KEYS: `e2e:${randomBytes(32).toString("hex")}`,
       SEED_DEMO_DATA: "false", DATA_FILE: join(WORK, "legion.json"),

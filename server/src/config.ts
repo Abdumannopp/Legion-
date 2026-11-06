@@ -136,6 +136,15 @@ export const config = {
    * install.
    */
   webhookSecret: process.env.SECURITY_EVENT_WEBHOOK_SECRET || "",
+  /**
+   * Keys the payment check uses to recognise a bank account again without storing it (HMAC-SHA256).
+   * Mandatory in production (≥32 random characters, its own value). Never the webhook secret and
+   * never a built-in constant: an account number has little entropy, so a known key makes every
+   * stored hash reversible by brute force. PAYMENT_HASH_PREVIOUS_KEYS keeps older hashes matching
+   * after a rotation (new hashes always use PAYMENT_HASH_KEY).
+   */
+  paymentHashKey: process.env.PAYMENT_HASH_KEY || "",
+  paymentHashPreviousKeys: (process.env.PAYMENT_HASH_PREVIOUS_KEYS || "").split(",").map((s) => s.trim()).filter(Boolean),
 
   // --- Sensor webhook authentication ---
   /** Requests whose timestamp is further than this from the server's clock
@@ -581,6 +590,18 @@ export interface SafetyInputs {
   databaseUrl: string;
 }
 
+/** F-03: what is wrong with the payment hash keys for production. Pure, for the boot check and its tests. */
+export function paymentHashKeyProblems(c: { paymentHashKey: string; paymentHashPreviousKeys: string[]; jwtSecret: string; webhookSecret: string }): string[] {
+  const p: string[] = [];
+  if (!c.paymentHashKey) p.push("PAYMENT_HASH_KEY is required in production (openssl rand -hex 32): it protects the bank account numbers the payment check recognises");
+  else if (isWeakJwtSecret(c.paymentHashKey)) p.push("PAYMENT_HASH_KEY must be a long random value (32+ chars), not a placeholder");
+  else if (c.paymentHashKey === c.jwtSecret || (c.webhookSecret && c.paymentHashKey === c.webhookSecret)) {
+    p.push("PAYMENT_HASH_KEY must be its own value, not JWT_SECRET or SECURITY_EVENT_WEBHOOK_SECRET (rotating those would silently change every payment hash)");
+  }
+  if (c.paymentHashPreviousKeys.includes(c.paymentHashKey) && c.paymentHashKey) p.push("PAYMENT_HASH_PREVIOUS_KEYS must not contain the current PAYMENT_HASH_KEY");
+  return p;
+}
+
 export function unsafeConfigProblems(input: SafetyInputs): string[] {
   const problems: string[] = [];
 
@@ -694,6 +715,7 @@ if (isProduction) {
   if (isWeakJwtSecret(config.jwtSecret)) {
     problems.push("JWT_SECRET must be a long random value (32+ chars), not a placeholder");
   }
+  problems.push(...paymentHashKeyProblems(config));
   if (config.webhookEncryptionKey && config.webhookEncryptionKey.length < 32) {
     problems.push("WEBHOOK_ENCRYPTION_KEY must be 32+ random characters (openssl rand -hex 32)");
   }
