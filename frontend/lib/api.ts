@@ -909,6 +909,23 @@ export function getIntegrationCatalogue(): Promise<{ integrations: IntegrationIn
   return request("/integrations/catalogue");
 }
 
+export interface ConnectionInfo {
+  id: string; kind: string; name: string; status: "active" | "paused" | "error" | "disabled";
+  config: Record<string, unknown>; has_secrets: boolean; last_success_at: string | null; last_error: string | null; failures: number; created_at: string;
+}
+export function listConnections(): Promise<{ connections: ConnectionInfo[] }> {
+  return request("/integrations");
+}
+export function createConnection(body: { kind: string; name: string; config: Record<string, unknown>; secrets: Record<string, string> }): Promise<ConnectionInfo> {
+  return request("/integrations", { method: "POST", body: JSON.stringify(body) });
+}
+export function setConnectionStatus(id: string, action: "pause" | "resume"): Promise<ConnectionInfo> {
+  return request(`/integrations/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+}
+export function removeConnection(id: string): Promise<{ status: string }> {
+  return request(`/integrations/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
 function absoluteApi(path: string): string {
   const base = API_URL.startsWith("http") ? API_URL : `${typeof window !== "undefined" ? window.location.origin : ""}${API_URL}`;
   return `${base.replace(/\/+$/, "")}${path}`;

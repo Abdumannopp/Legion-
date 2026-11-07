@@ -9,8 +9,8 @@ Legion takes security data in through **adapters** (`server/src/integrations/`):
 | 2 | **Syslog / CEF** | **built, tested with sample lines** | `POST /security-events/webhook/cef`, signed, `text/plain` |
 | 3a | **Slack** (notification) | **built, tested with a simulated provider** | outbound, incoming-webhook URL |
 | 3b | **Jira Cloud** (ticket) | **built, tested with a simulated provider** | outbound, e-mail + API token |
-| 3 | Microsoft Defender XDR | planned (`m365` pull adapter: Graph `alerts_v2`) | Entra app, `SecurityAlert.Read.All` |
-| 4 | AWS GuardDuty | planned (`aws` pull adapter: Security Hub/GuardDuty findings) | cross-account IAM role + external id |
+| 3 | **Microsoft Defender XDR** | **built, tested with a simulated Graph** | pull, Entra app, `SecurityAlert.Read.All` |
+| 4 | **AWS GuardDuty** | **built, tested with a simulated API; SigV4 checked against AWS's published test vector** | pull, IAM access key (read only) |
 | 5 | Elastic / Splunk dedicated pull adapters | optional later; the generic webhook already receives their alerts | |
 
 ## Authentication (all push routes)
@@ -52,8 +52,6 @@ Legion **does not open a syslog port**: an unauthenticated UDP/TCP listener woul
 ## Honest limits
 
 - Tested with sample payloads and lines, **not** against real Elastic, Splunk, ArcSight or rsyslog installations.
-- No dashboard form yet for these (credentials are created in Settings; the catalogue lists the integrations).
-- Defender XDR and GuardDuty are not built; they are pull adapters needing real tenant/account access to be verified.
 
 
 ## Outbound connectors: Slack (notification) and Jira (ticket)
@@ -96,3 +94,37 @@ Secrets are sealed (AES-256-GCM, bound to the workspace and connection), never r
 
 **Verified:** `tests/integrations-outbound.test.ts` (17 tests, simulated Slack/Jira): delivery, filtering by severity, duplicate suppression, markup/mention neutralisation, 503→retry→delivered, 429 retry, revoked webhook dead-lettered with health shown, paused/removed connections, secrets never in responses/URLs/rows/errors, tenant isolation (workspace B's channel never receives A's alerts; A cannot touch B's connection), idempotent tickets.
 **Not verified:** a real Slack workspace or Jira Cloud site (only simulated providers), Jira Data Center / Server, Slack bot tokens (only incoming webhooks), a dashboard form for these connections (API only), correlation of an alert with its ticket key in the UI (stored on the message, not yet displayed).
+
+
+## Pull connectors: Microsoft Defender XDR and AWS GuardDuty
+
+Added in the dashboard under **Connect → Connections** (administrators), or `POST /integrations`. Polled every 5 minutes by whichever instance holds the lease; ingestion is idempotent, so a repeated poll never doubles an alert. A failing poll backs off (up to 1 h) and, after 10 failures in a row, the connection shows *Stopped after repeated errors* until an administrator resumes it.
+
+| | Defender XDR (`m365`) | GuardDuty (`guardduty`) |
+|---|---|---|
+| Vendor side | Entra ID → App registration → API permission **SecurityAlert.Read.All** (application) → grant admin consent → create a client secret | IAM user with only the policy below; create an access key |
+| `config` | `{"directory_id":"<GUID>","client_id":"<GUID>"}` | `{"regions":["eu-west-1","us-east-1"]}` (1–5) |
+| `secrets` | `{"client_secret":"…"}` | `{"access_key_id":"…","secret_access_key":"…"}` |
+| Hosts Legion calls | `login.microsoftonline.com`, `graph.microsoft.com` | `guardduty.<region>.amazonaws.com` |
+| Reads | Graph `security/alerts_v2`, by `lastUpdateDateTime` | detectors → findings by `updatedAt` |
+
+GuardDuty IAM policy (read only): `guardduty:ListDetectors`, `guardduty:ListFindings`, `guardduty:GetFindings` on `*`.
+
+Firewall for self-hosted installs: allow outbound 443 to the hosts above, plus `hooks.slack.com` and `*.atlassian.net` for Slack and Jira. No other environment variable is needed.
+
+**Verified (simulated providers):** field mapping, severity bands, cursor and paging, a paging link to any host but Graph is refused, wrong secret / missing consent / 403 give a clear error that never contains the secret, an outage backs off and recovers, alerts land only in the owning workspace, secrets are sealed and never returned, region names cannot inject hosts (`tests/integrations-cloud.test.ts`).
+**Not verified:** a real Entra tenant or AWS account. Limits: a Microsoft alert or GuardDuty finding is stored once by its id (later updates of the same object do not raise a new Legion alert); Defender severity "high" is the top Microsoft level, so Defender alerts are never "critical"; AWS cross-account role assumption (STS) and Security Hub are not built.
+
+## Definition of done: where each item stands
+
+| Item | Status |
+|---|---|
+| Connectors pass integration tests | yes (simulated providers); in CI as part of `test:security` |
+| SaaS and self-hosted configuration documented | yes (this file; egress hosts, no new variables) |
+| Secrets protected | sealed per connection, never returned, scrubbed from errors (tested) |
+| Tenant isolation verified | yes, for pull, push and outbound (tested) |
+| Events correctly correlated | all sources use the same ingestion and campaign correlation (`campaigns.ts`); correlation across vendors is covered by the shared path, not by a vendor-specific test |
+| Notification delivery / ticket creation verified | with simulated Slack/Jira; not against real services |
+| Failure and recovery tested | provider 5xx/429, revoked credentials, outage then recovery, paused/removed connections |
+| No privileged response action without approval | connectors cannot respond (tested); the only executors remain the opt-in ones in PROTECTION.md |
+| End-to-end attack investigation demonstration | the existing scenario `tests/e2e-soc-scenario.test.ts` (alert → triage → proposal → approval → simulation → audit) is the demonstration; it does not use these connectors |

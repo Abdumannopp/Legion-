@@ -8,14 +8,16 @@
  * storage, the worker, notifications or tenant isolation.
  */
 import type { Adapter, IntegrationManifest, OutboundAdapter, PullAdapter, PushAdapter } from "./types.js";
+import { guarddutyAdapter } from "./guardduty.js";
 import { jiraAdapter } from "./jira.js";
+import { m365Adapter } from "./m365.js";
 import { slackAdapter } from "./slack.js";
 import { cefAdapter } from "./cef.js";
 import { genericWebhookAdapter } from "./generic.js";
 import { wazuhAdapter } from "./wazuh.js";
 
 const adapters = new Map<string, Adapter>();
-const BUILT_IN = new Set(["wazuh", "generic_webhook", "cef", "slack", "jira"]);
+const BUILT_IN = new Set(["wazuh", "generic_webhook", "cef", "slack", "jira", "m365", "guardduty"]);
 
 export function register(adapter: Adapter): void {
   if (!/^[a-z][a-z0-9_]{1,40}$/.test(adapter.manifest.kind)) throw new Error(`invalid integration kind: ${adapter.manifest.kind}`);
@@ -49,6 +51,8 @@ register(genericWebhookAdapter);
 register(cefAdapter);
 register(slackAdapter);
 register(jiraAdapter);
+register(m365Adapter);
+register(guarddutyAdapter);
 
 /**
  * The roadmap, as contracts. Each is the adapter type it will be, the data it
