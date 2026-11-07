@@ -389,6 +389,10 @@ async function partB() {
     check("the sensor webhook is NOT rate-limited by nginx (a busy Wazuh manager is never throttled there)", wh.filter(byNginx).length === 0, `${wh.filter(byNginx).length} nginx refusals`);
 
     section("B3. the real client address behind a CDN");
+    // Exhaust the address's nginx bucket again right before probing it: the bursts above took seconds, and nginx
+    // refills one token every 2 s (30/min), so on a slow runner a lone probe could pass nginx and meet Legion's
+    // own limiter instead. The assertion below stays strict: this address must be refused by nginx.
+    await burst(cf.base, 60, login);
     const a = await burst(cf.base, 1, login);
     const b = await burst(cf.base, 1, { ...login, headers: { ...login.headers, "cf-connecting-ip": "198.51.100.2" } });
     check("trusted CDN: the visitor already throttled stays throttled …", byNginx(a[0]), String(a[0].status));
