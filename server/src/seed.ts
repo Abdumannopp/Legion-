@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { config, loopbackBind } from "./config.js";
-import { query, queryOne, transaction } from "./db/pool.js";
+import { query, queryOne, transaction, withTenant } from "./db/pool.js";
 import { trialEnd } from "./store.js";
 
 /**
@@ -34,7 +34,8 @@ export async function seedDemoIfEmpty(): Promise<void> {
   const tenantId = randomUUID();
   const passwordHash = await bcrypt.hash("legion123", 12);
 
-  const seeded = await transaction(async (client) => {
+  // F-04: everything below is written into the demo workspace (row-level security, db/rls.ts).
+  const seeded = await withTenant(tenantId, () => transaction(async (client) => {
     // Instances that boot together all see an empty database and all try to
     // seed it; without this the losers crash on the unique email constraint
     // and the pod restart-loops on every fresh deploy.
@@ -89,7 +90,7 @@ export async function seedDemoIfEmpty(): Promise<void> {
       );
     }
     return true;
-  });
+  }));
 
   if (seeded) console.info("Legion: demo workspace seeded (admin@legion.demo / legion123).");
 }

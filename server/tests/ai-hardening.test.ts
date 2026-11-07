@@ -627,13 +627,14 @@ describe("a hosted workspace starts in strict mode", () => {
   const saved = config.deploymentMode;
   afterEach(() => { config.deploymentMode = saved; });
 
-  it("never chosen = strict when hosted, standard when self-hosted; a choice always wins", () => {
+  it("never chosen = strict, hosted AND self-hosted (the provider is a third party either way); a choice always wins", () => {
     config.deploymentMode = "saas";
     expect(decidePolicy({ ai_enabled: true, ai_data_mode: null })).toMatchObject({ dataMode: "strict", dataModeIsDefault: true });
     expect(decidePolicy({ ai_enabled: true, ai_data_mode: "standard" })).toMatchObject({ dataMode: "standard", dataModeIsDefault: false });
     expect(decidePolicy({ ai_enabled: true, ai_data_mode: "strict" })).toMatchObject({ dataMode: "strict", dataModeIsDefault: false });
     config.deploymentMode = "self-hosted";
-    expect(decidePolicy({ ai_enabled: true, ai_data_mode: null })).toMatchObject({ dataMode: "standard", dataModeIsDefault: true });
+    expect(decidePolicy({ ai_enabled: true, ai_data_mode: null })).toMatchObject({ dataMode: "strict", dataModeIsDefault: true });
+    expect(decidePolicy({ ai_enabled: true, ai_data_mode: "standard" })).toMatchObject({ dataMode: "standard", dataModeIsDefault: false });
   });
 
   it("a new workspace that turns AI on sends placeholders, not real host names, until an administrator chooses otherwise", async () => {

@@ -40,6 +40,17 @@ Found while implementing (fixed in the same commits): a cascade from a parent ro
 erase audit rows under a `current_user` check (the check uses `session_user`); the sensor monitor read alerts of
 every workspace in one query (now one workspace at a time); a websocket test raced the one-second JWT precision.
 
+**Follow-up, 2026-11-07 (owner's list of six weaknesses):**
+
+| Weakness | What was done | Evidence |
+|---|---|---|
+| Separating customers' data | RLS (`DB_RLS=enforce`) is now **on by default** in both Docker installs; `/metrics` counts across workspaces through an owner-run aggregate (numbers only, `0010`); demo seed and JSON import write in their own workspace | row-level-security (13), all e2e suites enforced; CI docker job asserts `DB_RLS=enforce` |
+| Extra control for dangerous actions | Removing a person, changing a role, rotating/revoking a sensor key, deleting an integration and exporting the workspace need a password confirmation from the last 10 minutes (`POST /auth/step-up`, + code with MFA); the dashboard asks for it; erasing a workspace past a legal hold needs a written reason and is marked in the tombstone (`0011`) | recent-auth (7), db-role-split |
+| Docker ports open to the network | `docker-compose.yml` published 8000/3000 on every interface (Docker bypasses ufw); now `127.0.0.1` unless `LEGION_PUBLISH_ADDRESS` says otherwise | CI docker job: `docker compose port` = 127.0.0.1, LAN address refused |
+| A test that broke | realtime-recovery race fixed (`174f1cd`, CI green); a second, random one found in the production probe (agent-secret check split base64url on "_") fixed | CI run 42307448160; probe 106/106 |
+| Old logs filling the disk | Container logs rotated (5 × 20 MB) in the default and monitoring stacks; `SOC_RETENTION_DAYS=365` by default in Docker; `legion_database_size_bytes` metric and `LegionDatabaseLarge` alert | promtool rule tests, metrics test |
+| What reaches external AI | Strict mode (placeholders for IPs, e-mails, host names) is now the default for self-hosted too; card numbers (Luhn) and IBANs (mod-97) are removed in every mode, like credentials | ai-safety (2 new), ai-hardening |
+
 **What is still not true, after all of the above** (see also §5): RLS is off by default and covers 14 of ~35
 tenant tables; a single-role (bare-metal) install is not bound by it; the API's role can still erase a whole
 workspace through `legion_erase_tenant` (bounded: recorded, legal hold refused unless forced — and the caller

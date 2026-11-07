@@ -55,41 +55,34 @@ const sumBy = (rows: Array<Record<string, unknown>>, keyCol: string) => {
 const maxOf = (rows: Array<Record<string, unknown>>, key: string) => rows.reduce((a, r) => Math.max(a, Number(r[key] ?? 0)), 0);
 
 export async function collectMetrics(): Promise<string> {
-  const many = async (sql: string) => (await query(sql)).rows as Array<Record<string, unknown>>;
 
-  const jobs = sumBy(await many("SELECT tenant_id, status AS k, count(*)::int AS n FROM soc_jobs GROUP BY tenant_id, status"), "k");
-  const jobAges = await many(`SELECT tenant_id,
-      coalesce(floor(extract(epoch FROM now() - min(run_after) FILTER (WHERE status = 'queued' AND run_after <= now()))), 0)::int AS oldest_due,
-      count(*) FILTER (WHERE status = 'running' AND lease_until < now())::int AS expired_leases
-    FROM soc_jobs GROUP BY tenant_id`);
-  const actions = sumBy(await many("SELECT tenant_id, status AS k, count(*)::int AS n FROM action_requests GROUP BY tenant_id, status"), "k");
-  const act = await many(`SELECT tenant_id,
-      count(*) FILTER (WHERE execution_mode NOT IN ('shadow', 'simulation'))::int AS live,
-      count(*) FILTER (WHERE status = 'running' AND updated_at < now() - make_interval(secs => ${Number(RUNNING_STALE_SECONDS)}))::int AS stuck
-    FROM action_requests GROUP BY tenant_id`);
-  const appr = await many(`SELECT tenant_id,
-      count(*) FILTER (WHERE status = 'pending' AND expires_at > now())::int AS pending,
-      coalesce(floor(extract(epoch FROM now() - min(created_at) FILTER (WHERE status = 'pending' AND expires_at > now()))), 0)::int AS oldest,
-      count(*) FILTER (WHERE status = 'approved')::int AS approved_unused
-    FROM approval_requests GROUP BY tenant_id`);
-  const paused = await many("SELECT tenant_id, count(*)::int AS n FROM soc_controls WHERE actions_paused GROUP BY tenant_id");
-  const pol = sumBy(await many("SELECT tenant_id, decision AS k, count(*)::int AS n FROM policy_decisions WHERE created_at > now() - interval '5 minutes' GROUP BY tenant_id, decision"), "k");
-  const div = await many(`SELECT tenant_id, count(*)::int AS n FROM policy_decisions
-    WHERE created_at > now() - interval '24 hours' AND enforcement = 'shadow' AND decision <> 'ALLOW' AND legacy_outcome IS NOT NULL AND legacy_outcome NOT LIKE 'skipped%'
-    GROUP BY tenant_id`);
-  const audit = await many("SELECT tenant_id, count(*)::int AS n FROM soc_audit_events GROUP BY tenant_id");
+  // One call: the aggregate runs in the database as the schema owner (migration 0010), so it also works
+  // under row-level security, and the API receives counts per workspace, never rows.
+  type Rows = Array<Record<string, unknown>>;
+  type Agg = { jobs: Rows; job_ages: Rows; actions: Rows; act: Rows; appr: Rows; paused: Rows; pol: Rows; div: Rows; audit: Rows; heads: Rows; wf: Rows; db_bytes: number };
+  const m = (await query<{ m: Agg }>("SELECT legion_soc_metrics($1) AS m", [Number(RUNNING_STALE_SECONDS)])).rows[0]!.m;
+  const jobs = sumBy(m.jobs, "k");
+  const jobAges = m.job_ages;
+  const actions = sumBy(m.actions, "k");
+  const act = m.act;
+  const appr = m.appr;
+  const paused = m.paused;
+  const pol = sumBy(m.pol, "k");
+  const div = m.div;
+  const audit = m.audit;
   // Workspaces whose newest audit event was signed with a different key than this process holds.
-  const heads = await many("SELECT DISTINCT ON (tenant_id) tenant_id, key_id FROM soc_audit_events ORDER BY tenant_id, seq DESC");
+  const heads = m.heads;
   // A head signed with a key in SOC_AUDIT_PREVIOUS_KEYS is a rotation in progress, not a mismatch.
   const ring = auditKeyring();
   const keyMismatch = heads.filter((h) => h.key_id !== currentAuditKeyId() && !ring.has(String(h.key_id))).length;
-  const wf = await many("SELECT tenant_id, count(*) FILTER (WHERE status = 'failed')::int AS failed, count(*)::int AS total FROM workflow_runs WHERE created_at > now() - interval '1 hour' GROUP BY tenant_id");
+  const wf = m.wf;
   const outbox = await queueMetrics();
   const rt = runtimeHealth();
   const ob = workerStatus();
 
   const samples: Sample[] = [
     g("legion_up", "The API answered.", 1),
+    g("legion_database_size_bytes", "Size of Legion's database on disk (retention keeps it bounded: DATA-RETENTION.md).", Number(m.db_bytes)),
     g("legion_process_uptime_seconds", "Seconds since this process started.", Math.round(process.uptime())),
     g("legion_build_info", "Version of this instance.", 1, { version: config.version, mode: config.deploymentMode }),
     // --- SOC runtime

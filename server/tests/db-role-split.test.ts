@@ -212,7 +212,11 @@ describe("the bounded erasure functions", () => {
       await socEvent(c, t, 2, 80);
       expect((await c.query("SELECT legion_prune_soc($1, 1) AS c", [t])).rows[0].c.soc_audit_events).toBe(0);
       await expect(c.query("SELECT legion_erase_tenant($1, 'test', null, '{}', false)", [t])).rejects.toThrow(/legal hold/);
+      // Forcing past the hold needs a written reason, and the tombstone records the override.
+      await expect(c.query("SELECT legion_erase_tenant($1, 'test', 'short', '{}', true)", [t])).rejects.toThrow(/needs a reason/);
       expect((await c.query("SELECT count(*)::int AS n FROM soc_audit_events WHERE tenant_id = $1", [t])).rows[0].n).toBe(2);
+      await c.query("SELECT legion_erase_tenant($1, 'ledger-replay', 'deleted before the backup was restored', '{}', true)", [t]);
+      expect((await c.query("SELECT counts->>'legal_hold_overridden' AS o FROM tenant_deletions WHERE tenant_id = $1", [t])).rows[0].o).toBe("true");
     });
   });
 

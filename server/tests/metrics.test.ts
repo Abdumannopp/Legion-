@@ -62,6 +62,7 @@ describe("GET /metrics", () => {
     }
     for (const l of lines.filter((x) => !x.startsWith("#"))) expect(l).toMatch(/^[a-z0-9_]+(\{[^}]*\})? -?[0-9.]+$/);
     expect(metric(text, "legion_up")).toBe(1);
+    expect(metric(text, "legion_database_size_bytes")).toBeGreaterThan(1_000_000);   // the disk is visible before it is full
     expect(metric(text, "legion_soc_actions_live")).toBe(0);
   });
 

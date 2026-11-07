@@ -79,6 +79,14 @@ Only bind `0.0.0.0` on a trusted internal network with its own firewall, and
 understand that it also exposes the first-run page: until the first
 administrator exists, whoever reaches it first becomes the administrator.
 
+**Docker installs publish on `127.0.0.1` too.** `docker-compose.yml` publishes
+the API (8000) and the dashboard (3000) on loopback only, because Docker's port
+publishing goes around the host firewall (`ufw` rules do not apply to it). To
+let a Wazuh manager or browsers on another machine in, put the reverse proxy in
+front, or set `LEGION_PUBLISH_ADDRESS` in `.env` to an internal address on a
+network you trust (`0.0.0.0` exposes it on every interface). Postgres and Redis
+are never published.
+
 ### Database privileges
 
 `npm run setup` creates a role for Legion that is **not** the Postgres

@@ -32,6 +32,15 @@ groups:
         annotations:
           summary: The API restarted in the last two minutes. Check for a crash loop.
 
+      - alert: LegionDatabaseLarge
+        # Raise the threshold to suit your disk. Retention (SOC_RETENTION_DAYS, DATA-RETENTION.md) keeps
+        # growth bounded; a database that keeps growing past this usually means retention is off.
+        expr: legion_database_size_bytes > 20 * 1024 * 1024 * 1024
+        for: 30m
+        labels: { severity: ticket }
+        annotations:
+          summary: Legion's database is larger than 20 GiB. Check free disk space and that retention is on.
+
       - alert: LegionDbPoolWaiting
         expr: legion_db_pool_waiting > 5
         for: 5m

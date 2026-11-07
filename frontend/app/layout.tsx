@@ -3,6 +3,7 @@ import localFont from "next/font/local";
 import { cookies } from "next/headers";
 import "./globals.css";
 import { LanguageProvider } from "@/lib/i18n/LanguageContext";
+import ReauthDialog from "@/components/ReauthDialog";
 import { DEFAULT_LOCALE, isLocale, LOCALE_STORAGE_KEY } from "@/lib/i18n/core";
 import { translations } from "@/lib/i18n/translations";
 import { palette } from "@/lib/theme";
@@ -57,7 +58,7 @@ export default async function RootLayout({
   return (
     <html lang={locale} className={`${display.variable} ${displayCyrillic.variable}`}>
       <body>
-        <LanguageProvider initialLocale={locale}>{children}</LanguageProvider>
+        <LanguageProvider initialLocale={locale}>{children}<ReauthDialog /></LanguageProvider>
       </body>
     </html>
   );

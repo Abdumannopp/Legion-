@@ -19,6 +19,7 @@ tests:
       - { series: 'legion_soc_actions_stuck_running', values: '0x40' }
       - { series: 'legion_soc_jobs_expired_leases', values: '0x40' }
       - { series: 'legion_outbox_dead', values: '0x40' }
+      - { series: 'legion_database_size_bytes', values: '1000000000x40' }
     alert_rule_test:
       - { eval_time: 8m, alertname: LegionApiDown, exp_alerts: [] }
       - { eval_time: 8m, alertname: LegionRestarted, exp_alerts: [] }
@@ -32,6 +33,19 @@ tests:
       - { eval_time: 8m, alertname: LegionApprovalWaitingTooLong, exp_alerts: [] }
       - { eval_time: 8m, alertname: LegionApprovedButUnused, exp_alerts: [] }
       - { eval_time: 8m, alertname: LegionNotificationsDead, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionDatabaseLarge, exp_alerts: [] }
+
+  - name: a database past 20 GiB opens a ticket after 30 minutes
+    interval: 5m
+    input_series:
+      - { series: 'legion_database_size_bytes', values: '25000000000x12' }
+    alert_rule_test:
+      - { eval_time: 20m, alertname: LegionDatabaseLarge, exp_alerts: [] }
+      - eval_time: 40m
+        alertname: LegionDatabaseLarge
+        exp_alerts:
+          - exp_labels: { severity: ticket }
+            exp_annotations: { summary: "Legion's database is larger than 20 GiB. Check free disk space and that retention is on." }
 
   - name: a live action pages immediately
     interval: 15s

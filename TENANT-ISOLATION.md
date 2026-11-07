@@ -50,10 +50,12 @@ and which tests prove it. Audit of 2026-09-29.
   that can run arbitrary SQL can also declare another workspace).
   Evidence: `server/tests/row-level-security.test.ts` (database level, as the API's role) and every
   end-to-end suite in CI runs with `DB_RLS=enforce` and fails on any missing context.
-  **Default: off.** Not yet in the first group (their lookups happen before the workspace is known,
+  **Default: on (`enforce`) in both Docker installs** (`docker-compose.yml`, `docker-compose.pilot.yml`),
+  where the owner/runtime split is also on; off for a bare-metal single-role install, which it would
+  not bind anyway. `/metrics` counts across workspaces through an owner-run aggregate that returns
+  numbers only (`0010_metrics_aggregate.sql`). Not yet in the first group (their lookups happen before the workspace is known,
   so they need their own design): users, tenants, memberships, sessions, billing, webhook credentials,
-  notification outbox, SOC jobs and memory. Turning it on for a deployment: `DB_RLS=enforce` for the
-  backend (the database side is already in place).
+  notification outbox, SOC jobs and memory. `DB_RLS=off` in `.env` turns it off.
 
 ## Tests
 

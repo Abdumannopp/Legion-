@@ -131,12 +131,30 @@ export const agentLayer = createAgentLayer(
 app.use(agentLayer.identity.principal);
 agentLayer.mount(app);
 
-type Token = { sub: string; tenant_id: string; token_version: number; purpose?: string; exp?: number };
+type Token = { sub: string; tenant_id: string; token_version: number; purpose?: string; exp?: number; auth_time?: number };
 type AuthedRequest = Request & { user?: User };
 
-function sign(user: User): string {
-  // Per-purpose key, issuer, audience and key id: see auth-jwt.ts.
-  return signToken("access", { sub: user.id, tenant_id: user.tenant_id, token_version: user.token_version }, `${config.accessTokenMinutes}m`);
+function sign(user: User, authTime?: number): string {
+  // Per-purpose key, issuer, audience and key id: see auth-jwt.ts. auth_time is the moment the person
+  // last proved who they are (password, and code if MFA is on); a refreshed token does not carry it,
+  // so the "recently confirmed" window below never outlives one access token.
+  const claims: Record<string, unknown> = { sub: user.id, tenant_id: user.tenant_id, token_version: user.token_version };
+  if (authTime !== undefined) claims.auth_time = authTime;
+  return signToken("access", claims, `${config.accessTokenMinutes}m`);
+}
+
+/**
+ * Dangerous actions (removing a person, changing a role, revoking or rotating a sensor key,
+ * deleting an integration, exporting the whole workspace) need a RECENT proof of identity, not
+ * only a session: a stolen or unattended admin session must not be enough. Signing in, or
+ * POST /auth/step-up (password, and a code when MFA is on), opens a 10-minute window.
+ */
+export const RECENT_AUTH_SECONDS = 600;
+const nowSeconds = () => Math.floor(Date.now() / 1000);
+function recentAuth(req: AuthedRequest, res: Response, next: NextFunction): void {
+  const t = verifyToken(tokenFrom(req));
+  if (typeof t?.auth_time === "number" && nowSeconds() - t.auth_time <= RECENT_AUTH_SECONDS && t.auth_time <= nowSeconds() + 60) return next();
+  res.status(403).json({ code: "reauth_required", detail: "Confirm it is you: enter your password to continue." });
 }
 
 const ACCESS_COOKIE_MS = () => config.accessTokenMinutes * 60_000;
@@ -740,7 +758,7 @@ app.post("/auth/login", authLimiter, requireHuman, loginAccountLimiter, async (r
     });
   }
 
-  const accessToken = await startSession(req, res, user);
+  const accessToken = await startSession(req, res, user, undefined, { authTime: nowSeconds() });
   rememberDevice(res, user);
   await store.audit({ tenant_id: user.tenant_id, user_id: user.id, user_email: user.email, action: "auth.login", resource_type: "user", resource_id: user.id, detail: null, ip_address: req.ip || null });
   await completeSignIn(req, user);
@@ -776,11 +794,11 @@ async function completeSignInChecks(req: Request, user: User): Promise<void> {
 
 /** Starts a session. One place, so every path that creates one (password
  *  login, MFA completion) stays consistent. */
-async function startSession(req: Request, res: Response, user: User, workspace?: User): Promise<string> {
+async function startSession(req: Request, res: Response, user: User, workspace?: User, opts: { authTime?: number } = {}): Promise<string> {
   // Lands in the chosen default workspace, else the home one (workspaces.ts).
   const member = workspace ?? await workspaces.landingMember(user);
   if (!member) throw Object.assign(new Error("no active workspace"), { status: 403, expose: true });
-  const accessToken = sign(member);
+  const accessToken = sign(member, opts.authTime);
   const refreshToken = await sessions.issue(member.id, {
     userAgent: req.header("user-agent"),
     ip: req.ip || null,
@@ -854,7 +872,7 @@ app.post("/auth/mfa/verify", authLimiter, mfaAccountLimiter, async (req, res) =>
     usedRecovery = true;
   }
 
-  const accessToken = await startSession(req, res, user);
+  const accessToken = await startSession(req, res, user, undefined, { authTime: nowSeconds() });
   rememberDevice(res, user);
   const remaining = usedRecovery ? await mfa.countRecoveryCodes(user.id) : null;
   await store.audit({ tenant_id: user.tenant_id, user_id: user.id, user_email: user.email, action: "auth.login", resource_type: "user", resource_id: user.id, detail: usedRecovery ? "mfa:recovery" : "mfa:totp", ip_address: req.ip || null });
@@ -910,7 +928,7 @@ app.post("/auth/mfa/enable", authLimiter, stepUpLimiter, auth, async (req: Authe
   // password alone before it was on — and starts a fresh one for this browser.
   const enabled = await store.updateUser(user.id, { mfa_enabled: true, mfa_enrolled_at: new Date().toISOString(), bump_token_version: true });
   await revokeUserEverywhere(user.id);
-  await startSession(req, res, enabled!);
+  await startSession(req, res, enabled!, undefined, { authTime: nowSeconds() });   // a code was just verified
   const recoveryCodes = await mfa.regenerateRecoveryCodes(user.id);
   await log(req, "auth.mfa_enabled", "user", user.id);
   notifyAccountOwner(user, "mfa_enabled", req);
@@ -941,7 +959,7 @@ app.post("/auth/mfa/disable", authLimiter, stepUpLimiter, auth, async (req: Auth
   // Same as enabling: every other session ends, this one continues.
   const updated = await store.updateUser(user.id, { bump_token_version: true });
   await revokeUserEverywhere(user.id);
-  await startSession(req, res, updated!);
+  await startSession(req, res, updated!, undefined, { authTime: nowSeconds() });   // password + code just verified
   await log(req, "auth.mfa_disabled", "user", user.id);
   notifyAccountOwner(user, "mfa_disabled", req);
   return res.json({ enabled: false });
@@ -1082,7 +1100,7 @@ app.get("/agent-permissions", auth, async (req: AuthedRequest, res) => {
  * only, a few times an hour, and reachable even when the workspace is locked:
  * leaving a subscription must not lock the customer away from their own data.
  */
-app.get("/workspace/export", requireRole("admin"), async (req: AuthedRequest, res) => {
+app.get("/workspace/export", requireRole("admin"), recentAuth, async (req: AuthedRequest, res) => {
   const tenantId = req.user!.tenant_id;
   if ((await store.recentAuditCount(tenantId, "workspace.exported", 60)) >= 3) {
     res.setHeader("Retry-After", "600");
@@ -1189,7 +1207,8 @@ app.post("/workspaces/switch", auth, async (req: AuthedRequest, res) => {
   const member = await workspaces.memberView(req.user!.id, body.workspace_id);
   // Not a member and not active are answered the same: no probing for workspace ids.
   if (!member || member.status !== "active") return res.status(404).json({ detail: "Workspace not found" });
-  const accessToken = await startSession(req, res, member, member);
+  // Switching workspace is not a new proof of identity: the window carries over, it does not reopen.
+  const accessToken = await startSession(req, res, member, member, { authTime: verifyToken(tokenFrom(req))?.auth_time });
   // F-04: recorded in the workspace switched TO (an active membership, checked above).
   await withTenant(member.tenant_id, () => store.audit({ tenant_id: member.tenant_id, user_id: member.id, user_email: member.email, action: "workspace.switched", resource_type: "workspace", resource_id: member.tenant_id, detail: null, ip_address: req.ip || null }));
   const tenant = await store.getTenant(member.tenant_id);
@@ -1284,6 +1303,28 @@ app.post("/auth/reset-password", authLimiter, async (req, res) => {
   await store.audit({ tenant_id: user.tenant_id, user_id: user.id, user_email: user.email, action: "auth.password_reset", resource_type: "user", resource_id: user.id, detail: null, ip_address: req.ip || null });
   notifyAccountOwner(user, "password_changed", req);
   return res.json({ message: "Password updated. Please log in again." });
+});
+
+/**
+ * Re-confirm identity before a dangerous action (see recentAuth): the password, and a current code when
+ * MFA is on. Issues a fresh access token whose auth_time opens the 10-minute window; the session and
+ * its refresh token are unchanged. Failed attempts count against the same limiter as other step-ups.
+ */
+app.post("/auth/step-up", authLimiter, stepUpLimiter, auth, async (req: AuthedRequest, res) => {
+  const body = parse(z.object({ password: z.string().min(1).max(128), code: z.string().min(6).max(20).optional() }), req.body, res); if (!body) return;
+  const user = req.user!;
+  if (!(await comparePassword(body.password, user.password_hash, { priority: true }))) {
+    await log(req, "auth.step_up_failed", "user", user.id);
+    return res.status(400).json({ detail: "Password is incorrect" });
+  }
+  if (user.mfa_enabled) {
+    const codeOk = body.code && (await checkTotp(user, body.code)) === "ok";
+    if (!codeOk) return res.status(400).json({ code: "mfa_code_required", detail: "Enter the current code from your authenticator app" });
+  }
+  const accessToken = sign(user, nowSeconds());
+  res.cookie("legion_token", accessToken, { ...cookieBase(), httpOnly: true, maxAge: ACCESS_COOKIE_MS() });
+  await log(req, "auth.step_up", "user", user.id);
+  return res.json({ access_token: accessToken, token_type: "bearer", valid_for_seconds: RECENT_AUTH_SECONDS });
 });
 
 /** Password change for a signed-in user. Bumps token_version, which signs out
@@ -1642,7 +1683,7 @@ app.post("/users/:id/resend-invite", requireRole("admin"), async (req: AuthedReq
   return res.json({ email_sent: mail.sent, invite_url: mail.sent || config.isProduction ? undefined : inviteUrl });
 });
 
-app.patch("/users/:id/role", requireRole("admin"), async (req: AuthedRequest, res) => {
+app.patch("/users/:id/role", requireRole("admin"), recentAuth, async (req: AuthedRequest, res) => {
   if (!UUID_RE.test(String(req.params.id))) return res.status(404).json({ detail: "User not found" });
   const body = parse(z.object({ role: z.enum(["admin", "analyst", "viewer"]) }), req.body, res); if (!body) return;
   const userId = String(req.params.id);
@@ -1668,7 +1709,7 @@ app.patch("/users/:id/role", requireRole("admin"), async (req: AuthedRequest, re
 
 /** Deactivation, not deletion: audit rows reference this user and must keep
  *  resolving to a real identity. Bumping token_version kills live sessions. */
-app.delete("/users/:id", requireRole("admin"), async (req: AuthedRequest, res) => {
+app.delete("/users/:id", requireRole("admin"), recentAuth, async (req: AuthedRequest, res) => {
   if (!UUID_RE.test(String(req.params.id))) return res.status(404).json({ detail: "User not found" });
   const userId = String(req.params.id);
   if (userId === req.user!.id) return res.status(400).json({ detail: "You cannot deactivate your own account" });
@@ -2096,7 +2137,7 @@ app.post("/security-events/credentials", requireRole("admin"), async (req: Authe
   } catch (error) { return credentialFailure(res, error); }
 });
 
-app.post("/security-events/credentials/:id/rotate", requireRole("admin"), async (req: AuthedRequest, res) => {
+app.post("/security-events/credentials/:id/rotate", requireRole("admin"), recentAuth, async (req: AuthedRequest, res) => {
   const keyId = String(req.params.id);
   if (!isKeyId(keyId)) return res.status(404).json({ detail: "Webhook credential not found" });
   const body = parse(z.object({ overlap_hours: z.number().min(0).max(168).optional() }), req.body ?? {}, res); if (!body) return;
@@ -2108,7 +2149,7 @@ app.post("/security-events/credentials/:id/rotate", requireRole("admin"), async 
   } catch (error) { return credentialFailure(res, error); }
 });
 
-app.delete("/security-events/credentials/:id", requireRole("admin"), async (req: AuthedRequest, res) => {
+app.delete("/security-events/credentials/:id", requireRole("admin"), recentAuth, async (req: AuthedRequest, res) => {
   const keyId = String(req.params.id);
   if (!isKeyId(keyId)) return res.status(404).json({ detail: "Webhook credential not found" });
   try {
@@ -2482,7 +2523,7 @@ for (const [action, status] of [["pause", "paused"], ["resume", "active"]] as co
   });
 }
 
-app.delete("/integrations/:id", requireRole("admin"), async (req: AuthedRequest, res) => {
+app.delete("/integrations/:id", requireRole("admin"), recentAuth, async (req: AuthedRequest, res) => {
   if (!UUID_RE.test(String(req.params.id))) return res.status(404).json({ detail: "Integration not found." });
   try {
     const c = await connections.setStatus(req.user!.tenant_id, String(req.params.id), "disabled");

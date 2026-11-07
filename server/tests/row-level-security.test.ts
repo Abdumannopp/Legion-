@@ -128,6 +128,15 @@ describe("fail closed, and nothing changes when it is off", () => {
     });
   });
 
+  it("/metrics still counts every workspace under enforcement — as numbers, through the owner's aggregate", async () => {
+    await asApp(null, async (c) => {
+      await expect(c.query("SELECT count(*) FROM soc_audit_events")).resolves.toBeTruthy();   // sees nothing itself…
+      const m = (await c.query("SELECT legion_soc_metrics(60) AS m")).rows[0].m;              // …the aggregate sees all
+      expect(m.db_bytes).toBeGreaterThan(0);
+      expect(Object.keys(m).sort()).toEqual(["act", "actions", "appr", "audit", "db_bytes", "div", "heads", "job_ages", "jobs", "paused", "pol", "wf"]);
+    });
+  });
+
   it("every table of the group has row-level security and the policy, and the list matches db/rls.ts", async () => {
     const rows = (await withClient(urlFor(DB), (c) => c.query(
       `SELECT c.relname, c.relrowsecurity, EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid AND p.polname = 'legion_tenant_isolation') AS has_policy

@@ -85,6 +85,12 @@ jobs:
             })().catch((e) => { console.error(e.message); process.exit(1); });'
           ! docker compose exec -T backend env | grep -q POSTGRES_PASSWORD
           [ "$(docker compose exec -T postgres id -u)" = 70 ]
+          # Published on loopback only: Docker port publishing bypasses the host firewall.
+          [ "$(docker compose exec -T backend printenv DB_RLS)" = enforce ]   # F-04 on by default
+          [ "$(docker compose port backend 8000)" = "127.0.0.1:8000" ]
+          [ "$(docker compose port frontend 3000)" = "127.0.0.1:3000" ]
+          LAN="$(hostname -I | awk '{print $1}')"
+          ! curl -fsS --max-time 3 "http://${LAN}:8000/health" >/dev/null 2>&1
           bash install.sh >/dev/null   # re-running is safe: secrets kept, role re-checked
           curl -fsS http://localhost:8000/health
       - name: Logs on failure

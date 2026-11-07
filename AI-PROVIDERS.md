@@ -73,11 +73,13 @@ dashboard, incident page and Copilot, every model answer is labelled
 go to a third party until its administrator turns it on. In self-hosted mode it
 is on. Change it with `AI_TENANT_DEFAULT=on|off`.
 
-**In hosted mode a workspace that turns AI on starts in strict mode** (IPs, e-mail
-addresses and host names are replaced before anything is sent). An administrator can
-switch strict off for the workspace; the card then warns that real values reach the
-provider. A self-hosted installation starts in standard mode, because its operator owns
-both the data and the provider. Workspaces that had already chosen a mode keep it; those
+**A workspace that turns AI on starts in strict mode, hosted or self-hosted** (IPs,
+e-mail addresses and host names are replaced before anything is sent). An administrator
+can switch strict off for the workspace; the card then warns that real values reach the
+provider. (Self-hosted used to start in standard mode; the provider is a third party in
+both cases, so strict is now the default everywhere.) **In every mode** credentials,
+this server's own secrets, card numbers (Luhn-checked) and bank accounts (IBAN,
+mod-97-checked) are removed before anything leaves. Workspaces that had already chosen a mode keep it; those
 that never turned AI on started "unchosen" and so start strict (`tenants.ai_data_mode` is
 `NULL` until someone chooses). The audit entry for every AI call records the mode used.
 

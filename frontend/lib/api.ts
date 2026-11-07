@@ -137,6 +137,27 @@ async function send(path: string, options: RequestInit): Promise<Response> {
   });
 }
 
+/*
+ * Dangerous actions answer 403 { code: "reauth_required" } unless the person confirmed their password
+ * in the last 10 minutes (server: recentAuth). The dialog (components/ReauthDialog.tsx) registers here;
+ * the request is sent again once, after a successful confirmation. Cancelling leaves the 403 as it was.
+ */
+type ReauthHandler = () => Promise<boolean>;
+let reauthHandler: ReauthHandler | null = null;
+export function setReauthHandler(handler: ReauthHandler | null): void { reauthHandler = handler; }
+
+async function confirmedAfterReauth(res: Response): Promise<boolean> {
+  if (res.status !== 403 || !reauthHandler) return false;
+  let code: unknown;
+  try { code = (await res.clone().json())?.code; } catch { return false; }
+  return code === "reauth_required" && (await reauthHandler());
+}
+
+/** Re-confirm identity (password; and the authenticator code when MFA is on). */
+export function stepUp(password: string, code?: string): Promise<{ access_token: string; valid_for_seconds: number }> {
+  return request("/auth/step-up", { method: "POST", body: JSON.stringify(code ? { password, code } : { password }) });
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   let res = await send(path, options);
 
@@ -148,6 +169,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       res = await send(path, options);
     }
   }
+  if (await confirmedAfterReauth(res)) res = await send(path, options);
 
   if (!res.ok) {
     let detail = res.statusText;
@@ -174,6 +196,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 export async function downloadWorkspaceExport(): Promise<{ blob: Blob; filename: string }> {
   let res = await send("/workspace/export", {});
   if (res.status === 401 && (await refreshSession())) res = await send("/workspace/export", {});
+  if (await confirmedAfterReauth(res)) res = await send("/workspace/export", {});
   if (!res.ok) {
     let detail = res.statusText;
     try { const body = await res.json(); detail = body.detail || detail; } catch { /* not JSON */ }

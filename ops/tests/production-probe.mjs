@@ -359,7 +359,10 @@ async function main() {
   const userRow = await sql(ADMIN, db.db, "SELECT row_to_json(u)::text AS r FROM users u WHERE email = $1", [A.email]);
   check("TOTP seed and password are not stored in plaintext", !userRow[0].r.includes(setup.body.secret) && !userRow[0].r.includes(A.password));
   const agentRows = await sql(ADMIN, db.db, "SELECT string_agg(row_to_json(c)::text, '') AS r FROM machine_credentials c");
-  check("agent secrets are not stored in plaintext", !String(agentRows[0].r ?? "").includes(String(bAgent.body.credential?.secret ?? "∅").split("_").pop()));
+  // The secret part is everything after "lga_<32 hex>_" (43 base64url chars, which may contain "_" itself:
+  // splitting on "_" took a random short fragment that could occur in the row by chance).
+  const agentSecret = String(bAgent.body.credential?.secret ?? "").replace(/^(?:lga|lgs)_[0-9a-f]{32}_/, "");
+  check("agent secrets are not stored in plaintext", agentSecret.length === 43 && !String(agentRows[0].r ?? "").includes(agentSecret), `secret part ${agentSecret.length} chars`);
   const mails = smtp.messages.map((m) => m.data).join("\n");
   check("no email carries a password or secret", issued.every((s) => !mails.includes(s)));
   check("no 5xx was logged as an unhandled error during the probe", !/Unhandled|TypeError|ReferenceError/.test(log), (log.match(/.*(Unhandled|TypeError|ReferenceError).*/) ?? [""])[0]);

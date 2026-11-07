@@ -194,7 +194,44 @@ export function redactSecrets(input: string, extra: string[] = []): Redaction {
       return rule.replace ? rule.replace(...(m as string[])) : `[REDACTED:${rule.id}]`;
     });
   }
+  // Payment data never leaves either, in any data mode: card numbers (Luhn-valid) and bank accounts
+  // (IBAN, mod-97-valid). Only check-digit-valid values, so ordinary long numbers (ports, counts,
+  // timestamps) stay visible to the model.
+  text = text.replace(/\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]){11,30}\b/g, (m) => {
+    if (!ibanValid(m.replace(/ /g, ""))) return m;
+    count++;
+    return "[REDACTED:iban]";
+  });
+  text = text.replace(/\b(?:\d[ -]?){12,18}\d\b/g, (m) => {
+    const digits = m.replace(/[ -]/g, "");
+    // Card networks start with 2-6 (Mastercard, Amex/JCB/Diners, Visa, Maestro/Mastercard, Discover/UnionPay);
+    // a run of one repeated digit is padding, not a card.
+    if (digits.length < 13 || digits.length > 19 || !/^[2-6]/.test(digits) || /^(\d)\1+$/.test(digits) || !luhn(digits)) return m;
+    count++;
+    return "[REDACTED:card_number]";
+  });
   return { text, count };
+}
+
+function luhn(digits: string): boolean {
+  let sum = 0;
+  for (let i = 0; i < digits.length; i++) {
+    let d = digits.charCodeAt(digits.length - 1 - i) - 48;
+    if (i % 2 === 1) { d *= 2; if (d > 9) d -= 9; }
+    sum += d;
+  }
+  return sum % 10 === 0;
+}
+
+function ibanValid(iban: string): boolean {
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban)) return false;
+  const moved = iban.slice(4) + iban.slice(0, 4);
+  let rest = 0;
+  for (const ch of moved) {
+    const v = /\d/.test(ch) ? ch : String(ch.charCodeAt(0) - 55);
+    for (const digit of v) rest = (rest * 10 + (digit.charCodeAt(0) - 48)) % 97;
+  }
+  return rest === 1;
 }
 
 // --- untrusted OUTPUT --------------------------------------------------------

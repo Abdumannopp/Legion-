@@ -19,6 +19,10 @@ x-hardening: &hardening
   restart: unless-stopped
   pids_limit: 200
   extra_hosts: ["host.docker.internal:host-gateway"]
+  # Rotated container logs (5 × 20 MB): unbounded json-file logs fill the disk.
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
 
 services:
   prometheus:

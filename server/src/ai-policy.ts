@@ -37,13 +37,14 @@ export function aiDefaultEnabled(): boolean {
 }
 
 /**
- * The data mode of a workspace that never chose one. A hosted workspace starts
- * STRICT: identifiers are replaced before anything is sent to a third party, and
- * an administrator has to choose to send real values. A self-hosted operator owns
- * the data and the provider, so "standard" stays their default.
+ * The data mode of a workspace that never chose one: STRICT everywhere. IP addresses, e-mail
+ * addresses and asset hostnames are replaced by placeholders before anything is sent to the AI
+ * provider (and restored in the answer); an administrator has to choose "standard" to send real
+ * values. Self-hosted used to default to "standard"; the provider is still a third party, so the
+ * safe default now applies there too. A workspace that chose a mode keeps it.
  */
 export function defaultDataMode(): DataMode {
-  return config.deploymentMode === "self-hosted" ? "standard" : "strict";
+  return "strict";
 }
 
 /** Pure, so the rule can be tested without a database. */
