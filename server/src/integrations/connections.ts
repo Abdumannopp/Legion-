@@ -16,7 +16,7 @@ import { query, queryAll, queryOne } from "../db/pool.js";
 import * as box from "../secret-box.js";
 import type { Alert } from "../types.js";
 import { ingestFindings } from "./ingest.js";
-import { pullAdapter } from "./registry.js";
+import { outboundAdapter, pullAdapter, pullKinds } from "./registry.js";
 
 export interface ConnectionView {
   id: string;
@@ -51,19 +51,23 @@ export async function create(
   input: { kind: string; name: string; config: unknown; secrets: Record<string, string>; pollSeconds?: number },
   createdBy: string,
 ): Promise<ConnectionView> {
-  const adapter = pullAdapter(input.kind);
+  const adapter = pullAdapter(input.kind) ?? outboundAdapter(input.kind);
+  const outbound = Boolean(outboundAdapter(input.kind));
   if (!adapter || adapter.manifest.status !== "available") throw new ConnectionError("unknown_kind", "That integration is not available.");
   const parsed = adapter.configSchema.safeParse(input.config ?? {});
   if (!parsed.success) throw new ConnectionError("invalid_config", `${parsed.error.issues[0]?.path.join(".") || "config"}: ${parsed.error.issues[0]?.message}`);
   const missing = adapter.secretFields.filter((f) => typeof input.secrets?.[f] !== "string" || !input.secrets[f]);
   if (missing.length) throw new ConnectionError("missing_secret", `Missing: ${missing.join(", ")}`);
   const secrets = Object.fromEntries(adapter.secretFields.map((f) => [f, input.secrets[f]!]));
+  const secretProblem = outboundAdapter(input.kind)?.validateSecrets?.(secrets);
+  if (secretProblem) throw new ConnectionError("invalid_config", secretProblem);
   const id = randomUUID();
   const row = await queryOne(
-    `INSERT INTO integration_connections (id, tenant_id, kind, name, config, secrets_enc, poll_seconds, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+    // An outbound connector is never polled: its next_poll_at is parked far in the future.
+    `INSERT INTO integration_connections (id, tenant_id, kind, name, config, secrets_enc, poll_seconds, created_by, next_poll_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CASE WHEN $9 THEN '9999-01-01'::timestamptz ELSE now() END) RETURNING *`,
     [id, tenantId, input.kind, input.name, JSON.stringify(parsed.data), adapter.secretFields.length ? box.seal(JSON.stringify(secrets), "integration-secret", sealContext(id, tenantId)) : null,
-      input.pollSeconds ?? 300, createdBy],
+      input.pollSeconds ?? 300, createdBy, outbound],
   );
   return view(row);
 }
@@ -105,9 +109,11 @@ export async function runDuePolls(opts: { limit?: number; leaseSeconds?: number;
          WHERE c.status = 'active' AND c.next_poll_at <= now() AND (c.lease_until IS NULL OR c.lease_until < now())
            -- Data residency: only workspaces this deployment serves.
            AND COALESCE(t.region, $4) = $4
+           -- Only pull connections are polled (outbound ones receive alerts through the outbox).
+           AND c.kind = ANY($5::text[])
          ORDER BY c.next_poll_at LIMIT $1 FOR UPDATE OF c SKIP LOCKED)
       RETURNING *`,
-    [opts.limit ?? 10, opts.leaseSeconds ?? 300, owner, config.region],
+    [opts.limit ?? 10, opts.leaseSeconds ?? 300, owner, config.region, pullKinds()],
   );
   report.claimed = claimed.length;
   for (const c of claimed) {

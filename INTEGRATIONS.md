@@ -7,6 +7,8 @@ Legion takes security data in through **adapters** (`server/src/integrations/`):
 | 0 | **Wazuh** | built (earlier) | `POST /security-events/webhook`, signed |
 | 1 | **Generic JSON webhook** (also Elastic Security, Splunk) | **built, tested with sample payloads** | `POST /security-events/webhook/generic`, signed, JSON |
 | 2 | **Syslog / CEF** | **built, tested with sample lines** | `POST /security-events/webhook/cef`, signed, `text/plain` |
+| 3a | **Slack** (notification) | **built, tested with a simulated provider** | outbound, incoming-webhook URL |
+| 3b | **Jira Cloud** (ticket) | **built, tested with a simulated provider** | outbound, e-mail + API token |
 | 3 | Microsoft Defender XDR | planned (`m365` pull adapter: Graph `alerts_v2`) | Entra app, `SecurityAlert.Read.All` |
 | 4 | AWS GuardDuty | planned (`aws` pull adapter: Security Hub/GuardDuty findings) | cross-account IAM role + external id |
 | 5 | Elastic / Splunk dedicated pull adapters | optional later; the generic webhook already receives their alerts | |
@@ -52,3 +54,45 @@ Legion **does not open a syslog port**: an unauthenticated UDP/TCP listener woul
 - Tested with sample payloads and lines, **not** against real Elastic, Splunk, ArcSight or rsyslog installations.
 - No dashboard form yet for these (credentials are created in Settings; the catalogue lists the integrations).
 - Defender XDR and GuardDuty are not built; they are pull adapters needing real tenant/account access to be verified.
+
+
+## Outbound connectors: Slack (notification) and Jira (ticket)
+
+```
+ alert stored ──(same DB transaction)──▶ notification_outbox  kind=integration_message
+   (ingest)                               one row per (alert, connection), dedupe key
+                                                   │  worker: claim ▸ lease ▸ attempt (60 s cap)
+                                                   ▼
+                              integration-notify.ts ─ opens the connection's sealed secrets
+                                                   │
+                         ┌─────────────────────────┴──────────────────────────┐
+                         ▼                                                    ▼
+              slack.ts → hooks.slack.com                    jira.ts → <site>.atlassian.net
+                         │                                                    │
+        success ─▶ sent (+ ticket key kept)       5xx / 429 / timeout ─▶ retry with backoff (≤ max attempts)
+        4xx (revoked, bad login) ─▶ dead letter at once, shown on the connection (last_error, failures)
+```
+
+**Set up (customer, administrator):** Settings → Integrations (API: `POST /integrations`).
+
+| | Slack | Jira Cloud |
+|---|---|---|
+| Create in the vendor | Slack app → *Incoming Webhooks* → add to one channel → copy the URL | Atlassian account (a bot user) → *API token*; note the project key (e.g. `SEC`) |
+| `kind` | `slack` | `jira` |
+| `config` | `{"min_severity":"high"}` | `{"site":"acme","project_key":"SEC","issue_type":"Task","min_severity":"high"}` (`acme` = acme.atlassian.net) |
+| `secrets` | `{"webhook_url":"https://hooks.slack.com/services/…"}` | `{"email":"bot@acme.io","api_token":"…"}` |
+
+Secrets are sealed (AES-256-GCM, bound to the workspace and connection), never returned, never logged, and an error that echoes one is scrubbed before it is stored. `min_severity` defaults to `high`. At most `ALERT_EMAIL_HOURLY_CAP` (default 100) messages per connection per hour.
+
+**SaaS vs self-hosted:** no new environment variables. The Legion server must reach `hooks.slack.com:443` and `*.atlassian.net:443` over HTTPS; on a self-hosted install with an egress firewall, allow exactly those. Legion calls no other host and never a URL a customer typed (redirects are refused, the site is a name, not a URL).
+
+**Health:** the connection shows `last_success_at`, `last_error` and `failures`; after 10 consecutive failures it goes to `error` and stops receiving until resumed. Queue depth, retries and dead letters appear in `/metrics` under the outbox kind `integration_message`.
+
+**Provider downtime:** messages wait in the outbox and are retried with exponential backoff (cap 1 h) up to `NOTIFY_MAX_ATTEMPTS`; then they are dead-lettered, never silently dropped. A revoked Slack webhook or a Jira 401/403/404 is not retried (retrying cannot help). A removed connection drops its pending messages without error; a paused one keeps them until the retry budget ends.
+
+**Tickets are idempotent:** before creating, Legion searches the project for the label `legion-<alert id>`; a retry or a crash after creation finds the first ticket. Jira's search index can lag by seconds, so a retry within that window can, rarely, open a second ticket.
+
+**They cannot act:** these connectors only notify or open tickets. A test fails if an outbound adapter declares a "respond" capability or imports blocklist/action/approval code. The only things Legion can do in a customer's environment remain the two executors in [PROTECTION.md](PROTECTION.md), which need an administrator's opt-in, and everything privileged still waits for a person.
+
+**Verified:** `tests/integrations-outbound.test.ts` (17 tests, simulated Slack/Jira): delivery, filtering by severity, duplicate suppression, markup/mention neutralisation, 503→retry→delivered, 429 retry, revoked webhook dead-lettered with health shown, paused/removed connections, secrets never in responses/URLs/rows/errors, tenant isolation (workspace B's channel never receives A's alerts; A cannot touch B's connection), idempotent tickets.
+**Not verified:** a real Slack workspace or Jira Cloud site (only simulated providers), Jira Data Center / Server, Slack bot tokens (only incoming webhooks), a dashboard form for these connections (API only), correlation of an alert with its ticket key in the UI (stored on the message, not yet displayed).

@@ -7,13 +7,15 @@
  * (types.ts), one register() call, and its manifest — no change to routes,
  * storage, the worker, notifications or tenant isolation.
  */
-import type { Adapter, IntegrationManifest, PullAdapter, PushAdapter } from "./types.js";
+import type { Adapter, IntegrationManifest, OutboundAdapter, PullAdapter, PushAdapter } from "./types.js";
+import { jiraAdapter } from "./jira.js";
+import { slackAdapter } from "./slack.js";
 import { cefAdapter } from "./cef.js";
 import { genericWebhookAdapter } from "./generic.js";
 import { wazuhAdapter } from "./wazuh.js";
 
 const adapters = new Map<string, Adapter>();
-const BUILT_IN = new Set(["wazuh", "generic_webhook", "cef"]);
+const BUILT_IN = new Set(["wazuh", "generic_webhook", "cef", "slack", "jira"]);
 
 export function register(adapter: Adapter): void {
   if (!/^[a-z][a-z0-9_]{1,40}$/.test(adapter.manifest.kind)) throw new Error(`invalid integration kind: ${adapter.manifest.kind}`);
@@ -33,9 +35,20 @@ export function pullAdapter(kind: string): PullAdapter | null {
   return a && a.manifest.inbound === "pull" ? (a as PullAdapter) : null;
 }
 
+export function outboundAdapter(kind: string): OutboundAdapter | null {
+  const a = adapters.get(kind);
+  return a && a.manifest.inbound === null && "deliver" in a ? (a as OutboundAdapter) : null;
+}
+/** Kinds the poll worker may claim: only real pull adapters. */
+export function pullKinds(): string[] { return [...adapters.values()].filter((a) => a.manifest.inbound === "pull").map((a) => a.manifest.kind); }
+/** Kinds that receive alerts (notify/ticket). */
+export function outboundKinds(): string[] { return [...adapters.values()].filter((a) => "deliver" in a).map((a) => a.manifest.kind); }
+
 register(wazuhAdapter);
 register(genericWebhookAdapter);
 register(cefAdapter);
+register(slackAdapter);
+register(jiraAdapter);
 
 /**
  * The roadmap, as contracts. Each is the adapter type it will be, the data it
@@ -72,12 +85,6 @@ const PLANNED: IntegrationManifest[] = [
     egressHosts: ["graph.microsoft.com", "login.microsoftonline.com"],
     summary: "Microsoft Graph security alerts_v2 (Defender XDR, Entra ID Protection, Purview), polled by lastUpdateDateTime.",
     auth: "Entra ID app registration with SecurityAlert.Read.All (application permission).",
-  },
-  {
-    kind: "slack", displayName: "Slack", vendor: "Salesforce", status: "planned", plane: "tool", inbound: null, outbound: ["notify"],
-    egressHosts: ["slack.com"],
-    summary: "Alert notifications to a channel, delivered through the notification outbox like email (retries, dead letters).",
-    auth: "Slack app bot token (chat:write), sealed per connection.",
   },
   {
     kind: "mcp", displayName: "MCP servers", vendor: "Model Context Protocol", status: "available", plane: "tool", inbound: null, outbound: ["respond"],

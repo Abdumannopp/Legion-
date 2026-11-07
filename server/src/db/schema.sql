@@ -252,7 +252,7 @@ ALTER TABLE alerts ADD COLUMN IF NOT EXISTS ai_explanation_locale text;
 -- 0012: otherwise each upgrade would put the old list back and the next notice would be refused.
 ALTER TABLE notification_outbox DROP CONSTRAINT IF EXISTS notification_outbox_kind_check;
 ALTER TABLE notification_outbox ADD CONSTRAINT notification_outbox_kind_check
-  CHECK (kind IN ('alert_email', 'realtime_alert', 'protection_email'));
+  CHECK (kind IN ('alert_email', 'realtime_alert', 'protection_email', 'integration_message'));
 -- Queue health metrics: oldest undelivered job and the dead-letter count,
 -- without scanning delivered history.
 CREATE INDEX IF NOT EXISTS notification_outbox_undelivered_age

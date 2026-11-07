@@ -47,7 +47,7 @@ export interface IntegrationManifest {
   status: Availability;
   plane: Plane;
   inbound: "push" | "pull" | null;
-  outbound: ("notify" | "respond")[];
+  outbound: ("notify" | "ticket" | "respond")[];
   /** Hosts a pull/outbound adapter may call (adapterFetch refuses anything else). */
   egressHosts: string[];
   /** What it brings in or does, for the catalogue. */
@@ -88,4 +88,40 @@ export interface PullAdapter {
   poll(conn: ConnectionContext, cursor: unknown, signal: AbortSignal): Promise<{ findings: Finding[]; cursor: unknown }>;
 }
 
-export type Adapter = PushAdapter | PullAdapter;
+/** What Legion sends to an outbound connector for one alert. Plain data; the adapter formats it. */
+export interface OutboundMessage {
+  type: "notify" | "ticket";
+  alertId: string;
+  title: string;
+  severity: Severity;
+  summary: string;
+  sourceIp: string | null;
+  target: string | null;
+  /** Link back to the alert in the dashboard. */
+  link: string;
+}
+
+export interface DeliveryResult {
+  /** The external object that was created (a ticket), if any. */
+  ref?: { key: string; url: string };
+}
+
+/** Thrown by an adapter when retrying cannot help (bad credentials, unknown project): the job is dead-lettered at once. */
+export class PermanentDeliveryError extends Error {}
+
+/**
+ * A connector Legion sends INTO (chat notification, ticket). It can tell a person or open a ticket; it
+ * can never change anything in the customer's environment: `outbound` is "notify" or "ticket" only, and a
+ * test fails if an outbound adapter claims "respond" or reaches the blocklist/action code.
+ */
+export interface OutboundAdapter {
+  manifest: IntegrationManifest & { inbound: null; plane: "tool" };
+  configSchema: z.ZodType<Record<string, unknown>>;
+  secretFields: string[];
+  /** Rejects secrets that cannot be right (a Slack URL on another host) when the connection is saved. */
+  validateSecrets?(secrets: Record<string, string>): string | null;
+  /** At-least-once: must be idempotent per message.alertId where the vendor allows it (tickets look the alert up first). */
+  deliver(conn: ConnectionContext, message: OutboundMessage, signal: AbortSignal): Promise<DeliveryResult>;
+}
+
+export type Adapter = PushAdapter | PullAdapter | OutboundAdapter;
