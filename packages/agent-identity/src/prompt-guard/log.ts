@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from "pg";
-import { chainHash, GENESIS, lockChain } from "../chain.js";
+import { chainHash, chainStart, lockChain } from "../chain.js";
 import { digest, findSecrets } from "../firewall/scan.js";
 import type { Principal } from "../types.js";
 import type { Classification, ContentRiskSummary, ContentSource, FieldHint } from "./types.js";
@@ -151,7 +151,7 @@ export class IngestionLog {
 
   async verifyChain(tenantId: string): Promise<{ ok: true; rows: number } | { ok: false; brokenAtSeq: string; rows: number }> {
     const res = await this.pool.query("SELECT * FROM content_ingestion_log WHERE chain_key = $1 ORDER BY seq", [tenantId]);
-    let prev = GENESIS;
+    let prev = await chainStart(this.pool, "content_ingestion_log", tenantId);
     let n = 0;
     for (const r of res.rows) {
       n++;

@@ -13,9 +13,15 @@
 | Sessions | refresh tokens in PostgreSQL, access tokens signed with `JWT_SECRET` | New `JWT_SECRET` ⇒ everyone signs in again. Nothing else is lost. |
 | Code | the release you deployed | Redeploy it. |
 
-There is no Docker/compose deployment in this repository: Legion runs under
-systemd (`deploy/legion.service`) behind nginx. If you containerise it, the
-same scripts run unchanged inside the container that has `pg_dump` and `age`.
+Legion runs either under systemd (`deploy/legion.service`) behind nginx, or as the
+containers of `docker-compose.pilot.yml` (PILOT.md). The backup and restore scripts
+are identical for both: run them on the host against the database (Postgres is not
+published, so use `docker compose exec postgres …` or a one-off container on the
+`data` network), or inside any container that has `pg_dump` and `age`. After a
+restore, re-run the one-shot provisioning (`db-provision`): it gives the restored
+schema back to `legion_owner` and re-grants the API's role its data privileges, and keep **`SOC_AUDIT_KEY`** with the
+other secrets: without it the SOC audit chain cannot be verified, and a wrong key makes
+audited actions fail by design (PILOT.md §6, §7).
 
 ## Architecture
 
@@ -91,16 +97,20 @@ Total hands-on time on a small database: minutes; the drill measures it.
    nothing) and prints `OK — N tables present`. Delete the private key file from the server afterwards.
 6. **App role (only if you use a separate one):**
    `DATABASE_ADMIN_URL=… APP_DB_USER=legion_app APP_DB_PASSWORD=… node server/dist/db/provision-cli.js`
+   (add `DB_ROLE_SPLIT=on` if the installation uses the owner/runtime split — Docker installs do)
    and point `DATABASE_URL` at that role. Restoring gives ownership to the connecting role; this step
-   moves it (idempotent).
+   moves it to the right owner and re-grants the API's privileges (idempotent).
 7. **Redis:** install and start an *empty* Redis (or leave `REDIS_URL` unset). Do not restore Redis.
 8. **Start and verify:** `systemctl start legion`, then
    `curl -s https://YOUR-DOMAIN/api/health` → `"database":"up"`; sign in; open the alerts page and
    check the newest alert time; sign in as a 2FA user (proves the encryption keys are right; a wrong
    key gives *"Two-factor sign-in is temporarily unavailable"* and changes nothing — fix the key and retry);
    check that a sensor still delivers (`WAZUH.md`).
-9. **Re-arm backups:** re-install the timers, run `legion-backup.service` once, confirm `/health/backup` = 200.
-10. **Write down** what happened, the backup used, the time it took.
+9. **Re-apply deletions:** a restored backup brings back workspaces that were erased after it was taken.
+   Run `npm run tenant:data -- replay --ledger "$DELETION_LEDGER_FILE"` to list them, then add `--apply`
+   to erase them again. The ledger lives outside the database (see DATA-RETENTION.md).
+10. **Re-arm backups:** re-install the timers, run `legion-backup.service` once, confirm `/health/backup` = 200.
+11. **Write down** what happened, the backup used, the time it took.
 
 If the restore reports an error, **nothing was applied**. Try the next-older backup.
 

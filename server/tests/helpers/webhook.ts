@@ -5,12 +5,16 @@
 import request from "supertest";
 import type { Application } from "express";
 import { randomBytes } from "node:crypto";
+import { query } from "../../src/db/pool.js";
 import { createCredential } from "../../src/webhook-credentials.js";
 import { signWebhook } from "../../src/webhook-auth.js";
 
 export interface TestCredential { keyId: string; secret: string; apiKey: string }
 
 export async function issueCredential(tenantId: string, label = "test"): Promise<TestCredential> {
+  // Most suites use the payment check as a plain signed endpoint; the notice gate has its own tests
+  // (payments.test.ts), which clear this first.
+  await query("UPDATE tenants SET payment_ack_at = now(), payment_ack_by = 'test', payment_ack_version = '1' WHERE id = $1", [tenantId]);
   const c = await createCredential(tenantId, { label });
   return { keyId: c.id, secret: c.secret, apiKey: c.api_key };
 }
@@ -31,6 +35,8 @@ export interface SendOptions {
   tenantHeader?: string;
   /** Another signed sensor endpoint (default: the webhook). */
   path?: string;
+  /** Content-Type of the request (default application/json). */
+  contentType?: string;
 }
 
 /** POSTs `body` (a string is sent byte-for-byte) signed with `cred`. */
@@ -40,7 +46,7 @@ export function sendSigned(app: Application, cred: TestCredential, body: unknown
   const nonce = opts.nonce ?? freshNonce();
   const req = request(app)
     .post(opts.path ?? "/security-events/webhook")
-    .set("content-type", "application/json")
+    .set("content-type", opts.contentType ?? "application/json")
     .set("x-legion-key-id", opts.keyId ?? cred.keyId)
     .set("x-legion-timestamp", ts)
     .set("x-legion-nonce", nonce)

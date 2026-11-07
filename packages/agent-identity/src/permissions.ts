@@ -67,6 +67,17 @@ export function roleAllows(role: HumanRole, permission: Permission): boolean {
   return ROLE_CEILING[role]?.has(permission) ?? false;
 }
 
+/**
+ * What a person may hand to an agent through a delegation ("act on my behalf").
+ * Tier 2 (write / execute: shell, cloud, database writes, closing alerts) can be
+ * delegated by an administrator only: a compromised analyst account must not be
+ * enough to arm an agent (assessment EP-4). Analysts keep tier 0–1, and still
+ * own and use agents an administrator configured.
+ */
+export function roleCanDelegate(role: HumanRole, permission: Permission): boolean {
+  return roleAllows(role, permission) && (PERMISSION_TIERS[permission] < 2 || role === "admin");
+}
+
 export function exceedsRole(role: HumanRole, permissions: readonly Permission[]): Permission[] {
   return permissions.filter((p) => !roleAllows(role, p));
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import AlertDeliveries from "@/components/AlertDeliveries";
 import AiBadge from "@/components/AiBadge";
 import { useState, useEffect } from "react";
 import { useRouter, useParams } from "next/navigation";
@@ -23,6 +24,7 @@ import {
   getAlert,
   explainAlert,
   updateAlertStatus,
+  reopenReason,
   isLoggedIn,
   ApiError,
   SuggestedAction,
@@ -117,9 +119,11 @@ export default function IncidentDetailsPage() {
 
   async function handleStatusChange(status: Alert["status"]) {
     if (!alert) return;
+    const reason = reopenReason(alert.status, status);
+    if (reason === null) return;
     setUpdating(true);
     try {
-      const updated = await updateAlertStatus(alert.id, status);
+      const updated = await updateAlertStatus(alert.id, status, reason);
       setAlert(updated);
     } catch (err) {
       setError(err);
@@ -224,6 +228,8 @@ export default function IncidentDetailsPage() {
           {error != null && (
             <div className="mb-4"><ErrorNotice error={error} /></div>
           )}
+
+          <AlertDeliveries alertId={id} />
 
           <div className="grid md:grid-cols-2 gap-4">
             {/* Left: technical details */}

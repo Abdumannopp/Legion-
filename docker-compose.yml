@@ -5,9 +5,21 @@
 # Values with no default here are deliberate: Legion must never start with a
 # guessable secret.
 
+# Container logs are rotated (5 × 20 MB per service): without a limit Docker's json-file logs grow
+# until the disk is full.
+x-logging: &logging
+  logging:
+    driver: json-file
+    options: { max-size: "20m", max-file: "5" }
+
 services:
   postgres:
-    image: postgres:16-alpine
+    <<: *logging
+    # The official image pinned by digest, without gosu, run as `postgres` (uid 70) from the start
+    # (deploy/postgres/Dockerfile). Same image as the pilot stack.
+    build: { context: deploy/postgres }
+    image: legion-postgres:local
+    user: "70:70"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-legion}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./install.sh (or start-docker.ps1) to generate secrets}
@@ -27,7 +39,8 @@ services:
     # a public IP is how databases end up on the internet by accident.
 
   redis:
-    image: redis:7-alpine
+    <<: *logging
+    image: redis:7.4-alpine@sha256:c5d34a98396a4775e223c74e929162c35c5a2182901ba26b50ade939941ce14b
     # Rate-limit counters and realtime fan-out only — nothing here needs to
     # survive a restart, and persistence would add disk I/O to every request.
     command: ["redis-server", "--save", "", "--appendonly", "no"]
@@ -38,13 +51,38 @@ services:
       retries: 10
     restart: unless-stopped
 
-  backend:
+  # One-shot, before the API: creates (or re-checks) the API's own database role, legion_app — not
+  # superuser, no CREATEROLE/CREATEDB/BYPASSRLS/REPLICATION, no file or program access — and moves
+  # ownership of an existing installation's tables to it. Only this step sees the admin password.
+  db-provision:
+    <<: *logging
     build:
       context: .
       dockerfile: server/Dockerfile
+    image: legion-backend:local
+    command: ["node", "dist/db/provision-cli.js"]
+    environment:
+      DATABASE_ADMIN_URL: postgresql://${POSTGRES_USER:-legion}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-legion}
+      APP_DB_USER: legion_app
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?run ./install.sh (or start-docker.ps1) to generate secrets}
+      # F-02: the schema belongs to legion_owner (cannot log in); this step migrates as it,
+      # and legion_app gets data privileges only. The API checks the schema at boot.
+      DB_ROLE_SPLIT: ${DB_ROLE_SPLIT:-on}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    <<: *logging
+    image: legion-backend:local
     environment:
       DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-self-hosted}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-legion}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-legion}
+      # The least-privilege role created by db-provision, never the database superuser.
+      DATABASE_URL: postgresql://legion_app:${APP_DB_PASSWORD}@postgres:5432/${POSTGRES_DB:-legion}
+      # F-04: row-level security for the workspace-first tables (TENANT-ISOLATION.md): the database
+      # itself keeps each workspace's rows apart. enforce (default) | off.
+      DB_RLS: ${DB_RLS:-enforce}
       REDIS_URL: redis://redis:6379
       # Reachable from the host through the published port below. Inside the
       # container 127.0.0.1 would be unreachable from outside.
@@ -55,8 +93,17 @@ services:
       # No default. config.ts refuses to start on the shipped placeholder.
       JWT_SECRET: ${JWT_SECRET:?run ./install.sh (or start-docker.ps1) to generate secrets}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      # Finished SOC history older than this many days is removed (audit chain anchored, open work never
+      # touched; DATA-RETENTION.md). 0 keeps it forever, and the database then grows until the disk is full.
+      SOC_RETENTION_DAYS: ${SOC_RETENTION_DAYS:-365}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       SECURITY_EVENT_WEBHOOK_SECRET: ${SECURITY_EVENT_WEBHOOK_SECRET:-}
+      # Payment-check account hashes (install.sh generates it). Production refuses to start without it.
+      PAYMENT_HASH_KEY: ${PAYMENT_HASH_KEY:-}
+      PAYMENT_HASH_PREVIOUS_KEYS: ${PAYMENT_HASH_PREVIOUS_KEYS:-}
+      # Signs the SOC audit chain (install.sh generates it). Production refuses to start without it.
+      SOC_AUDIT_KEY: ${SOC_AUDIT_KEY:-}
+      SOC_AUDIT_PREVIOUS_KEYS: ${SOC_AUDIT_PREVIOUS_KEYS:-}
       AI_PROVIDER: ${AI_PROVIDER:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-}
@@ -75,6 +122,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      db-provision:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:8000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 10s
@@ -83,9 +132,13 @@ services:
       start_period: 20s
     restart: unless-stopped
     ports:
-      - "${API_PORT:-8000}:8000"
+      # Loopback only by default: Docker publishes ports past host firewalls (ufw/iptables rules do not
+      # apply). Put the HTTPS reverse proxy (INSTALL.md section 6) in front, or set LEGION_PUBLISH_ADDRESS
+      # in .env to an internal address on a network you trust.
+      - "${LEGION_PUBLISH_ADDRESS:-127.0.0.1}:${API_PORT:-8000}:8000"
 
   frontend:
+    <<: *logging
     build:
       context: .
       dockerfile: frontend/Dockerfile
@@ -99,7 +152,6 @@ services:
         NEXT_PUBLIC_OPERATOR_NAME: ${NEXT_PUBLIC_OPERATOR_NAME:-}
         NEXT_PUBLIC_SUPPORT_EMAIL: ${NEXT_PUBLIC_SUPPORT_EMAIL:-}
         NEXT_PUBLIC_DATA_LOCATION: ${NEXT_PUBLIC_DATA_LOCATION:-}
-        NEXT_PUBLIC_PRICE_LABEL: ${NEXT_PUBLIC_PRICE_LABEL:-}
         NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}
     environment:
       # Read at run time too: the content-security policy is built per request.
@@ -110,7 +162,7 @@ services:
         condition: service_started
     restart: unless-stopped
     ports:
-      - "${WEB_PORT:-3000}:3000"
+      - "${LEGION_PUBLISH_ADDRESS:-127.0.0.1}:${WEB_PORT:-3000}:3000"
 
 volumes:
   legion-pgdata:

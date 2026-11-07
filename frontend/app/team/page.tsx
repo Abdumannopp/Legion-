@@ -13,8 +13,8 @@ import ErrorNotice from "@/components/ErrorNotice";
 import { ApiError, getSkills, isLoggedIn, type LegionAgentName, type SkillInfo } from "@/lib/api";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 
-const ORDER: LegionAgentName[] = ["Sentinel", "Hunter", "Guardian", "Oracle", "Executor"];
-const ICON: Record<LegionAgentName, LucideIcon> = { Sentinel: Eye, Hunter: Crosshair, Guardian: ShieldCheck, Oracle: Sparkles, Executor: Scale };
+const ORDER: LegionAgentName[] = ["Sentinel", "Hunter", "Guardian", "Oracle", "Vanguard"];
+const ICON: Record<LegionAgentName, LucideIcon> = { Sentinel: Eye, Hunter: Crosshair, Guardian: ShieldCheck, Oracle: Sparkles, Vanguard: Scale };
 
 export default function TeamPage() {
   const router = useRouter();

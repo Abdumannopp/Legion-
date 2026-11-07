@@ -2,6 +2,7 @@
 
 import AiSettingsSection from "@/components/AiSettingsSection";
 import RegionalSettingsSection from "@/components/RegionalSettingsSection";
+import WorkspaceExportSection from "@/components/WorkspaceExportSection";
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -354,6 +355,7 @@ export default function SettingsPage() {
                 <div className="flex flex-col gap-4">
                   <AiSettingsSection isAdmin={isAdmin} />
                   <RegionalSettingsSection isAdmin={isAdmin} />
+                  <WorkspaceExportSection isAdmin={isAdmin} />
                   <div className="rounded-xl border border-line bg-surface p-4 flex flex-col gap-3">
                     <div className="flex items-center justify-between py-2 border-b border-line">
                       <span className="text-ink-faint text-xs uppercase tracking-wide">{t.common.email}</span>

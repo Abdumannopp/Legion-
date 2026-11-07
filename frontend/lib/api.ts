@@ -1,4 +1,5 @@
 import type { Locale } from "./i18n/core";
+import type { AddonId, Entitlements, PlanId } from "./plans";
 import { translations } from "./i18n/translations";
 import { createRefresher, type LockManagerLike } from "./session-refresh";
 import { setDisplaySettings, type DateFormat, type TimeFormat } from "./i18n/format";
@@ -38,7 +39,7 @@ export interface Alert {
   id: string;
   title: string;
   severity: "critical" | "high" | "medium" | "low";
-  agent: "Sentinel" | "Hunter" | "Guardian" | "Oracle" | "Executor";
+  agent: "Sentinel" | "Hunter" | "Guardian" | "Oracle" | "Vanguard";
   status: "open" | "investigating" | "resolved";
   summary: string;
   confidence: number;
@@ -136,6 +137,27 @@ async function send(path: string, options: RequestInit): Promise<Response> {
   });
 }
 
+/*
+ * Dangerous actions answer 403 { code: "reauth_required" } unless the person confirmed their password
+ * in the last 10 minutes (server: recentAuth). The dialog (components/ReauthDialog.tsx) registers here;
+ * the request is sent again once, after a successful confirmation. Cancelling leaves the 403 as it was.
+ */
+type ReauthHandler = () => Promise<boolean>;
+let reauthHandler: ReauthHandler | null = null;
+export function setReauthHandler(handler: ReauthHandler | null): void { reauthHandler = handler; }
+
+async function confirmedAfterReauth(res: Response): Promise<boolean> {
+  if (res.status !== 403 || !reauthHandler) return false;
+  let code: unknown;
+  try { code = (await res.clone().json())?.code; } catch { return false; }
+  return code === "reauth_required" && (await reauthHandler());
+}
+
+/** Re-confirm identity (password; and the authenticator code when MFA is on). */
+export function stepUp(password: string, code?: string): Promise<{ access_token: string; valid_for_seconds: number }> {
+  return request("/auth/step-up", { method: "POST", body: JSON.stringify(code ? { password, code } : { password }) });
+}
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   let res = await send(path, options);
 
@@ -147,6 +169,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
       res = await send(path, options);
     }
   }
+  if (await confirmedAfterReauth(res)) res = await send(path, options);
 
   if (!res.ok) {
     let detail = res.statusText;
@@ -167,6 +190,21 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (res.status === 204) return undefined as T;
   return res.json();
+}
+
+/** The workspace's data as a JSON file (administrators). Returned as a Blob so a large workspace is not parsed in memory. */
+export async function downloadWorkspaceExport(): Promise<{ blob: Blob; filename: string }> {
+  let res = await send("/workspace/export", {});
+  if (res.status === 401 && (await refreshSession())) res = await send("/workspace/export", {});
+  if (await confirmedAfterReauth(res)) res = await send("/workspace/export", {});
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { const body = await res.json(); detail = body.detail || detail; } catch { /* not JSON */ }
+    const retry = Number(res.headers.get("retry-after"));
+    throw new ApiError(detail, res.status, undefined, undefined, Number.isFinite(retry) && retry > 0 ? retry : undefined);
+  }
+  const named = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "");
+  return { blob: await res.blob(), filename: named?.[1] ?? "legion-workspace.json" };
 }
 
 export type DeploymentMode = "self-hosted" | "saas";
@@ -512,14 +550,23 @@ export function getStats(): Promise<AlertStats> {
   return request<AlertStats>("/alerts/stats");
 }
 
+/** Reopening a resolved alert needs a reason (recorded in the audit log). */
 export function updateAlertStatus(
   id: string,
-  status: Alert["status"]
+  status: Alert["status"],
+  reason?: string
 ): Promise<Alert> {
   return request<Alert>(`/alerts/${id}/status`, {
     method: "PATCH",
-    body: JSON.stringify({ status }),
+    body: JSON.stringify(reason ? { status, reason } : { status }),
   });
+}
+
+/** Asks why a resolved alert is being reopened. Null: the person cancelled (nothing is changed). */
+export function reopenReason(from: Alert["status"] | undefined, to: Alert["status"]): string | null | undefined {
+  if (from !== "resolved" || to === "resolved") return undefined;
+  const r = typeof window === "undefined" ? null : window.prompt(translations[apiLocale].common.reopenReasonPrompt);
+  return r && r.trim() ? r.trim().slice(0, 500) : null;
 }
 
 export function explainAlert(id: string, force = false): Promise<Alert> {
@@ -560,6 +607,8 @@ export interface AiSettings {
   provider_configured: boolean;
   provider: string | null;
   data_mode: "standard" | "strict";
+  /** True when nobody chose the mode: the deployment's starting setting applies. */
+  data_mode_is_default: boolean;
   circuit: "closed" | "open";
   advisory: true;
 }
@@ -622,8 +671,43 @@ export function openBillingPortal(): Promise<{ url: string }> {
   return request<{ url: string }>("/billing/portal", { method: "POST" });
 }
 
-export function getCheckoutContext(): Promise<{ checkout_token: string; currency?: string; price_id?: string | null }> {
-  return request<{ checkout_token: string; currency?: string; price_id?: string | null }>("/billing/checkout-context", { method: "POST" });
+/** What the server enforces for this workspace: its plan, add-ons and how much of each limit is used. */
+export interface PlanEntitlements extends Entitlements {
+  plan: PlanId;
+  addons: AddonId[];
+  source: "self-hosted" | "override" | "subscription" | "legacy" | "trial";
+  usage: {
+    endpoints: { used: number; limit: number | null; over: boolean };
+    admins: { used: number; limit: number | null; over: boolean };
+  };
+}
+
+export function getEntitlements(): Promise<PlanEntitlements> {
+  return request<PlanEntitlements>("/billing/entitlements");
+}
+
+/** The price list as the server has it, with which plans and add-ons can be bought online. */
+export interface PlanCatalog {
+  plans: Array<{ id: PlanId; buy: { month: boolean; year: boolean } }>;
+  addons: Array<{ id: AddonId; buy: boolean }>;
+}
+
+export function getPlans(): Promise<PlanCatalog> {
+  return request<PlanCatalog>("/billing/plans");
+}
+
+export interface CheckoutContext {
+  checkout_token: string;
+  currency?: string;
+  /** Without a plan: the workspace's single price (the old call). */
+  price_id?: string | null;
+  /** With a plan: what to put in the checkout. */
+  items?: Array<{ priceId: string; quantity: number }>;
+}
+
+/** The server maps a plan (and add-ons) to Paddle prices; the browser never names one. */
+export function getCheckoutContext(choice?: { plan: PlanId; interval: "month" | "year"; addons?: AddonId[] }): Promise<CheckoutContext> {
+  return request<CheckoutContext>("/billing/checkout-context", { method: "POST", body: choice ? JSON.stringify(choice) : undefined });
 }
 
 // ---------- Users / RBAC ----------
@@ -825,6 +909,27 @@ export function getIntegrationCatalogue(): Promise<{ integrations: IntegrationIn
   return request("/integrations/catalogue");
 }
 
+export interface ConnectionInfo {
+  id: string; kind: string; name: string; status: "active" | "paused" | "error" | "disabled";
+  config: Record<string, unknown>; has_secrets: boolean; last_success_at: string | null; last_error: string | null; failures: number; created_at: string;
+}
+export interface AlertDelivery { connection: string; kind: string; status: "pending" | "sending" | "sent" | "dead"; ticket: { key: string; url: string } | null; last_error: string | null; sent_at: string | null }
+export function getAlertDeliveries(id: string): Promise<{ deliveries: AlertDelivery[] }> {
+  return request(`/alerts/${encodeURIComponent(id)}/deliveries`);
+}
+export function listConnections(): Promise<{ connections: ConnectionInfo[] }> {
+  return request("/integrations");
+}
+export function createConnection(body: { kind: string; name: string; config: Record<string, unknown>; secrets: Record<string, string> }): Promise<ConnectionInfo> {
+  return request("/integrations", { method: "POST", body: JSON.stringify(body) });
+}
+export function setConnectionStatus(id: string, action: "pause" | "resume"): Promise<ConnectionInfo> {
+  return request(`/integrations/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+}
+export function removeConnection(id: string): Promise<{ status: string }> {
+  return request(`/integrations/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
 function absoluteApi(path: string): string {
   const base = API_URL.startsWith("http") ? API_URL : `${typeof window !== "undefined" ? window.location.origin : ""}${API_URL}`;
   return `${base.replace(/\/+$/, "")}${path}`;
@@ -943,7 +1048,7 @@ export interface IpBlock {
   active: boolean;
 }
 
-export interface AutoResponseSettings { mode: "off" | "auto"; minutes: number; allowlist: string }
+export interface AutoResponseSettings { mode: "off" | "auto"; minutes: number; allowlist: string; acknowledged: boolean }
 
 export async function getCampaigns(): Promise<AttackCampaign[]> {
   return (await request<{ campaigns: AttackCampaign[] }>("/security/campaigns")).campaigns;
@@ -967,13 +1072,13 @@ export function getAutoResponse(): Promise<AutoResponseSettings> {
   return request<AutoResponseSettings>("/security/auto-response");
 }
 
-export function updateAutoResponse(patch: Partial<AutoResponseSettings>): Promise<AutoResponseSettings> {
+export function updateAutoResponse(patch: Partial<Omit<AutoResponseSettings, "acknowledged">> & { acknowledge?: boolean }): Promise<AutoResponseSettings> {
   return request<AutoResponseSettings>("/security/auto-response", { method: "PATCH", body: JSON.stringify(patch) });
 }
 
 
 // ---- Legion's five agents and their skills ---------------------------------
-export type LegionAgentName = "Sentinel" | "Hunter" | "Guardian" | "Oracle" | "Executor";
+export type LegionAgentName = "Sentinel" | "Hunter" | "Guardian" | "Oracle" | "Vanguard";
 export interface SkillInfo {
   name: string;
   agent: LegionAgentName;
@@ -1024,6 +1129,25 @@ export interface PaymentCheck {
   resolution: "released" | "rejected" | null;
   resolved_at: string | null;
 }
+export interface PaymentConsent {
+  /** Hosted workspaces only. */
+  applicable: boolean;
+  acknowledged: boolean;
+  /** The payment check refuses to answer until an administrator confirms (a new workspace). */
+  required: boolean;
+  notice_version: string;
+  acknowledged_at: string | null;
+  acknowledged_by: string | null;
+}
+
+export function getPaymentConsent(): Promise<PaymentConsent> {
+  return request<PaymentConsent>("/security/payments/consent");
+}
+
+export function acknowledgePaymentNotice(): Promise<PaymentConsent> {
+  return request<PaymentConsent>("/security/payments/consent", { method: "POST", body: JSON.stringify({ acknowledge: true }) });
+}
+
 export function getHeldPayments(): Promise<{ payments: PaymentCheck[] }> {
   return request("/security/payments?held=true");
 }
@@ -1032,4 +1156,47 @@ export function releasePayment(id: string): Promise<{ payment: PaymentCheck }> {
 }
 export function rejectPayment(id: string): Promise<{ payment: PaymentCheck }> {
   return request(`/security/payments/${encodeURIComponent(id)}/reject`, { method: "POST" });
+}
+
+// --- Protection modes: how much Legion may do on its own, because a person said so (SOC core) ---
+
+export type ProtectionMode = "manual" | "hybrid" | "automatic";
+export interface ProtectionSettings {
+  mode: ProtectionMode; auto_actions: string[]; acknowledged: boolean;
+  acknowledged_at: string | null; acknowledged_by: string | null; effective_mode: ProtectionMode;
+}
+export interface LiveActionInfo { id: string; class: string; summary: string; reversible: boolean }
+export interface ProtectionState {
+  protection: ProtectionSettings;
+  notice: { version: string; lines: string[] };
+  live_actions: LiveActionInfo[];
+  live_per_hour: number;
+  plan_allows: boolean;
+  paused: boolean;
+}
+export interface ProtectionReport {
+  days: number;
+  totals: { automatic: number; approved_by_person: number; by_person: number; awaiting_approval: number; failed: number; refused_or_cancelled: number };
+  recent: Array<{ id: string; action_id: string; target: string | null; status: string; by: string; did: string | null; error: string | null; at: string }>;
+  changes: Array<{ at: string; by: string | null; detail: string | null }>;
+}
+export interface SocApproval {
+  id: string; action_id: string; risk_class: string; summary: string; action_digest: string; require_mfa: boolean;
+  required_approvals: number; approvals: number; status: string; expires_at: string; created_at: string;
+  requested_by: { kind: string; agent?: string };
+}
+
+export const getProtection = () => request<ProtectionState>("/soc/protection");
+export const getProtectionReport = (days = 7) => request<ProtectionReport>(`/soc/protection/report?days=${days}`);
+export function updateProtection(patch: { mode?: ProtectionMode; auto_actions?: string[]; acknowledge?: boolean }): Promise<{ protection: ProtectionSettings }> {
+  return request("/soc/protection", { method: "PUT", body: JSON.stringify(patch) });
+}
+/** The emergency stop: refuses new actions and holds queued ones until lifted. */
+export const setActionsPaused = (paused: boolean, reason?: string) =>
+  request<{ paused: boolean }>("/actions/controls", { method: "POST", body: JSON.stringify(reason ? { paused, reason } : { paused }) });
+export const getSocApprovals = () => request<{ approvals: SocApproval[] }>("/approvals?status=pending");
+export function decideSocApproval(a: SocApproval, decision: "approve" | "reject", opts: { reason?: string; mfa_code?: string } = {}) {
+  return request(`/approvals/${encodeURIComponent(a.id)}/decision`, {
+    method: "POST", body: JSON.stringify({ decision, action_digest: a.action_digest, ...opts }),
+  });
 }

@@ -51,6 +51,11 @@ WEBHOOK_SECRET="$(existing SECURITY_EVENT_WEBHOOK_SECRET)"
 # "<id>:<64 hex>". Encrypts TOTP seeds and webhook secrets at rest. Losing it
 # makes them unreadable, so it is generated once and never regenerated.
 ENCRYPTION_KEYS="$(existing LEGION_ENCRYPTION_KEYS)"
+# Recognises bank accounts in the payment check without storing them (HMAC key). Its own secret.
+PAYMENT_HASH_KEY="$(existing PAYMENT_HASH_KEY)"
+# The API's own database role (legion_app). The Postgres admin password stays with the database.
+APP_DB_PASSWORD="$(existing APP_DB_PASSWORD)"
+SOC_AUDIT_KEY="$(existing SOC_AUDIT_KEY)"
 
 NEW_INSTALL=false
 if [[ -z "$JWT_SECRET" ]]; then
@@ -69,6 +74,37 @@ if [[ -z "$ENCRYPTION_KEYS" ]]; then
     # Installations made before this key existed: add it, keep everything else.
     printf 'LEGION_ENCRYPTION_KEYS=%s\n' "$ENCRYPTION_KEYS" >> "$ENV_FILE"
     ok "Added LEGION_ENCRYPTION_KEYS to $ENV_FILE"
+  fi
+fi
+
+if [[ -z "$APP_DB_PASSWORD" ]]; then
+  APP_DB_PASSWORD="$(random_hex 24)"
+  if [[ "$NEW_INSTALL" != true ]]; then
+    # Installations from before the API had its own role: db-provision creates it and moves the
+    # tables to it on the next start; the API stops using the database superuser.
+    printf 'APP_DB_PASSWORD=%s\n' "$APP_DB_PASSWORD" >> "$ENV_FILE"
+    ok "Added APP_DB_PASSWORD to $ENV_FILE (the API now uses its own least-privilege database role)"
+  fi
+fi
+
+if [[ -z "$SOC_AUDIT_KEY" ]]; then
+  SOC_AUDIT_KEY="$(random_hex 32)"
+  if [[ "$NEW_INSTALL" != true ]]; then
+    # The audit chain so far was signed with a key derived from JWT_SECRET: keep it verifiable.
+    printf 'SOC_AUDIT_KEY=%s\nSOC_AUDIT_PREVIOUS_KEYS=jwt\n' "$SOC_AUDIT_KEY" >> "$ENV_FILE"
+    ok "Added SOC_AUDIT_KEY to $ENV_FILE (the existing audit chain stays verifiable)"
+  fi
+fi
+
+if [[ -z "$PAYMENT_HASH_KEY" ]]; then
+  PAYMENT_HASH_KEY="$(random_hex 32)"
+  if [[ "$NEW_INSTALL" != true ]]; then
+    # Before this key existed, payment hashes used the webhook secret, or a built-in value when none
+    # was set. List that as the previous key so accounts already confirmed are still recognised;
+    # every new hash uses the new key. Remove the previous key after the retention period (24 months).
+    LEGACY="${WEBHOOK_SECRET:-legion-payments}"
+    printf 'PAYMENT_HASH_KEY=%s\nPAYMENT_HASH_PREVIOUS_KEYS=%s\n' "$PAYMENT_HASH_KEY" "$LEGACY" >> "$ENV_FILE"
+    ok "Added PAYMENT_HASH_KEY to $ENV_FILE (the old payment key is kept as PAYMENT_HASH_PREVIOUS_KEYS)"
   fi
 fi
 
@@ -131,6 +167,9 @@ JWT_SECRET=$JWT_SECRET
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 SECURITY_EVENT_WEBHOOK_SECRET=$WEBHOOK_SECRET
 LEGION_ENCRYPTION_KEYS=$ENCRYPTION_KEYS
+PAYMENT_HASH_KEY=$PAYMENT_HASH_KEY
+APP_DB_PASSWORD=$APP_DB_PASSWORD
+SOC_AUDIT_KEY=$SOC_AUDIT_KEY
 EOF
   chmod 600 "$ENV_FILE"
   ok "Wrote $ENV_FILE (permissions 600)"

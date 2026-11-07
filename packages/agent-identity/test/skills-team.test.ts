@@ -1,6 +1,6 @@
 /**
  * The five agents' new skills: Sentinel (account activity), Hunter (data
- * exfiltration), Guardian (exposure), Oracle (triage) and Executor
+ * exfiltration), Guardian (exposure), Oracle (triage) and Vanguard
  * (containment candidates). Each reads and recommends; none acts.
  */
 import { afterEach, describe, expect, it } from "vitest";
@@ -206,7 +206,7 @@ describe("Oracle: triage_priority", () => {
   });
 });
 
-describe("Executor: containment_candidates", () => {
+describe("Vanguard: containment_candidates", () => {
   it("offers the attacking public address with evidence, as a proposal only", async () => {
     const e = (env = await skillEnv());
     await e.assign("containment_candidates");

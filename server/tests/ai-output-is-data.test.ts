@@ -32,7 +32,9 @@ afterAll(async () => { await closePool(); });
 beforeEach(async () => {
   await truncateAll();
   tenantId = randomUUID();
-  await query("INSERT INTO tenants (id, name) VALUES ($1, 'T')", [tenantId]);
+  // These tests check what reaches the model in STANDARD data mode (real values, made safe).
+  // A hosted workspace that never chose a mode is strict (ai-policy.ts defaultDataMode), so choose it here.
+  await query("INSERT INTO tenants (id, name, ai_data_mode) VALUES ($1, 'T', 'standard')", [tenantId]);
   analyst = await store.insertUser({ email: "a@t.io", password_hash: await bcrypt.hash("password123", 4), tenant_id: tenantId, role: "analyst", status: "active" });
   for (const id of ["SEC-1", "SEC-2"]) {
     await store.insertAlert({

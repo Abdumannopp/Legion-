@@ -9,7 +9,20 @@
  */
 import { readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { closePool, migrate, transaction } from "../db/pool.js";
+import type pg from "pg";
+import { closePool, migrate, transaction, withTenant } from "../db/pool.js";
+
+/**
+ * F-04: each imported row belongs to the workspace it names. Declared for the statement (for the API's
+ * check) and, transaction-locally, for the database (row-level security), so the import also works
+ * when DB_RLS=enforce.
+ */
+function inWorkspace(client: pg.PoolClient, tenantId: string, sql: string, params: unknown[]) {
+  return withTenant(tenantId, async () => {
+    await client.query("SELECT set_config('legion.tenant_id', $1, true)", [tenantId]);
+    return client.query(sql, params);
+  });
+}
 import { config } from "../config.js";
 
 interface LegacyDatabase {
@@ -73,7 +86,7 @@ async function main(): Promise<void> {
     }
 
     for (const a of legacy.alerts ?? []) {
-      const result = await client.query(
+      const result = await inWorkspace(client, String(a.tenant_id), 
         `INSERT INTO alerts (tenant_id, id, title, severity, agent, status, summary, confidence,
                              ai_explanation, explained_at, source_ip, target, mitre_technique, source, created_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,COALESCE($15::timestamptz, now()))
@@ -87,7 +100,7 @@ async function main(): Promise<void> {
     }
 
     for (const a of legacy.assets ?? []) {
-      const result = await client.query(
+      const result = await inWorkspace(client, String(a.tenant_id), 
         `INSERT INTO assets (id, tenant_id, name, os, ip_address, risk, online, last_seen)
          VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE($8::timestamptz, now()))
          ON CONFLICT (tenant_id, name) DO NOTHING`,
@@ -99,7 +112,7 @@ async function main(): Promise<void> {
     }
 
     for (const row of legacy.audit ?? []) {
-      const result = await client.query(
+      const result = await inWorkspace(client, String(row.tenant_id), 
         `INSERT INTO audit_log (id, tenant_id, user_id, user_email, action, resource_type,
                                 resource_id, detail, ip_address, created_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10::timestamptz, now()))

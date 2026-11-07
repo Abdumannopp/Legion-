@@ -1,0 +1,12 @@
+[
+  {
+    "id": "G-01",
+    "severity": "medium",
+    "text": "Distinct proposals for the same target (e.g. one IP from two alerts) each create their own approval; an approver sees duplicates and approving both extends/duplicates the same effect. Needs target-level dedupe of open proposals."
+  },
+  {
+    "id": "G-03",
+    "severity": "medium",
+    "text": "No production component reconciles conflicting agent findings; the harness takes the highest risk. The policy engine cannot express 'require approval when agents disagree'."
+  }
+]

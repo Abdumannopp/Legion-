@@ -3,7 +3,7 @@ import { config } from "./config.js";
 import type { Alert } from "./types.js";
 import { answerLanguageInstruction, type Locale } from "./i18n.js";
 import {
-  Pseudonymizer, clip, identifierForModel, redactSecrets, safeIdentifier, sanitizeModelOutput, sanitizeUntrusted,
+  Pseudonymizer, clip, identifierForModel, markUnverifiedReferences, redactSecrets, safeIdentifier, sanitizeModelOutput, sanitizeUntrusted,
   type OutputFlag,
 } from "./ai-safety.js";
 
@@ -171,6 +171,8 @@ export interface ChatOptions {
   /** Strings the answer must not contain (the request's own fence boundary). */
   forbid?: string[];
   maxOutputChars?: number;
+  /** F-12: what the model was given, as stored; references in the answer that are not in it are marked. */
+  evidence?: string;
 }
 
 /** Most bytes of provider response that are read. */
@@ -311,8 +313,13 @@ export async function chatSafe(messages: ChatMessage[], options: ChatOptions = {
     const clean = sanitizeModelOutput(content, { maxChars: options.maxOutputChars ?? config.aiMaxOutputChars, forbid: options.forbid });
     if (!clean.ok) return fail(clean.reason === "empty" ? "empty_response" : "unsafe_response");
 
-    const text = options.pseudonymizer ? options.pseudonymizer.unmask(clean.text) : clean.text;
+    let text = options.pseudonymizer ? options.pseudonymizer.unmask(clean.text) : clean.text;
     meta.outputFlags = clean.flags;
+    if (options.evidence !== undefined) {
+      const marked = markUnverifiedReferences(text, options.evidence);
+      text = marked.text;
+      if (marked.unverified.length) meta.outputFlags = [...meta.outputFlags, "unverified_reference"];
+    }
     meta.outputChars = text.length;
     meta.ms = Date.now() - started;
     recordOutcome(null);
@@ -407,7 +414,8 @@ export async function explainAlertSafe(alert: Alert, locale: Locale = "en", mode
       },
       { role: "user", content: block },
     ],
-    { maxTokens: 350, forbid: [boundary], pseudonymizer: mode === "strict" ? new Pseudonymizer(hostsOf([alert])) : undefined }
+    { maxTokens: 350, forbid: [boundary], pseudonymizer: mode === "strict" ? new Pseudonymizer(hostsOf([alert])) : undefined,
+      evidence: [alert.id, alert.title, alert.summary, alert.source_ip, alert.target, alert.mitre_technique].filter(Boolean).join("\n") }
   );
 }
 
@@ -452,7 +460,8 @@ export async function copilotAnswerSafe(
       ...turns,
       { role: "user", content: q },
     ],
-    { maxTokens: 600, temperature: 0.3, forbid: [boundary], pseudonymizer: mode === "strict" ? new Pseudonymizer(hostsOf(picked)) : undefined }
+    { maxTokens: 600, temperature: 0.3, forbid: [boundary], pseudonymizer: mode === "strict" ? new Pseudonymizer(hostsOf(picked)) : undefined,
+      evidence: [q, ...turns.map((t) => t.content), ...picked.map((a) => [a.id, a.title, a.summary, a.source_ip, a.target, a.mitre_technique].filter(Boolean).join(" "))].join("\n") }
   );
 }
 

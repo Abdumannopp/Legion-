@@ -94,21 +94,24 @@ describe("Agent impersonation", () => {
     category: "Agent impersonation",
     title: "Named external system labelling is an audit convenience, not an authentication check",
     attackPath: "Anyone (no credential at all) posts directly to a route mounted behind guards.externalSystem(\"wazuh-webhook\"), which by this module's own design labels any unauthenticated caller with that name for the audit trail — checking whether this module provides any origin verification (signature, shared secret) of its own, or whether that responsibility sits entirely with the specific webhook route/integration.",
-    expectedDefense: "Reported factually either way: if the module verifies origin itself, that is confirmed with evidence; if it does not (by design — externalSystem() is documented as a label, not an authenticator), that scope boundary is stated plainly so integrators know they must add their own verification (HMAC/shared secret) before trusting the label.",
+    expectedDefense: "The unauthenticated request is refused before any \"external system\" label is applied; the label is only ever attached to a sender the route verified (signature / shared secret).",
   }, async (ev) => {
     const res = await request(w.t.app).post("/webhooks/wazuh").send({ alert: "anything, from anyone" });
     ev("unauthenticatedWebhookPost", { status: res.status, body: res.body });
     const auditRow = (await w.t.pool.query(
       "SELECT principal_type, principal_id FROM principal_audit_log WHERE action = 'alert.ingest' ORDER BY seq DESC LIMIT 1",
     )).rows[0];
-    ev("auditAttribution", auditRow);
+    ev("auditAttribution", auditRow ?? null);
+    if (res.status === 401 && res.body?.error?.code === "unverified_source") {
+      return defended("An unauthenticated POST to a route labelled as \"wazuh-webhook\" was refused (401 unverified_source) before any label was applied: externalSystem() now requires a verify function (signature / shared secret) and labels the caller only after it succeeds; a route without one refuses every request.");
+    }
     const accepted = res.status === 202;
     const labelledAsNamedSystemWithNoVerification = auditRow?.principal_type === "external_system" && auditRow?.principal_id === "wazuh-webhook";
     if (accepted && labelledAsNamedSystemWithNoVerification) {
       return partial(
-        "A completely unauthenticated POST was accepted (202) and recorded in the audit trail as principal_type=external_system, principal_id=\"wazuh-webhook\" — with zero request-content verification. This matches the code's own documentation (externalSystem() \"labels a route's caller ... for the audit trail\"); it is not a broken authentication check, because none is claimed. But it means anyone who can reach the route can make the audit trail say \"this came from Wazuh\" for whatever alert.ingest actually does with the payload.",
+        "A completely unauthenticated POST was accepted (202) and recorded in the audit trail as principal_type=external_system, principal_id=\"wazuh-webhook\" — with zero request-content verification.",
         "Medium",
-        "This module provides no HMAC/shared-secret verification for named external systems, and does not claim to. Document this loudly wherever externalSystem() is used, and require every real integration (the actual Wazuh webhook, any other external-system route) to verify a signature or shared secret in its own handler before Legion's guard runs, so the audit label reflects a verified source rather than an asserted one.",
+        "Require every external-system route to verify a signature or shared secret before the label is applied.",
       );
     }
     return notDefended(JSON.stringify({ status: res.status, auditRow }), "Medium", "Investigate: response/audit shape differs from what the code's documented design implies.");

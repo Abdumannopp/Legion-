@@ -82,9 +82,13 @@ function legacyDecrypt(stored: string, keyId: string): string | null {
   try {
     const [version, iv, tag, body] = stored.split(".");
     if (version !== "v1" || !iv || !tag || !body) return null;
-    const decipher = createDecipheriv("aes-256-gcm", legacyKey(), Buffer.from(iv, "base64url"));
+    // The full 16-byte tag, always: without authTagLength Node accepts a truncated tag
+    // (down to 4 bytes), which makes a forged ciphertext cheap to find.
+    const authTag = Buffer.from(tag, "base64url");
+    if (authTag.length !== 16) return null;
+    const decipher = createDecipheriv("aes-256-gcm", legacyKey(), Buffer.from(iv, "base64url"), { authTagLength: 16 });
     decipher.setAAD(Buffer.from(keyId));
-    decipher.setAuthTag(Buffer.from(tag, "base64url"));
+    decipher.setAuthTag(authTag);
     return Buffer.concat([decipher.update(Buffer.from(body, "base64url")), decipher.final()]).toString("utf8");
   } catch {
     return null;

@@ -247,9 +247,12 @@ ALTER TABLE alerts ADD COLUMN IF NOT EXISTS ai_explanation_locale text;
 -- It is now an outbox job of its own kind, written in the alert's
 -- transaction and retried like an email. (The inline CHECK above is named
 -- notification_outbox_kind_check by Postgres; replacing it is idempotent.)
+-- protection_email: what Legion did on its own, or needs a person to decide (protection.ts). This file is
+-- applied again on every upgrade, so the constraint must carry the newest kind here too, not only in migration
+-- 0012: otherwise each upgrade would put the old list back and the next notice would be refused.
 ALTER TABLE notification_outbox DROP CONSTRAINT IF EXISTS notification_outbox_kind_check;
 ALTER TABLE notification_outbox ADD CONSTRAINT notification_outbox_kind_check
-  CHECK (kind IN ('alert_email', 'realtime_alert'));
+  CHECK (kind IN ('alert_email', 'realtime_alert', 'protection_email', 'integration_message'));
 -- Queue health metrics: oldest undelivered job and the dead-letter count,
 -- without scanning delivered history.
 CREATE INDEX IF NOT EXISTS notification_outbox_undelivered_age
@@ -678,3 +681,123 @@ CREATE TABLE IF NOT EXISTS payment_checks (
 );
 CREATE INDEX IF NOT EXISTS payment_checks_tenant_created_idx ON payment_checks (tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS payment_checks_lookup_idx ON payment_checks (tenant_id, beneficiary_hash, amount, currency) WHERE resolution IS NOT NULL;
+
+-- Audit P2-12: the audit log is append-only. An UPDATE or DELETE — a bug, or SQL
+-- injection reaching DML — is refused by the database itself. A deliberate,
+-- documented erasure (GDPR pseudonymisation, tenant offboarding) goes through
+-- the bounded functions of migration 0008, which open an erasure context; see
+-- legion_erasure_allowed() in the agent schema for the full rule (F-02).
+-- TRUNCATE stays available to the owner for test and recovery tooling; with the
+-- owner/runtime split (db/provision.ts) the API's role is not the owner.
+--
+-- The erasure context: one row per transaction that is inside a bounded erasure
+-- function. Written only by legion_erasure_begin/end, which run as the owner;
+-- the API's role has no privilege on it.
+CREATE TABLE IF NOT EXISTS legion_erasure_context (
+  txid      bigint      PRIMARY KEY,
+  purpose   text        NOT NULL CHECK (length(purpose) <= 40),
+  opened_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE OR REPLACE FUNCTION legion_erasure_begin(p_purpose text) RETURNS void
+LANGUAGE sql SET search_path = public, pg_temp AS $$
+  INSERT INTO legion_erasure_context (txid, purpose) VALUES (txid_current(), p_purpose)
+  ON CONFLICT (txid) DO UPDATE SET purpose = EXCLUDED.purpose
+$$;
+CREATE OR REPLACE FUNCTION legion_erasure_end() RETURNS void
+LANGUAGE sql SET search_path = public, pg_temp AS $$
+  DELETE FROM legion_erasure_context WHERE txid = txid_current()
+$$;
+REVOKE ALL ON FUNCTION legion_erasure_begin(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION legion_erasure_end() FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION audit_log_append_only() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF legion_erasure_allowed(TG_RELID) THEN
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+  END IF;
+  RAISE EXCEPTION 'audit_log is append-only (% refused)', TG_OP USING ERRCODE = 'insufficient_privilege';
+END $$;
+DROP TRIGGER IF EXISTS audit_log_append_only ON audit_log;
+CREATE TRIGGER audit_log_append_only
+  BEFORE UPDATE OR DELETE ON audit_log
+  FOR EACH ROW EXECUTE FUNCTION audit_log_append_only();
+
+-- Plans (PLANS in src/plans.ts). A subscription records which plan and add-ons
+-- its Paddle items are; the operator can set a plan by hand for a contract
+-- (Enterprise) with tenants.plan_override. Nullable: an older row means the
+-- single plan that existed before (resolved as Professional).
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS plan   text;
+ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS addons text[] NOT NULL DEFAULT '{}';
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS plan_override text;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tenants_plan_override_check') THEN
+    ALTER TABLE tenants ADD CONSTRAINT tenants_plan_override_check
+      CHECK (plan_override IS NULL OR plan_override IN ('starter', 'professional', 'business', 'enterprise'));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'subscriptions_plan_check') THEN
+    ALTER TABLE subscriptions ADD CONSTRAINT subscriptions_plan_check
+      CHECK (plan IS NULL OR plan IN ('starter', 'professional', 'business', 'enterprise'));
+  END IF;
+END $$;
+
+-- Legal hold: a workspace under a legal hold is skipped by every retention job
+-- and refused by the deletion tool, until the hold is lifted by the operator.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS legal_hold boolean NOT NULL DEFAULT false;
+
+-- Proof that a workspace was erased, with no personal data: the workspace id,
+-- when, by whom (an operator name or "auto"), and how many rows of each kind went.
+-- Kept after the workspace is gone; also appended to DELETION_LEDGER_FILE so a
+-- restored backup can replay the deletion.
+CREATE TABLE IF NOT EXISTS tenant_deletions (
+  id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id   uuid        NOT NULL,
+  deleted_at  timestamptz NOT NULL DEFAULT now(),
+  deleted_by  text        NOT NULL,
+  reason      text,
+  counts      jsonb       NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS tenant_deletions_tenant_idx ON tenant_deletions (tenant_id);
+
+-- Written acknowledgement before automatic blocking is switched on: who accepted
+-- which version of the notice, and when (the notice text is in the dashboard;
+-- the version changes when its meaning does).
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS auto_block_ack_at      timestamptz;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS auto_block_ack_by      text;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS auto_block_ack_version text;
+
+-- Automatic deletion of a locked workspace is announced first: the admins are
+-- e-mailed, and the workspace is erased only after deletion_scheduled_for. Both
+-- are cleared if the workspace stops being locked (subscribed again, legal hold).
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS deletion_notice_at timestamptz;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS deletion_scheduled_for timestamptz;
+
+-- AI data mode: NULL means "never chosen". What that means depends on the
+-- deployment (ai-policy.ts): a hosted workspace starts in 'strict' (identifiers are
+-- replaced before anything leaves), a self-hosted one in 'standard'. Done once, when
+-- the column is still NOT NULL: workspaces that never turned AI on and only carry
+-- the old default become "never chosen"; anyone who chose a mode keeps it.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_schema = 'public' AND table_name = 'tenants' AND column_name = 'ai_data_mode' AND is_nullable = 'NO') THEN
+    ALTER TABLE tenants ALTER COLUMN ai_data_mode DROP NOT NULL;
+    ALTER TABLE tenants ALTER COLUMN ai_data_mode DROP DEFAULT;
+    UPDATE tenants SET ai_data_mode = NULL WHERE ai_enabled IS NULL AND ai_data_mode = 'standard';
+  END IF;
+END $$;
+
+-- Payment check: the notice an administrator confirmed before the check is used (who, when, which
+-- version of the text). A hosted workspace with no earlier checks cannot use it until then.
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS payment_ack_at timestamptz;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS payment_ack_by text;
+ALTER TABLE tenants ADD COLUMN IF NOT EXISTS payment_ack_version text;
+
+-- F-09: the incident lifecycle is recorded, not just the current status. acknowledged_at: the first
+-- time the alert left "open"; resolved_at / resolved_by: the current resolution (cleared on reopen);
+-- reopened_count: how often a resolved alert came back. Reopening needs a reason (in the audit log).
+-- Alerts from before this change keep NULL timestamps: their history is not known.
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS acknowledged_at timestamptz;
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS resolved_at timestamptz;
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS resolved_by text CHECK (resolved_by IS NULL OR length(resolved_by) <= 120);
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS reopened_count int NOT NULL DEFAULT 0 CHECK (reopened_count >= 0);

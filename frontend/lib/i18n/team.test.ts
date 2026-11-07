@@ -7,7 +7,7 @@ const SKILLS = [
   "triage_priority", "incident_response", "containment_candidates", "threat_coverage",
   "secret_exposure_check", "sensitive_access_watch", "response_sla_review", "payment_fraud_review",
 ];
-const AGENTS = ["Sentinel", "Hunter", "Guardian", "Oracle", "Executor"];
+const AGENTS = ["Sentinel", "Hunter", "Guardian", "Oracle", "Vanguard"];
 
 describe("Legion team page text", () => {
   it.each(["en"] as const)("%s: every agent and every skill has text", (locale) => {

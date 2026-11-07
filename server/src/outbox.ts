@@ -33,6 +33,8 @@
  * A row whose worker died during its FINAL attempt is dead-lettered rather
  * than reclaimed forever — a message that crashes the process cannot loop.
  */
+import { enqueueJob } from "./runtime/queue.js";
+import { wantsLiveResponse } from "./protection.js";
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { config } from "./config.js";
@@ -41,13 +43,14 @@ import { alertEmail, mailEnabled, sendMail, type MailResult } from "./mailer.js"
 import { isLocale } from "./i18n.js";
 import { publishOrThrow } from "./realtime.js";
 import * as store from "./store.js";
+import { deliverIntegrationMessage, enqueueIntegrationMessages } from "./integration-notify.js";
 import type { Alert, Severity } from "./types.js";
 
 type NewAlert = Parameters<typeof store.insertAlert>[0];
 export type Sender = (m: { to: string; subject: string; text: string; html?: string; messageId?: string }) => Promise<MailResult>;
 /** Fans a realtime frame out to every instance; throws if it could not. */
 export type Publisher = (tenantId: string, payload: unknown) => Promise<void>;
-export type JobKind = "alert_email" | "realtime_alert";
+export type JobKind = "alert_email" | "realtime_alert" | "protection_email" | "integration_message";
 
 const severityRank: Record<Severity, number> = { low: 0, medium: 1, high: 2, critical: 3 };
 /** How long a claimed row stays reserved for the worker that claimed it. */
@@ -166,7 +169,16 @@ export async function insertAlertAndNotify(alert: NewAlert, opts: IngestOptions 
       await store.upsertAsset(inserted.tenant_id, opts.asset.name, opts.asset.ip, opts.asset.os, client);
     }
     await enqueueAlertEmail(client, inserted);
+    await enqueueIntegrationMessages(client, inserted);
     if (opts.realtime) await enqueueRealtime(client, inserted, opts.realtime(inserted));
+    if (config.orchestratorAutoMode === "shadow") {
+      await enqueueJob(client, inserted.tenant_id, "workflow.run", { workflow: "alert_response", alert_id: inserted.id, mode: "shadow" }, `alert_response:${inserted.id}:shadow`);
+    }
+    // A workspace whose administrator allowed Legion to act: queue the live response in the same commit.
+    // The worker re-checks everything when it runs; this only skips workspaces in manual mode.
+    if (await wantsLiveResponse(client, inserted.tenant_id, inserted.source)) {
+      await enqueueJob(client, inserted.tenant_id, "workflow.run", { workflow: "alert_response", alert_id: inserted.id, mode: "live" }, `alert_response:${inserted.id}:live`);
+    }
     return inserted;
   });
   if (stored) kick();
@@ -248,12 +260,17 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
 }
 
-type Outcome = { ok: true } | { ok: false; detail: string };
+type Outcome = { ok: true } | { ok: false; detail: string; permanent?: boolean };
 
 async function attempt(row: OutboxRow, send: Sender, publish: Publisher): Promise<Outcome> {
   if (row.kind === "realtime_alert") {
     await publish(row.tenant_id, row.payload);
     return { ok: true };
+  }
+  if (row.kind === "integration_message") {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ATTEMPT_TIMEOUT_MS - 5_000);
+    try { return await deliverIntegrationMessage(row, controller.signal); } finally { clearTimeout(timer); }
   }
   const payload = row.payload as { subject: string; text: string; html?: string };
   const result = await send({ to: row.recipient, ...payload, messageId: `<${row.id}@legion.notification>` });
@@ -349,7 +366,7 @@ export async function deliverDue(opts: DeliverOptions = {}): Promise<DeliveryRep
       params = []; counts = "sent";
     } else {
       const reason = sanitizeError(outcome.detail);
-      if (row.attempts >= row.max_attempts) {
+      if (row.attempts >= row.max_attempts || outcome.permanent) {
         sql = "UPDATE notification_outbox SET status = 'dead', locked_until = NULL, last_error = $3";
         params = [reason]; counts = "dead";
         console.error(`Legion: notification ${row.id} (${row.kind}) gave up after ${row.attempts} attempts: ${reason}`);
@@ -403,7 +420,7 @@ export async function queueMetrics(tenantId?: string): Promise<QueueMetrics & { 
   );
   const empty = (): QueueMetrics => ({ pending: 0, retrying: 0, in_flight: 0, dead: 0, oldest_pending_age_seconds: null });
   const total = empty();
-  const by_kind: Record<string, QueueMetrics> = { alert_email: empty(), realtime_alert: empty() };
+  const by_kind: Record<string, QueueMetrics> = { alert_email: empty(), realtime_alert: empty(), protection_email: empty(), integration_message: empty() };
   for (const r of res.rows) {
     const m: QueueMetrics = {
       pending: Number(r.pending), retrying: Number(r.retrying), in_flight: Number(r.in_flight), dead: Number(r.dead),
@@ -422,6 +439,21 @@ export async function queueMetrics(tenantId?: string): Promise<QueueMetrics & { 
 export async function pruneDeliveredRealtime(): Promise<number> {
   const res = await query(
     "DELETE FROM notification_outbox WHERE kind = 'realtime_alert' AND status = 'sent' AND sent_at < now() - interval '1 day'"
+  );
+  return res.rowCount ?? 0;
+}
+
+/**
+ * Audit P2-16: a delivered alert email holds the recipient's address and the
+ * alert's text. Once sent it has done its job; keeping it forever only grows
+ * what a leak could expose. Only 'sent' rows go — pending, retrying and dead
+ * ones (still owed, or waiting for a person) are never touched.
+ */
+export async function pruneDeliveredEmails(days = config.notifyRetentionDays): Promise<number> {
+  if (!(days > 0)) return 0;
+  const res = await query(
+    "DELETE FROM notification_outbox WHERE kind IN ('alert_email', 'protection_email', 'integration_message') AND status = 'sent' AND sent_at < now() - make_interval(days => $1)",
+    [Math.floor(days)],
   );
   return res.rowCount ?? 0;
 }
@@ -482,7 +514,7 @@ async function tick(): Promise<void> {
   try {
     // Separate passes, run side by side: a slow mail server must not hold
     // back the dashboard frames, nor a Redis outage the emails.
-    const results = await Promise.allSettled([deliverDue({ kind: "realtime_alert" }), deliverDue({ kind: "alert_email" })]);
+    const results = await Promise.allSettled([deliverDue({ kind: "realtime_alert" }), deliverDue({ kind: "alert_email" }), deliverDue({ kind: "protection_email" }), deliverDue({ kind: "integration_message" })]);
     for (const r of results) {
       if (r.status === "rejected") {
         console.error("Legion: notification worker failed:", r.reason instanceof Error ? r.reason.message : "unknown error");
@@ -491,6 +523,7 @@ async function tick(): Promise<void> {
     if (Date.now() - lastPrune > 3_600_000) {
       lastPrune = Date.now();
       await pruneDeliveredRealtime();
+      await pruneDeliveredEmails();
     }
   } catch (error) {
     console.error("Legion: notification worker failed:", error instanceof Error ? error.message : "unknown error");

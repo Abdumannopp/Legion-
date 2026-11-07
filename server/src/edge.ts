@@ -222,6 +222,14 @@ export function resetUpgradeLimiter(): void {
  * a connection. After that, the connection's life is governed by the request
  * timeouts and keep-alive as before; long-lived sockets are not affected.
  */
+/**
+ * How long Node keeps an idle keep-alive connection. Pinned (not left to the
+ * Node default) because deploy/nginx.conf relies on it: nginx's upstream
+ * keepalive_timeout must be SHORTER, or a reused connection Node is closing
+ * returns a 502 (audit P2-19). A test compares the two.
+ */
+export const KEEP_ALIVE_TIMEOUT_MS = 5_000;
+
 export function limitSilentConnections(server: Server, firstRequestMs: number): void {
   if (firstRequestMs <= 0) return;
   const timers = new WeakMap<Socket, NodeJS.Timeout>();

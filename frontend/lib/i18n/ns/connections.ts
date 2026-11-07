@@ -1,0 +1,55 @@
+import { defineMessages } from "../core";
+
+/** Connections card on the Connect page (components/ConnectionsSection.tsx): pull and outbound integrations. */
+export const connections = defineMessages({
+  en: {
+    title: "Connections",
+    intro: "Bring in alerts from Microsoft Defender XDR and AWS GuardDuty, and send alerts to Slack or open Jira tickets. Secrets are encrypted and never shown again.",
+    adminOnly: "Only administrators can manage connections.",
+    empty: "No connections yet.",
+    add: "Add a connection",
+    cancel: "Cancel",
+    save: "Save connection",
+    saving: "Saving…",
+    kinds: {
+      m365: { name: "Microsoft Defender XDR", help: "Reads security alerts. In Entra ID create an app registration with the application permission SecurityAlert.Read.All and grant admin consent." },
+      guardduty: { name: "AWS GuardDuty", help: "Reads findings. Create an IAM user whose only permissions are guardduty:ListDetectors, ListFindings and GetFindings." },
+      slack: { name: "Slack", help: "Posts alerts to one channel. In Slack create an app with Incoming Webhooks and add it to the channel." },
+      jira: { name: "Jira Cloud", help: "Opens one ticket per alert. Use an Atlassian bot account and an API token that may create issues in one project." },
+    },
+    fields: {
+      directory_id: "Directory (tenant) ID",
+      client_id: "Application (client) ID",
+      client_secret: "Client secret",
+      regions: "AWS regions (comma separated)",
+      access_key_id: "Access key ID",
+      secret_access_key: "Secret access key",
+      role_arn: "Role ARN in the account to read (optional, recommended)",
+      external_id: "External ID of that role (optional)",
+      webhook_url: "Incoming webhook URL",
+      min_severity: "Send from severity",
+      site: "Jira site name (acme for acme.atlassian.net)",
+      project_key: "Project key (for example SEC)",
+      email: "Atlassian account e-mail",
+      api_token: "API token",
+    },
+    severities: { low: "Low", medium: "Medium", high: "High", critical: "Critical" },
+    status: { active: "Working", paused: "Paused", error: "Stopped after repeated errors", disabled: "Removed" },
+    health: {
+      ok: (when: string) => `Last success ${when}`,
+      never: "No success yet",
+      failing: (n: number) => `${n} failed ${n === 1 ? "attempt" : "attempts"} in a row`,
+    },
+    pause: "Pause",
+    resume: "Resume",
+    remove: "Remove",
+    removeConfirm: "Remove this connection? Its saved secrets are deleted.",
+    saved: "Connection saved.",
+    deliveries: {
+      title: "Sent to",
+      status: { pending: "Waiting to send", sending: "Sending", sent: "Delivered", dead: "Could not be delivered" },
+      ticket: (key: string) => `Ticket ${key}`,
+    },
+    cannotAct: "These connections only read alerts, notify people or open tickets. They never change anything in your systems.",
+  },
+});

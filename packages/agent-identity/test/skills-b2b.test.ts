@@ -1,7 +1,7 @@
 /**
  * Skills for business customers: secrets in logs (Guardian), who reads the
  * data that matters (Sentinel), how late the open alerts are (Oracle) and the
- * review of held payments (Executor). Read-only; nothing here acts.
+ * review of held payments (Vanguard). Read-only; nothing here acts.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { ibanValid, luhnValid, sensitiveKinds } from "../src/skills/builtin/secret-exposure-check.js";
@@ -192,7 +192,7 @@ describe("Oracle: response_sla_review", () => {
   });
 });
 
-describe("Executor: payment_fraud_review", () => {
+describe("Vanguard: payment_fraud_review", () => {
   it("counts what was held, what still waits and for how long, and never shows an account number", async () => {
     const r = await run("payment_fraud_review", {}, (d) => {
       d.payments = [

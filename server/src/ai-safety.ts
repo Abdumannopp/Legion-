@@ -194,12 +194,49 @@ export function redactSecrets(input: string, extra: string[] = []): Redaction {
       return rule.replace ? rule.replace(...(m as string[])) : `[REDACTED:${rule.id}]`;
     });
   }
+  // Payment data never leaves either, in any data mode: card numbers (Luhn-valid) and bank accounts
+  // (IBAN, mod-97-valid). Only check-digit-valid values, so ordinary long numbers (ports, counts,
+  // timestamps) stay visible to the model.
+  text = text.replace(/\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]){11,30}\b/g, (m) => {
+    if (!ibanValid(m.replace(/ /g, ""))) return m;
+    count++;
+    return "[REDACTED:iban]";
+  });
+  text = text.replace(/\b(?:\d[ -]?){12,18}\d\b/g, (m) => {
+    const digits = m.replace(/[ -]/g, "");
+    // Card networks start with 2-6 (Mastercard, Amex/JCB/Diners, Visa, Maestro/Mastercard, Discover/UnionPay);
+    // a run of one repeated digit is padding, not a card.
+    if (digits.length < 13 || digits.length > 19 || !/^[2-6]/.test(digits) || /^(\d)\1+$/.test(digits) || !luhn(digits)) return m;
+    count++;
+    return "[REDACTED:card_number]";
+  });
   return { text, count };
+}
+
+function luhn(digits: string): boolean {
+  let sum = 0;
+  for (let i = 0; i < digits.length; i++) {
+    let d = digits.charCodeAt(digits.length - 1 - i) - 48;
+    if (i % 2 === 1) { d *= 2; if (d > 9) d -= 9; }
+    sum += d;
+  }
+  return sum % 10 === 0;
+}
+
+function ibanValid(iban: string): boolean {
+  if (!/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban)) return false;
+  const moved = iban.slice(4) + iban.slice(0, 4);
+  let rest = 0;
+  for (const ch of moved) {
+    const v = /\d/.test(ch) ? ch : String(ch.charCodeAt(0) - 55);
+    for (const digit of v) rest = (rest * 10 + (digit.charCodeAt(0) - 48)) % 97;
+  }
+  return rest === 1;
 }
 
 // --- untrusted OUTPUT --------------------------------------------------------
 
-export type OutputFlag = "html_removed" | "image_removed" | "link_defanged" | "url_defanged" | "secret_redacted" | "truncated" | "hidden_characters";
+export type OutputFlag = "html_removed" | "image_removed" | "link_defanged" | "url_defanged" | "secret_redacted" | "truncated" | "hidden_characters" | "unverified_reference";
 
 export type OutputResult =
   | { ok: true; text: string; flags: OutputFlag[] }
@@ -315,4 +352,28 @@ export class Pseudonymizer {
   }
 
   get size(): number { return this.back.size; }
+}
+
+/**
+ * F-12: a model can name an address, a CVE or an ATT&CK technique that is not in what it was given —
+ * and an analyst acting on "block 203.0.113.9" or "patch CVE-2024-1234" acts on an invention. Every
+ * such reference that does not appear in the evidence is kept (it may still be useful) but marked
+ * in place, so it is never mistaken for a fact from the alert.
+ */
+export const UNVERIFIED_MARK = " [not in the alert — verify]";
+const REFERENCE = /\b(?:CVE-\d{4}-\d{4,7}|T\d{4}(?:\.\d{3})?|(?:\d{1,3}\.){3}\d{1,3}|(?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{0,4})\b/gi;
+
+export function markUnverifiedReferences(text: string, evidence: string): { text: string; unverified: string[] } {
+  const known = evidence.toLowerCase();
+  const unverified = new Set<string>();
+  const out = text.replace(REFERENCE, (ref: string) => {
+    const isAddress = /^[\d.]+$/.test(ref) || ref.includes(":");
+    if (isAddress && isIP(ref) === 0) return ref;              // a version number or a time, not an address
+    // A sub-technique counts as present when its parent is (T1110.001 when the alert says T1110).
+    const parent = /^T\d{4}\.\d{3}$/i.test(ref) ? ref.slice(0, 5) : null;
+    if (known.includes(ref.toLowerCase()) || (parent && known.includes(parent.toLowerCase()))) return ref;
+    unverified.add(ref);
+    return ref + UNVERIFIED_MARK;
+  });
+  return { text: out, unverified: [...unverified] };
 }

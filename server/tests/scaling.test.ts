@@ -35,6 +35,29 @@ describe("the AI quota is per workspace across all instances", () => {
     expect((await consumeAiQuota(tA, now + 60_000)).ok).toBe(true);
   });
 
+  it("audit P1-7: a daily budget per workspace caps what it can spend even under the per-minute rate", async () => {
+    const savedDaily = config.aiDailyLimit;
+    (config as { aiDailyLimit: number }).aiDailyLimit = 7;
+    try {
+      const day = Date.UTC(2026, 8, 30, 0, 0, 0);
+      let allowed = 0;
+      // 20 minutes, 5 calls each: the per-minute rate allows 100, the day allows 7.
+      for (let m = 0; m < 20; m++) for (let i = 0; i < 5; i++) if ((await consumeAiQuota(tA, day + m * 60_000 + 1000)).ok) allowed++;
+      expect(allowed).toBe(7);
+      const refused = await consumeAiQuota(tA, day + 30 * 60_000);
+      expect(refused).toMatchObject({ ok: false, limit: "day" });
+      expect(refused.retryAfterSeconds).toBeGreaterThan(22 * 3600); // until 00:00 UTC
+      // Another workspace has its own budget; the next UTC day starts afresh.
+      expect((await consumeAiQuota(tB, day + 30 * 60_000)).ok).toBe(true);
+      expect((await consumeAiQuota(tA, day + 86_400_000 + 1000)).ok).toBe(true);
+      // Calls refused by the per-minute rate do not spend the daily budget.
+      const rows = await query("SELECT count FROM usage_counters WHERE tenant_id = $1 AND meter = 'ai.requests.day' ORDER BY window_start", [tA]);
+      expect(rows.rows.map((r) => r.count)).toEqual([7, 1]);
+    } finally {
+      (config as { aiDailyLimit: number }).aiDailyLimit = savedDaily;
+    }
+  });
+
   it("if the shared counter cannot be written, the limit still holds per instance", async () => {
     const orphan = randomUUID(); // no such workspace: the insert fails, the fallback counts
     const results = [];

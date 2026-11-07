@@ -1,0 +1,17 @@
+# Secret scanning (CI job "secrets"). Starts from gitleaks' default rules; the allow-list below is
+# for test fixtures and recorded test output only — values made up for a test or generated per run.
+# Never allow-list a real path to make the job pass: rotate the secret instead.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures and per-run test output"
+paths = [
+  '''(^|/)server/tests/''',
+  '''(^|/)packages/agent-identity/test/''',
+  '''(^|/)ops/tests/''',
+  '''(^|/)integrations/test_[^/]*\.py$''',
+  '''(^|/)e2e-results/''',
+  '''(^|/)pilot-results/''',
+  '''(^|/)package-lock\.json$''',
+]

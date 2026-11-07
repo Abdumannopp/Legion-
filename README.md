@@ -8,7 +8,7 @@ Legion runs on your own server. Your security data stays in your network unless 
 - Links separate events into one attack ("campaign"): brute force, account takeover, ransomware, mailbox takeover, phishing, supply-chain installs, slow intrusions, AI-driven attacks
 - Can block an attacker's IP automatically through Wazuh active response (off by default, with an allowlist, limits and expiry)
 - **Payment check:** your payment software asks Legion before paying, and a payment that looks like fraud is held until a person confirms it by phone
-- Five AI agents (Sentinel, Hunter, Guardian, Oracle, Executor) with read-only skills you can also give to your own AI agents
+- Five AI agents (Sentinel, Hunter, Guardian, Oracle, Vanguard) with read-only skills you can also give to your own AI agents
 - Security controls for AI agents: identity, permissions, prompt-injection detection and an audit trail for every tool call
 - Teams, roles (admin / analyst / viewer), two-factor sign-in (TOTP) and a full audit log
 - Self-hosted or run as a multi-tenant SaaS
@@ -68,6 +68,7 @@ Full guide for customers: [INSTALL.md](INSTALL.md).
 | Try Legion on your own computer | [TRY-LOCALLY.md](TRY-LOCALLY.md) · Docker: [DOCKER-WINDOWS.md](DOCKER-WINDOWS.md) · Windows: [WINDOWS-NODE.md](WINDOWS-NODE.md) |
 | Install and run Legion (full customer guide) | [INSTALL.md](INSTALL.md) |
 | Put Legion online (VPS + domain + HTTPS + Cloudflare) | [DEPLOY-ONLINE.md](DEPLOY-ONLINE.md) |
+| Plans, prices and what each plan includes | [PRICING.md](PRICING.md) |
 | Run it as a paid SaaS (sign-up, trial, Paddle, email) | [SAAS.md](SAAS.md) · [EMAIL-PADDLE.md](EMAIL-PADDLE.md) |
 | Connect Wazuh (events in, automatic blocking out) | [WAZUH.md](WAZUH.md) |
 | Payment check (stop payment fraud) | [PAYMENT-CHECK.md](PAYMENT-CHECK.md) |
@@ -76,8 +77,11 @@ Full guide for customers: [INSTALL.md](INSTALL.md).
 | AI providers and AI safety | [AI-PROVIDERS.md](AI-PROVIDERS.md) |
 | Proxies, origins, cookies and headers | [EDGE-SECURITY.md](EDGE-SECURITY.md) |
 | How organisations are kept apart (multi-tenant) | [TENANT-ISOLATION.md](TENANT-ISOLATION.md) |
+| Data retention, export and deletion | [DATA-RETENTION.md](DATA-RETENTION.md) · [LEGAL-DECISIONS.md](LEGAL-DECISIONS.md) |
 | Backup and disaster recovery | [RECOVERY.md](RECOVERY.md) · [BACKUP.md](BACKUP.md) |
 | Architecture decisions | [ADR.md](ADR.md) |
+| Questions for a lawyer before selling Legion | [LEGAL-QUESTIONS.md](LEGAL-QUESTIONS.md) |
+| Security re-audit: the real status of every finding | [REAUDIT-2026-11.md](REAUDIT-2026-11.md) |
 | CI and the release security gate | [.github/CI.md](.github/CI.md) |
 
 ---

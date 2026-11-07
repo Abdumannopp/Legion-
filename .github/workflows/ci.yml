@@ -35,6 +35,8 @@ jobs:
         # -x follows `source ops/lib/common.sh`, so the shared library is checked too.
         run: shellcheck -x ops/*.sh ops/tests/*.sh
       # Backups are always encrypted with age, so the test needs it too.
+      - name: PostgreSQL 16 client tools (match the server containers)
+        run: bash ops/ci-pg-client16.sh
       - name: Tools for the backup test (PostgreSQL client, age)
         run: |
           if ! command -v pg_dump >/dev/null || ! command -v pg_restore >/dev/null || ! command -v psql >/dev/null || ! command -v age >/dev/null; then
@@ -61,12 +63,302 @@ jobs:
         run: |
           curl -fsS http://localhost:8000/health
           curl -fsS -o /dev/null http://localhost:3000/login
+      - name: The API holds a least-privilege database role, not the superuser (F-01)
+        run: |
+          set -euo pipefail
+          docker compose exec -T backend node -e '
+            const pg = require("pg");
+            (async () => {
+              const c = new pg.Client({ connectionString: process.env.DATABASE_URL }); await c.connect();
+              const r = (await c.query("SELECT current_user u, rolsuper s, rolcreaterole cr, rolcreatedb cd, rolbypassrls b, rolreplication rp FROM pg_roles WHERE rolname = current_user")).rows[0];
+              console.log(JSON.stringify(r));
+              if (r.u !== "legion_app" || r.s || r.cr || r.cd || r.b || r.rp) throw new Error("the API holds a privileged role");
+              for (const sql of ["SELECT pg_read_file(\u0027/etc/passwd\u0027)", "COPY (SELECT 1) TO PROGRAM \u0027true\u0027", "CREATE ROLE ci_probe",
+                                 "TRUNCATE audit_log", "ALTER TABLE soc_audit_events DISABLE TRIGGER soc_audit_events_append_only", "CREATE TABLE ci_probe (x int)"]) {
+                let denied = false; try { await c.query(sql); } catch { denied = true; }
+                if (!denied) throw new Error("allowed: " + sql);
+              }
+              // F-02: the owner/runtime split — the API role owns no table, so it cannot alter or drop one.
+              const owned = (await c.query("SELECT count(*)::int n FROM pg_class c JOIN pg_namespace s ON s.oid = c.relnamespace WHERE s.nspname = \u0027public\u0027 AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)")).rows[0].n;
+              if (owned !== 0) throw new Error("the API role owns " + owned + " relation(s)");
+              await c.end();
+            })().catch((e) => { console.error(e.message); process.exit(1); });'
+          ! docker compose exec -T backend env | grep -q POSTGRES_PASSWORD
+          [ "$(docker compose exec -T postgres id -u)" = 70 ]
+          # Published on loopback only: Docker port publishing bypasses the host firewall.
+          [ "$(docker compose exec -T backend printenv DB_RLS)" = enforce ]   # F-04 on by default
+          [ "$(docker compose port backend 8000)" = "127.0.0.1:8000" ]
+          [ "$(docker compose port frontend 3000)" = "127.0.0.1:3000" ]
+          LAN="$(hostname -I | awk '{print $1}')"
+          ! curl -fsS --max-time 3 "http://${LAN}:8000/health" >/dev/null 2>&1
+          bash install.sh >/dev/null   # re-running is safe: secrets kept, role re-checked
+          curl -fsS http://localhost:8000/health
       - name: Logs on failure
         if: failure()
         run: docker compose logs --tail=200
       - name: Stop and remove the stack
         if: always()
         run: docker compose down -v
+
+  # The hardened pilot stack (docker-compose.pilot.yml), built and run for real, then checked from the
+  # outside: non-root, read-only, no capabilities, loopback-only ports, an unreachable database,
+  # least-privilege role, a crash and restart. Also runs the monitoring rules through promtool.
+  pilot-stack:
+    name: Pilot stack (hardened containers) and monitoring rules
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Alert rules and Prometheus config (promtool), alert unit tests
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends prometheus
+          sudo systemctl stop prometheus 2>/dev/null || true
+          cd monitoring
+          promtool check rules alerts.yml
+          promtool test rules alerts.test.yml
+      - name: Generate a throwaway pilot configuration
+        run: |
+          r() { openssl rand -hex 32; }
+          cat > .env.pilot <<EOF
+          POSTGRES_ADMIN_USER=legion_admin
+          POSTGRES_ADMIN_PASSWORD=$(r)
+          APP_DB_PASSWORD=$(r)
+          POSTGRES_DB=legion
+          JWT_SECRET=$(r)
+          LEGION_ENCRYPTION_KEYS=k1:$(r)
+          SOC_AUDIT_KEY=$(r)
+          PAYMENT_HASH_KEY=$(r)
+          HEALTH_METRICS_TOKEN=$(r)
+          FRONTEND_URL=https://pilot.ci-legion.test
+          CORS_ORIGINS=https://pilot.ci-legion.test
+          TRUSTED_PROXIES=127.0.0.1,172.16.0.0/12
+          REFRESH_COOKIE_PATH=/api/auth
+          NEXT_PUBLIC_API_URL=https://pilot.ci-legion.test/api
+          NEXT_PUBLIC_WS_URL=wss://pilot.ci-legion.test/api
+          SMTP_HOST=smtp.ci-legion.test
+          API_PORT=8000
+          WEB_PORT=3000
+          EOF
+          sed -i 's/^          //' .env.pilot
+          chmod 600 .env.pilot
+      - name: Preflight (the checklist as code) on the pilot compose file
+        run: node ops/pilot-preflight.mjs --env .env.pilot --compose docker-compose.pilot.yml
+      - name: Build and start the pilot stack
+        run: |
+          docker compose --env-file .env.pilot -f docker-compose.pilot.yml build
+          docker compose --env-file .env.pilot -f docker-compose.pilot.yml up -d
+          for i in $(seq 1 60); do
+            s=$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose --env-file .env.pilot -f docker-compose.pilot.yml ps -q backend)" 2>/dev/null || echo none)
+            [ "$s" = healthy ] && break
+            sleep 3
+          done
+          echo "backend health: $s"; [ "$s" = healthy ]
+      - name: Container hardening, checked from outside
+        run: |
+          set -euo pipefail
+          dc() { docker compose --env-file .env.pilot -f docker-compose.pilot.yml "$@"; }
+          for svc in backend frontend redis postgres; do
+            uid=$(dc exec -T $svc id -u); echo "$svc runs as uid $uid"; [ "$uid" != 0 ]
+          done
+          ! dc exec -T backend touch /usr/local/not-writable 2>/dev/null   # read-only root filesystem
+          dc exec -T backend touch /tmp/writable                            # tmpfs is writable
+          for svc in backend frontend redis postgres; do
+            caps=$(dc exec -T $svc sh -c 'grep CapEff /proc/self/status | cut -f2'); echo "$svc CapEff=$caps"; [ "$caps" = 0000000000000000 ]
+            nnp=$(dc exec -T $svc sh -c 'grep NoNewPrivs /proc/self/status | cut -f2'); [ "$nnp" = 1 ]
+          done
+          # Postgres: no process of the database runs as root.
+          if docker top "$(dc ps -q postgres)" -eo pid,user,comm | awk 'NR>1 && $3 ~ /^postgres/ && ($2=="root" || $2=="0") {bad=1} END {exit bad}'; then echo "postgres processes are not root"; else echo "postgres runs a process as root"; exit 1; fi
+          # Published ports: API and dashboard on loopback only; database and redis not published at all.
+          ss -ltnH | tee /tmp/listen.txt
+          grep -E ':(8000|3000)\b' /tmp/listen.txt | grep -vE '127\.0\.0\.1:(8000|3000)\b' && { echo "published beyond loopback"; exit 1; } || true
+          ! grep -E ':(5432|6379)\b' /tmp/listen.txt
+          # The data network has no way out.
+          ! dc exec -T postgres wget -q -T 4 -O- http://example.com 2>/dev/null
+          # The API never receives the database admin password.
+          ! dc exec -T backend env | grep -q POSTGRES_ADMIN_PASSWORD
+      - name: The API really reaches Redis over the internal network
+        run: |
+          set -euo pipefail
+          dc() { docker compose --env-file .env.pilot -f docker-compose.pilot.yml "$@"; }
+          dc exec -T backend node -e '
+            const { createClient } = require("redis");
+            (async () => {
+              const c = createClient({ url: process.env.REDIS_URL, socket: { connectTimeout: 3000 } });
+              c.on("error", () => {}); await c.connect();
+              const r = await c.ping(); console.log("redis ping:", r); await c.quit();
+              if (r !== "PONG") process.exit(1);
+            })().catch((e) => { console.error("redis unreachable:", e.message); process.exit(1); });'
+          ! dc logs backend 2>&1 | grep -q "Redis not reachable"
+      - name: Database role is least-privilege (queried from inside the API container)
+        run: |
+          dc() { docker compose --env-file .env.pilot -f docker-compose.pilot.yml "$@"; }
+          dc exec -T backend node -e '
+            const pg = require("pg");
+            (async () => {
+              const c = new pg.Client({ connectionString: process.env.DATABASE_URL }); await c.connect();
+              const r = (await c.query("SELECT current_user u, rolsuper s, rolcreaterole cr, rolcreatedb cd, rolbypassrls b, rolreplication rp FROM pg_roles WHERE rolname = current_user")).rows[0];
+              console.log(JSON.stringify(r));
+              if (r.u !== "legion_app" || r.s || r.cr || r.cd || r.b || r.rp) throw new Error("role has elevated attributes");
+              for (const sql of ["SELECT pg_read_file(\u0027/etc/passwd\u0027)", "COPY (SELECT 1) TO PROGRAM \u0027true\u0027", "CREATE ROLE ci_probe",
+                                 "TRUNCATE audit_log", "ALTER TABLE soc_audit_events DISABLE TRIGGER soc_audit_events_append_only", "CREATE TABLE ci_probe (x int)"]) {
+                let denied = false; try { await c.query(sql); } catch { denied = true; }
+                if (!denied) throw new Error("allowed: " + sql);
+              }
+              // F-02: the owner/runtime split — the API role owns no table, so it cannot alter or drop one.
+              const owned = (await c.query("SELECT count(*)::int n FROM pg_class c JOIN pg_namespace s ON s.oid = c.relnamespace WHERE s.nspname = \u0027public\u0027 AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)")).rows[0].n;
+              if (owned !== 0) throw new Error("the API role owns " + owned + " relation(s)");
+              const m = (await c.query("SELECT count(*)::int n FROM legion_migrations")).rows[0].n; console.log("migrations applied:", m);
+              await c.end();
+            })().catch((e) => { console.error(e.message); process.exit(1); });'
+      - name: First-run setup, monitoring endpoint, audit chain
+        run: |
+          set -euo pipefail
+          dc() { docker compose --env-file .env.pilot -f docker-compose.pilot.yml "$@"; }
+          TOKEN=$(grep '^HEALTH_METRICS_TOKEN=' .env.pilot | cut -d= -f2)
+          curl -fsS http://127.0.0.1:8000/health
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/metrics); [ "$code" = 401 ]
+          curl -fsS -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8000/metrics | tee /tmp/metrics.txt | grep -E '^legion_(up|soc_actions_live|soc_runtime_worker_running) '
+          grep -q '^legion_soc_actions_live 0$' /tmp/metrics.txt
+          grep -q '^legion_soc_runtime_worker_running 1$' /tmp/metrics.txt
+          SETUP=$(dc exec -T backend cat /var/lib/legion/.legion-setup-token | tr -d '\r\n')
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -d '{"email":"ci@pilot.test","password":"a-long-ci-password-1","tenant_name":"CI"}' http://127.0.0.1:8000/auth/register); [ "$code" = 403 ]
+          curl -fsS -H 'content-type: application/json' -d "{\"email\":\"ci@pilot.test\",\"password\":\"a-long-ci-password-1\",\"tenant_name\":\"CI\",\"setup_token\":\"$SETUP\"}" http://127.0.0.1:8000/auth/register >/dev/null
+          JWT=$(curl -fsS -H 'content-type: application/json' -d '{"username":"ci@pilot.test","password":"a-long-ci-password-1"}' http://127.0.0.1:8000/auth/login | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).access_token))')
+          echo "$JWT" > /tmp/jwt
+          curl -fsS -H "Authorization: Bearer $JWT" http://127.0.0.1:8000/soc/audit/verify
+          curl -fsS -o /dev/null http://127.0.0.1:3000/login
+      - name: Crash and recovery (SIGKILL the API process)
+        run: |
+          set -euo pipefail
+          dc() { docker compose --env-file .env.pilot -f docker-compose.pilot.yml "$@"; }
+          CID=$(dc ps -a -q backend)
+          before=$(docker inspect -f '{{.State.StartedAt}}' "$CID")
+          # A real crash, not an operator action: `docker kill` counts as a manual stop and Docker
+          # (correctly) does not restart that under `unless-stopped`. SIGKILL from the host is what an
+          # OOM kill or a fault looks like to the container runtime.
+          sudo kill -9 "$(docker inspect -f '{{.State.Pid}}' "$CID")"
+          s=none
+          for i in $(seq 1 40); do
+            after=$(docker inspect -f '{{.State.StartedAt}}' "$CID" 2>/dev/null || echo "$before")
+            s=$(docker inspect -f '{{.State.Health.Status}}' "$CID" 2>/dev/null || echo none)
+            [ "$after" != "$before" ] && [ "$s" = healthy ] && break; sleep 3
+          done
+          echo "restarts: $(docker inspect -f '{{.RestartCount}}' "$CID"), health after crash: $s"
+          [ "$after" != "$before" ] && [ "$s" = healthy ]
+          JWT=$(cat /tmp/jwt)
+          curl -fsS -H "Authorization: Bearer $JWT" http://127.0.0.1:8000/soc/audit/verify
+          dc run --rm db-provision    # provisioning is safe to repeat
+      - name: Logs on failure
+        if: failure()
+        run: docker compose --env-file .env.pilot -f docker-compose.pilot.yml logs --tail=150 | sed -E 's#(postgres(ql)?)://[^@ ]*@#\1://***@#g'
+      - name: Stop and remove the stack
+        if: always()
+        run: docker compose --env-file .env.pilot -f docker-compose.pilot.yml down -v
+
+  # K-3: known vulnerabilities in the images we ship and the base images we run. Gate: no CRITICAL
+  # vulnerability that has a fix (an unfixed one cannot be removed by us; it is listed, not hidden).
+  # The scanner is a pinned release verified against a checksum committed here, not a moving tag.
+  image-scan:
+    name: Image vulnerability scan (shipped and base images)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the images the pilot ships, pull the ones it runs
+        run: |
+          set -euo pipefail
+          cp deploy/pilot.env.example .env.pilot
+          docker compose --env-file .env.pilot -f docker-compose.pilot.yml build
+          docker compose --env-file .env.pilot -f docker-compose.pilot.yml pull redis   # every other image is built here
+      - name: Scan (grype, pinned and checksum-verified)
+        run: |
+          set -euo pipefail
+          GRYPE_VERSION=0.86.1
+          GRYPE_SHA256=2d1533dae213a27b741e0cb31b2cd354159a283325475512ae90c1c2412f4098
+          curl -fsSL -o /tmp/grype.tgz "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
+          echo "${GRYPE_SHA256}  /tmp/grype.tgz" | sha256sum -c -
+          tar -xzf /tmp/grype.tgz -C /tmp grype
+          mkdir -p image-scan
+          IMAGES=$(docker compose --env-file .env.pilot -f docker-compose.pilot.yml config --images | sort -u)
+          fail=0; summary=""
+          for img in $IMAGES; do
+            name=$(echo "$img" | tr ':/@' '___')
+            /tmp/grype "docker:$img" -q -o json --file "image-scan/$name.json" >/dev/null || true
+            crit=$(node -e 'const r=require(process.argv[1]);const m=r.matches.filter(x=>x.vulnerability.severity==="Critical"&&x.vulnerability.fix&&x.vulnerability.fix.state==="fixed");console.log(m.map(x=>x.artifact.name+"@"+x.artifact.version+" "+x.vulnerability.id+" fix:"+x.vulnerability.fix.versions.join("/")).join("; "))' "$PWD/image-scan/$name.json")
+            high=$(node -e 'const r=require(process.argv[1]);console.log(r.matches.filter(x=>x.vulnerability.severity==="High"&&x.vulnerability.fix&&x.vulnerability.fix.state==="fixed").length)' "$PWD/image-scan/$name.json")
+            summary="$summary\n$img: fixable critical=[${crit:-none}] fixable high=$high"
+            [ -n "$crit" ] && { echo "::error::$img has a CRITICAL vulnerability with a fix available: $crit"; fail=1; }
+          done
+          echo -e "$summary"
+          # Same gate, by the scanner itself (the check-ci-gate script requires this exact form).
+          [ "$fail" = 0 ] && for img in $IMAGES; do /tmp/grype "docker:$img" --only-fixed --fail-on critical -q -o table >/dev/null; done
+          exit $fail
+      - name: SBOM for every image and for the source tree (syft, pinned and checksum-verified)
+        if: always()
+        run: |
+          set -euo pipefail
+          SYFT_VERSION=1.18.1
+          SYFT_SHA256=066c251652221e4d44fcc4d115ce3df33a91769da38c830a8533199db2f65aab
+          curl -fsSL -o /tmp/syft.tgz "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          echo "${SYFT_SHA256}  /tmp/syft.tgz" | sha256sum -c -
+          tar -xzf /tmp/syft.tgz -C /tmp syft
+          mkdir -p sbom
+          for img in $(docker compose --env-file .env.pilot -f docker-compose.pilot.yml config --images | sort -u); do
+            /tmp/syft "docker:$img" -q -o cyclonedx-json="sbom/$(echo "$img" | tr ':/@' '___').cdx.json"
+          done
+          /tmp/syft dir:. -q --exclude './node_modules' --exclude './**/node_modules' -o cyclonedx-json=sbom/source.cdx.json
+          for f in sbom/*.json; do node -e 'const b=require(process.argv[1]); if (!Array.isArray(b.components) || !b.components.length) { console.error("empty SBOM: " + process.argv[1]); process.exit(1); } console.log(process.argv[1] + ": " + b.components.length + " components")' "$PWD/$f"; done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: image-scan-${{ github.sha }}
+          path: |
+            image-scan/
+            sbom/
+          if-no-files-found: ignore
+
+  # Secret scanning over the whole history (a secret removed in a later commit is still leaked).
+  # gitleaks pinned and checksum-verified; .gitleaks.toml allow-lists test fixtures only.
+  secrets:
+    name: Secret scanning (gitleaks, full history)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan
+        run: |
+          set -euo pipefail
+          GITLEAKS_VERSION=8.21.2
+          GITLEAKS_SHA256=5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba
+          curl -fsSL -o /tmp/gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tgz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          /tmp/gitleaks git . --config .gitleaks.toml --gitleaks-ignore-path .gitleaksignore --redact --no-banner --exit-code 1 --report-format json --report-path gitleaks.json || { node -e 'for (const f of require("./gitleaks.json")) console.log(`${f.RuleID}  ${f.File}:${f.StartLine}  commit ${f.Commit.slice(0,8)}`)'; exit 1; }
+          echo "no secrets found"
+
+  # Static analysis of the application code. Gate: findings of severity ERROR. Semgrep is pinned.
+  sast:
+    name: Static analysis (Semgrep)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Scan
+        run: |
+          set -euo pipefail
+          # semgrep 1.100 imports pkg_resources, which Python 3.12 no longer ships: setuptools provides it (pinned, <81 still has it).
+          python -m pip install --quiet "setuptools==75.8.0" "semgrep==1.100.0"
+          semgrep scan --metrics=off --config p/typescript --config p/nodejs --config p/expressjs --config p/jwt \
+            --exclude node_modules --exclude dist --exclude .next --exclude 'server/tests' --exclude 'packages/agent-identity/test' --exclude 'ops/tests' \
+            --severity ERROR --error --json --output semgrep.json server/src packages/agent-identity/src frontend/app frontend/components frontend/lib ops/*.mjs \
+            || { node -e 'for (const r of require("./semgrep.json").results) console.log(`${r.check_id}  ${r.path}:${r.start.line}  ${r.extra.message.split("\n")[0].slice(0,160)}`)'; exit 1; }
+          node -e 'const r=require("./semgrep.json"); console.log("semgrep: " + r.results.length + " ERROR findings")'
 
   dependencies:
     name: Known vulnerabilities in the lockfile
@@ -119,7 +411,9 @@ jobs:
 
   app:
     name: Typecheck, tests and build
-    runs-on: ubuntu-latest
+    # Pinned: the browser tests install Playwright's own dependencies, and the
+    # pinned Playwright does not support the newer image `ubuntu-latest` became.
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16-alpine
@@ -160,6 +454,8 @@ jobs:
       # and use age-encrypted backups. Without these tools those scenarios used
       # to skip silently; LEGION_REQUIRE_FAILURE_INJECTION turns a missing
       # tool into a failure instead.
+      - name: PostgreSQL 16 client tools (match the server containers)
+        run: bash ops/ci-pg-client16.sh
       - name: Tools for the failure-injection tests
         run: sudo apt-get update && sudo apt-get install -y redis-server age
       - run: npm test
@@ -174,6 +470,8 @@ jobs:
       - name: End-to-end (provision-cli, API as app role, Wazuh integration, agents)
         env:
           E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+          # F-04: the API runs with row-level security enforced; a code path without a workspace context fails the step.
+          DB_RLS: enforce
         run: node ops/tests/e2e-wazuh.mjs
       # The main user journeys in a real browser against the built API and
       # dashboard: sign up, workspace, connect Wazuh, first alert, incident,
@@ -184,6 +482,8 @@ jobs:
       - name: User journeys (browser, end to end)
         env:
           E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+          # F-04: the API runs with row-level security enforced; a code path without a workspace context fails the step.
+          DB_RLS: enforce
         run: node ops/tests/e2e-journeys.mjs
       # Turnstile (CAPTCHA) on the sign-in forms: the dashboard built with a
       # site key, the API with a secret key; Cloudflare itself is stood in for.
@@ -191,6 +491,8 @@ jobs:
       - name: Turnstile on sign-in (browser, end to end)
         env:
           E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+          # F-04: the API runs with row-level security enforced; a code path without a workspace context fails the step.
+          DB_RLS: enforce
         run: node ops/tests/e2e-turnstile.mjs
       # Black-box attack on the built API in production mode: headers, CORS,
       # CSRF, cookies, forged/replayed webhooks, IDOR between two real orgs,
@@ -199,13 +501,26 @@ jobs:
       - name: Production-mode security probe (black box)
         env:
           E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+          # F-04: the API runs with row-level security enforced; a code path without a workspace context fails the step.
+          DB_RLS: enforce
         run: node ops/tests/production-probe.mjs
+      # Protection modes (manual / hybrid / automatic): Legion acts on its own only after an administrator
+      # allowed it, only as far as they allowed, never on a private or allowlisted address, stops at the
+      # emergency stop, and tells the administrators. Real API, separate database roles, RLS enforced.
+      # See ops/tests/e2e-protection.mjs and PROTECTION.md.
+      - name: Protection modes (opt-in automatic response, end to end)
+        env:
+          E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+          DB_RLS: enforce
+        run: node ops/tests/e2e-protection.mjs
       # Password hashing must not stall the instance, and the per-account
       # sign-in limit must hold across instances under concurrency
       # (PRODUCTION-VALIDATION-2026-10-01.md, RED-1). See ops/tests/auth-load-probe.mjs.
       - name: Sign-in under load (event loop, limit across instances)
         env:
           E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+          # F-04: the API runs with row-level security enforced; a code path without a workspace context fails the step.
+          DB_RLS: enforce
         run: node ops/tests/auth-load-probe.mjs
       # Denial of service, measured: a distributed flood must not cost legitimate
       # users their reads or sensor events, silent/slow connections are reaped,
@@ -217,6 +532,8 @@ jobs:
       - name: Denial-of-service resilience (API under flood, real nginx in front)
         env:
           E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+          # F-04: the API runs with row-level security enforced; a code path without a workspace context fails the step.
+          DB_RLS: enforce
           DOS_SCALE: "0.5"
         run: node ops/tests/ddos-resilience.mjs
 
@@ -292,7 +609,7 @@ jobs:
   release-gate:
     name: Release gate
     runs-on: ubuntu-latest
-    needs: [deploy-scripts, dependencies, agent-identity, app, security-assessment]
+    needs: [deploy-scripts, dependencies, agent-identity, app, security-assessment, pilot-stack, image-scan, docker, secrets, sast]
     if: always()
     steps:
       - uses: actions/checkout@v4

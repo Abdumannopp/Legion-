@@ -124,9 +124,38 @@ CREATE INDEX IF NOT EXISTS principal_audit_principal
 CREATE INDEX IF NOT EXISTS principal_audit_resource
   ON principal_audit_log (tenant_id, resource_type, resource_id, seq DESC);
 
+-- F-02: may this transaction erase rows of an append-only table? Either
+--  (a) one of the bounded erasure functions (Legion's 0008 migration: retention with a
+--      minimum age, workspace deletion) opened an erasure context for this transaction —
+--      only they can, the API's role cannot write legion_erasure_context; or
+--  (b) the legacy switch legion.audit_erasure is on AND the session's own login role
+--      owns the table. session_user, not current_user: a cascade runs as the table's
+--      owner, so current_user would let a non-owner erase through a parent row. With the
+--      owner/runtime split the API's login role owns nothing, so (b) is closed to it;
+--      it remains for single-role installs and for operators connected as the owner.
+-- SECURITY DEFINER only to read the context table; it changes nothing.
+CREATE OR REPLACE FUNCTION legion_erasure_allowed(rel oid) RETURNS boolean
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+DECLARE opened boolean := false;
+BEGIN
+  IF to_regclass('public.legion_erasure_context') IS NOT NULL THEN
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.legion_erasure_context WHERE txid = txid_current())' INTO opened;
+    IF opened THEN RETURN true; END IF;
+  END IF;
+  RETURN coalesce(current_setting('legion.audit_erasure', true), '') = 'on'
+     AND pg_has_role(session_user, (SELECT relowner FROM pg_class WHERE oid = rel), 'USAGE');
+END $$;
+
 CREATE OR REPLACE FUNCTION principal_audit_log_append_only() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
+  -- A whole workspace may be erased (offboarding, a deletion request), and the
+  -- retention job removes the oldest rows of a chain (with an anchor). Only
+  -- DELETE, only when legion_erasure_allowed() says so. Rewriting a row
+  -- (UPDATE) and TRUNCATE are never allowed.
+  IF TG_OP = 'DELETE' AND legion_erasure_allowed(TG_RELID) THEN
+    RETURN OLD;
+  END IF;
   RAISE EXCEPTION 'principal_audit_log is append-only (% refused)', TG_OP;
 END $$;
 DROP TRIGGER IF EXISTS principal_audit_log_no_update ON principal_audit_log;
@@ -598,6 +627,22 @@ CREATE INDEX IF NOT EXISTS agent_action_approvals_open
 CREATE INDEX IF NOT EXISTS agent_action_approvals_recent
   ON agent_action_approvals (tenant_id, requested_at DESC);
 ` + WIDEN_DECISIONS_SQL + `
+
+-- ---- Retention of the hash-chained logs -------------------------------------------
+-- Old rows at the START of a chain are deleted by the retention job (the logs
+-- are append-only; deletion is allowed only by legion_erasure_allowed()). The
+-- first surviving row still links to the last deleted one, so the chain is
+-- verified from that row's hash instead of from GENESIS. One row per chain.
+-- tenant_id holds the chain key (a workspace id), so deleting a workspace removes it.
+CREATE TABLE IF NOT EXISTS chain_prune_anchors (
+  table_name         text        NOT NULL,
+  tenant_id          text        NOT NULL,
+  anchor_hash        text        NOT NULL CHECK (length(anchor_hash) = 64),
+  pruned_through_seq bigint      NOT NULL,
+  pruned_rows        bigint      NOT NULL DEFAULT 0,
+  pruned_at          timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (table_name, tenant_id)
+);
 `;
 
 /** Constant advisory-lock key, so concurrently starting instances migrate one at a time. */

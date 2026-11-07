@@ -16,3 +16,20 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # Base images are pinned by digest (R-2); this keeps the pins moving with security fixes.
+  - package-ecosystem: docker
+    directory: /server
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /frontend
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /deploy/postgres
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly

@@ -6,9 +6,6 @@ import { defineMessages } from "../core";
  * it faithful to the product; 
  */
 
-/** Billing periods Paddle reports for a recurring price. */
-export type PriceInterval = "day" | "week" | "month" | "year";
-
 
 export const site = defineMessages({
   en: {
@@ -81,33 +78,12 @@ export const site = defineMessages({
         },
       },
       pricingEyebrow: "Pricing",
-      pricingTitle: "One plan, everything included",
+      pricingTitle: "Plans for every size of team",
       trust: {
         access: "Two-factor sign-in and role-based access",
         audited: "Every administrative action audited",
         neverSold: "Your alert data is never sold",
       },
     },
-    pricingCard: {
-      /** After the price: "per month", "per 3 months". */
-      per: (count: number, unit: PriceInterval) => (count === 1 ? `per ${unit}` : `per ${count} ${unit}s`),
-      /** A period Paddle described in a way we don't recognise. */
-      perOther: (period: string) => `per ${period}`,
-      priceAtCheckout: "price shown at checkout",
-      trialTerms: (days: number) => `${days}-day free trial · no card required · cancel any time`,
-      startTrial: "Start free trial",
-      taxNote: "Prices include or add tax depending on your country. Billed through Paddle.com.",
-    },
-    /** What the one plan includes — also listed on the in-app Billing page. */
-    planFeatures: [
-      "Real-time alerts from your security sensors (Wazuh today)",
-      "Real-time alert feed and incident workflow",
-      "AI explanations and investigation copilot",
-      "Asset inventory built from your sensors",
-      "Team roles, two-factor sign-in and full audit log",
-      "AI agents with their own identities, behind a policy firewall",
-      "Your data isolated in its own workspace",
-      "Email alerts for high-severity events",
-    ],
   },
 });

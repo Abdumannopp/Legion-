@@ -12,9 +12,6 @@ export const IS_SAAS = process.env.NEXT_PUBLIC_DEPLOYMENT_MODE === "saas";
  *  Paddle's review requires it in the Terms. Conspicuous when unset. */
 export const SELLER = process.env.NEXT_PUBLIC_OPERATOR_NAME || "[your legal name]";
 
-/** Shown until Paddle's localized price has loaded (or if it cannot load). */
-export const PRICE_FALLBACK = process.env.NEXT_PUBLIC_PRICE_LABEL || "";
-
 export const TRIAL_DAYS = Number(process.env.NEXT_PUBLIC_TRIAL_DAYS || 14);
 
 /** Country (or region) where the server that stores customer data runs —

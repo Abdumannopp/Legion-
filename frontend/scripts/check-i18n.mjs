@@ -29,7 +29,9 @@ const ts = require("typescript");
 const root = join(fileURLToPath(import.meta.url), "..", "..");
 const DIRS = ["app", "components", "lib"];
 // The translations themselves, and test code (never shown to a user).
-const SKIP = /[\\/]lib[\\/]i18n[\\/]|\.(?:test|harness)\.tsx?$/;
+// lib/plans.ts is the price list (product and plan names), an exact copy of
+// server/src/plans.ts that a server test keeps identical.
+const SKIP = /[\\/]lib[\\/]i18n[\\/]|[\\/]lib[\\/]plans\.ts$|\.(?:test|harness)\.tsx?$/;
 const TEXT_ATTRS = new Set(["placeholder", "title", "aria-label", "alt", "label"]);
 // Object properties that hold display text even when it is a single word
 // ({ label: "Critical" }).

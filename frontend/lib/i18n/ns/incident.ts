@@ -24,6 +24,6 @@ export const incident = defineMessages({
     suggestedIntro:
       "Rule-based suggestions from the alert pattern — not AI-generated, so you can trust exactly why each one is here.",
     manualNote:
-      "These are manual checklist items for now — automated execution (the Executor agent) isn't wired up yet.",
+      "These are manual checklist items for now — automated execution (the Vanguard agent) isn't wired up yet.",
   },
 });

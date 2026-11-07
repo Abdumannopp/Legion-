@@ -272,6 +272,35 @@ describe("user delegation", () => {
     expect(tooLong.body.error.code).toBe("invalid_expiry");
   });
 
+  it("assessment EP-4: write/execute (tier 2) authority can be delegated by an administrator only", async () => {
+    const { agent, token } = await agentWithToken(t, "alice", { permissions: ["alerts:read", "alerts:update_status"] });
+    const soon = new Date(Date.now() + 3_600_000).toISOString();
+    const byAnalyst = await request(t.app).post("/firewall/delegations").set(as("anna")).send({ agentId: agent.id, permissions: ["alerts:update_status"], expiresAt: soon });
+    expect(byAnalyst.status).toBe(403);
+    expect(byAnalyst.body.error.code).toBe("admin_required");
+    // The analyst can still delegate reading.
+    expect((await request(t.app).post("/firewall/delegations").set(as("anna")).send({ agentId: agent.id, permissions: ["alerts:read"], expiresAt: soon })).status).toBe(201);
+
+    // An administrator can, and the agent may act under it…
+    const byAdmin = await request(t.app).post("/firewall/delegations").set(as("alice")).send({ agentId: agent.id, permissions: ["alerts:update_status"], expiresAt: soon });
+    expect(byAdmin.status).toBe(201);
+    const ok = await request(t.app).post("/agent/v1/alerts/A/status").set(bearer(token)).set("x-legion-on-behalf-of", "alice");
+    expect(ok.status).toBe(200);
+
+    // …until that administrator is no longer one: an existing tier-2 grant from a
+    // non-admin is refused at use, not only at creation.
+    const alice = t.host.users.get("alice")!;
+    const role = alice.role;
+    alice.role = "analyst";
+    try {
+      const after = await request(t.app).post("/agent/v1/alerts/A/status").set(bearer(token)).set("x-legion-on-behalf-of", "alice");
+      expect(after.status).toBe(403);
+      expect(after.body.error.rules).toContain("delegation.exceeds_user");
+    } finally {
+      alice.role = role;
+    }
+  });
+
   it("a delegated person who is later deactivated stops the delegated actions", async () => {
     const { agent, token } = await agentWithToken(t, "alice");
     await request(t.app).post("/firewall/delegations").set(as("anna"))

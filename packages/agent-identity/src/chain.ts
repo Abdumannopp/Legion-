@@ -41,3 +41,13 @@ export async function lockChain(client: PoolClient, table: string, chainKey: str
   );
   return last.rows[0]?.hash ?? GENESIS;
 }
+
+/**
+ * The hash a chain's verification starts from: GENESIS, or, after the retention
+ * job removed the oldest rows, the hash of the last removed row (the first
+ * surviving row links to it).
+ */
+export async function chainStart(db: { query: (text: string, values?: unknown[]) => Promise<{ rows: Array<{ anchor_hash: string }> }> }, table: string, chainKey: string): Promise<string> {
+  const r = await db.query("SELECT anchor_hash FROM chain_prune_anchors WHERE table_name = $1 AND tenant_id = $2", [table, chainKey]);
+  return r.rows[0]?.anchor_hash ?? GENESIS;
+}

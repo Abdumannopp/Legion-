@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { config, loopbackBind } from "./config.js";
-import { query, queryOne, transaction } from "./db/pool.js";
+import { query, queryOne, transaction, withTenant } from "./db/pool.js";
 import { trialEnd } from "./store.js";
 
 /**
@@ -34,7 +34,8 @@ export async function seedDemoIfEmpty(): Promise<void> {
   const tenantId = randomUUID();
   const passwordHash = await bcrypt.hash("legion123", 12);
 
-  const seeded = await transaction(async (client) => {
+  // F-04: everything below is written into the demo workspace (row-level security, db/rls.ts).
+  const seeded = await withTenant(tenantId, () => transaction(async (client) => {
     // Instances that boot together all see an empty database and all try to
     // seed it; without this the losers crash on the unique email constraint
     // and the pod restart-loops on every fresh deploy.
@@ -89,14 +90,25 @@ export async function seedDemoIfEmpty(): Promise<void> {
       );
     }
     return true;
-  });
+  }));
 
   if (seeded) console.info("Legion: demo workspace seeded (admin@legion.demo / legion123).");
 }
 
 /** Test helper: empties every table while keeping the schema. */
 export async function truncateAll(): Promise<void> {
-  await query(
-    "TRUNCATE notification_outbox, audit_log, subscriptions, alerts, assets, users, tenants, setup_token RESTART IDENTITY CASCADE"
-  );
+  // TRUNCATE takes an exclusive lock on every table. A transaction the previous test left finishing in the
+  // background can hold one of them while waiting for another, and PostgreSQL then aborts one side as the
+  // deadlock victim (40P01). That is its documented signal to try again; the other side finishes in
+  // milliseconds, so a short retry always succeeds. Any other error is raised at once.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await query("TRUNCATE notification_outbox, audit_log, subscriptions, alerts, assets, users, tenants, setup_token RESTART IDENTITY CASCADE");
+      return;
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (attempt >= 5 || (code !== "40P01" && code !== "55P03")) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
+    }
+  }
 }

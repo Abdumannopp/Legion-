@@ -119,7 +119,9 @@ describe("the catalogue", () => {
     const res = await request(app).get("/integrations/catalogue").set(...bearer(analystA));
     const byKind = Object.fromEntries(res.body.integrations.map((i: { kind: string }) => [i.kind, i]));
     expect(byKind.wazuh).toMatchObject({ status: "available", inbound: "push", plane: "data" });
-    for (const k of ["aws", "azure", "gcp", "github", "m365", "slack"]) expect(byKind[k]).toMatchObject({ status: "planned" });
+    for (const k of ["aws", "azure", "gcp", "github"]) expect(byKind[k]).toMatchObject({ status: "planned" });
+    // Built since: Slack (notify) and Jira (ticket), see tests/integrations-outbound.test.ts.
+    for (const k of ["slack", "jira"]) expect(byKind[k]).toMatchObject({ status: "available", plane: "tool" });
     expect(byKind.mcp).toMatchObject({ plane: "tool", status: "available" });
     expect(byKind.a2a).toMatchObject({ plane: "tool" });
   });

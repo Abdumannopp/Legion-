@@ -180,13 +180,34 @@ export function createGuards(audit: AuditLog, log: (msg: string, err?: unknown) 
     };
   }
 
-  /** Labels a route's caller as a named external system (e.g. the Wazuh webhook) for the audit trail. */
-  function externalSystem(name: string, tenantId?: (req: Request) => string | null): RequestHandler {
-    return (req, _res, next) => {
-      if (!req.principal || req.principal.type === "external_system") {
-        req.principal = { type: "external_system", id: name, tenantId: tenantId?.(req) ?? null, displayName: name };
+  /**
+   * Labels a route's caller as a named external system (e.g. the Wazuh webhook)
+   * for the audit trail — but only after `verify` proved the request came from
+   * it (a signature, a shared secret). A label without proof would let anyone
+   * who can reach the route make the audit trail say "this came from Wazuh"
+   * (assessment IMP-5), so `verify` is required: without it every request is
+   * refused. Verification failures answer 401 and are never labelled.
+   */
+  function externalSystem(
+    name: string,
+    opts: { verify: (req: Request) => boolean | Promise<boolean>; tenantId?: (req: Request) => string | null },
+  ): RequestHandler {
+    return (req, res, next) => {
+      const verify = opts?.verify;
+      if (typeof verify !== "function") {
+        console.error(`agent-identity: externalSystem("${name}") has no verify function; refusing every request.`);
+        return sendError(res, 401, "unverified_source", "This endpoint requires a verified sender.");
       }
-      next();
+      Promise.resolve()
+        .then(() => verify(req))
+        .then((ok) => {
+          if (ok !== true) return sendError(res, 401, "unverified_source", "The sender could not be verified.");
+          if (!req.principal || req.principal.type === "external_system") {
+            req.principal = { type: "external_system", id: name, tenantId: opts.tenantId?.(req) ?? null, displayName: name };
+          }
+          next();
+        })
+        .catch(() => sendError(res, 401, "unverified_source", "The sender could not be verified."));
     };
   }
 

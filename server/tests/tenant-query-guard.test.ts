@@ -12,15 +12,20 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const SRC = join(__dirname, "..", "src");
+// Recursive: code in src/policy/, src/integrations/, src/scripts/… is scanned too
+// (a query in a subdirectory used to be invisible to this guard).
 
 /** Tables that hold (or lead to) one organisation's data. */
 const TENANT_TABLES = [
   "alerts", "assets", "audit_log", "subscriptions", "webhook_credentials", "webhook_nonces",
   "notification_outbox", "users", "refresh_tokens", "mfa_recovery_codes", "mfa_used_counters", "tenants",
+  "attack_campaigns", "integration_connections", "ip_blocks", "payment_beneficiaries", "payment_checks", "tenant_deletions", "usage_counters", "workspace_memberships",
+  // Task 10 SOC core
+  "policy_documents", "policy_active", "policy_decisions", "approval_requests", "approval_decisions", "action_requests", "action_events", "soc_controls", "workflow_runs", "soc_jobs", "soc_memory", "learning_signals", "soc_audit_events",
 ];
 
 /** Tables whose rows are ALWAYS reached tenant-first by these functions; must never be read unscoped. */
-const MUST_SCOPE = new Set(["alerts", "assets", "audit_log"]);
+const MUST_SCOPE = new Set(["alerts", "assets", "audit_log", "policy_documents", "policy_active", "policy_decisions", "approval_requests", "approval_decisions", "action_requests", "action_events", "soc_controls", "workflow_runs", "learning_signals", "soc_audit_events"]);
 
 interface Exception { file: string; table: string; match?: RegExp; reason: string }
 
@@ -30,6 +35,9 @@ const REVIEWED: Exception[] = [
   { file: "*", table: "tenants", match: /^SELECT (1|count\(\*\)(::bigint)?) (AS count )?FROM tenants( LIMIT 1)?$/i, reason: "existence/count probe for first-run setup; returns no tenant data" },
   { file: "*", table: "tenants", match: /^INSERT INTO tenants/i, reason: "creates a tenant (signup, seed)" },
   { file: "blocklist.ts", table: "tenants", match: /^UPDATE tenants SET .* WHERE id = \$1/i, reason: "automatic-response settings, keyed by the tenant id; the route passes req.user.tenant_id" },
+  { file: "payments.ts", table: "tenants", match: /^UPDATE tenants SET payment_ack_at = now\(\), payment_ack_by = \$2, payment_ack_version = \$3 WHERE id = \$1$/i,
+    reason: "acknowledgePaymentNotice: primary key = $1 (one row); only caller is POST /security/payments/consent (requireRole admin), "
+      + "which passes req.user.tenant_id — taken from the verified membership row (authenticate → memberView), never from the request body" },
   { file: "store.ts", table: "tenants", match: /^UPDATE tenants SET .* WHERE id = \$1/i, reason: "keyed by the tenant id; callers pass req.user.tenant_id" },
   { file: "store.ts", table: "tenants", match: /WHERE notification_email_token_hash = \$1/i, reason: "confirming a notification address by the hash of a 256-bit one-time token; the row's own tenant is returned and audited" },
   // --- per-user state: the user id comes from a verified session / challenge token, and the user row carries its tenant
@@ -43,6 +51,13 @@ const REVIEWED: Exception[] = [
   { file: "store.ts", table: "subscriptions", match: /WHERE paddle_subscription_id = \$1/i, reason: "Paddle webhook (signature-verified) resolves the subscription's own tenant from the row" },
   // --- workers: rows were claimed first; the row carries tenant_id and the work uses it
   { file: "outbox.ts", table: "notification_outbox", reason: "worker bookkeeping by row id after a claim; delivery uses row.tenant_id/recipient fixed at enqueue" },
+  { file: "plan-limits.ts", table: "tenants", match: /^SELECT id FROM tenants/i, reason: "retention job: visits every workspace and prunes each by its OWN plan" },
+  { file: "protection.ts", table: "tenants", match: /^UPDATE tenants SET protection_mode = \$2, protection_auto_actions = \$3,/i,
+    reason: "updateProtection(tenantId): WHERE id = $1; the only caller is PUT /soc/protection (policy:manage, a recent password confirmation), which passes req.user.tenant_id" },
+  { file: "metrics.ts", table: "tenants", match: /^SELECT count\(\*\) FILTER \(WHERE protection_mode <> 'manual' AND protection_ack_at IS NOT NULL\)::int AS n FROM tenants$/i,
+    reason: "/metrics: how many workspaces opted in to automatic protection; a count, no workspace data" },
+  { file: "retention.ts", table: "tenants", match: /^SELECT id FROM tenants/i, reason: "retention job: visits every workspace not on legal hold and prunes each in its own transaction" },
+  { file: "tenant-deletion.ts", table: "tenants", match: /^UPDATE tenants SET deletion_notice_at/i, reason: "opt-in auto-delete job: clears or sets the deletion notice of workspaces it has just selected itself (by id), after the e-mail was sent" },
   { file: "outbox.ts", table: "tenants", reason: "enqueue reads the ALERT's own tenant's notification address" },
   { file: "webhook-credentials.ts", table: "webhook_nonces", reason: "replay nonces keyed by the credential's key id (itself tenant-bound)" },
   { file: "webhook-credentials.ts", table: "webhook_credentials", match: /WHERE key_id = \$1 (AND \(last_used_at|RETURNING)/i,
@@ -59,13 +74,35 @@ const REVIEWED: Exception[] = [
   { file: "seed.ts", table: "tenants", reason: "demo seeding" },
   { file: "setup-token.ts", table: "tenants", reason: "first-run probe" },
   { file: "index.ts", table: "tenants", match: /^SELECT 1 FROM tenants LIMIT 1$/i, reason: "first-run probe" },
+  // --- Task 10 Background Runtime: the worker serves every workspace; each claimed row carries its tenant_id
+  { file: "runtime/queue.ts", table: "soc_jobs", match: /^UPDATE soc_jobs SET status = 'dead', lease_owner = NULL, lease_until = NULL, finished_at = now\(\), updated_at = now\(\), last_error = 'worker stopped during the final attempt; outcome unknown' WHERE status = 'running' AND lease_until < now\(\) AND attempts >= max_attempts$/i,
+    reason: "deadLetterAbandoned(): marks jobs whose worker died on their last attempt as dead, in every workspace; returns nothing" },
+  { file: "actions/engine.ts", table: "tenants", match: /^SELECT id FROM tenants ORDER BY id$/i,
+    reason: "reconcileApprovals(): visits every workspace once a minute; every query after it is scoped to that workspace (K-8)" },
+  { file: "audit/events.ts", table: "tenants", match: /^SELECT id FROM tenants ORDER BY id$/i,
+    reason: "auditCheckpoints(): visits every workspace to log its chain head off-host (K-6); every query after it is scoped" },
+  { file: "memory/store.ts", table: "soc_memory", match: /^DELETE FROM soc_memory WHERE expires_at <= now\(\)$/i,
+    reason: "pruneExpiredMemory(): retention sweep deleting expired entries in every workspace; returns a count only" },
+  // --- found when the scan became recursive / the table list complete (Task 10, B-01)
+  { file: "ai-policy.ts", table: "usage_counters", match: /^DELETE FROM usage_counters WHERE meter IN \('ai\.requests', 'ai\.requests\.day'\)$/i,
+    reason: "resetAiQuota(): test/maintenance reset of the AI rate-limit meters; counters only, no tenant data is read" },
+  { file: "index.ts", table: "usage_counters", match: /^DELETE FROM usage_counters WHERE window_start < now\(\) - interval '1 day'$/i,
+    reason: "periodic sweep of expired rate-limit windows across all workspaces; deletes, returns nothing" },
+  { file: "workspaces.ts", table: "workspace_memberships", match: /WHERE user_id = \$1 AND status = 'active'$/i,
+    reason: "countForUser(userId): the signed-in person's own memberships (workspace-creation cap); returns a count only" },
+  { file: "integrations/connections.ts", table: "integration_connections", match: /WHERE id = \$1 AND lease_owner = \$2$/i,
+    reason: "poll worker bookkeeping on a row it claimed itself (fenced by lease_owner); the row carries its own tenant_id" },
+  { file: "scripts/plan.ts", table: "tenants", match: /^UPDATE tenants SET plan_override = (\$2|NULL) WHERE id = \$1$/i,
+    reason: "operator CLI (shell access to the server): sets one workspace's plan by its id, audited" },
+  { file: "scripts/tenant-data.ts", table: "tenants", match: /^UPDATE tenants SET legal_hold = \$2 WHERE id = \$1$/i,
+    reason: "operator CLI: legal hold of one workspace by its id, audited" },
 ];
 
 interface Stmt { file: string; line: number; sql: string; tables: string[] }
 
 function statements(): Stmt[] {
   const out: Stmt[] = [];
-  for (const file of readdirSync(SRC).filter((f) => f.endsWith(".ts"))) {
+  for (const file of (readdirSync(SRC, { recursive: true }) as string[]).filter((f) => f.endsWith(".ts"))) {
     const src = readFileSync(join(SRC, file), "utf8");
     for (const m of src.matchAll(/(["'`])(\s*(?:SELECT|UPDATE|INSERT|DELETE|WITH)\b[\s\S]*?)\1/g)) {
       const sql = m[2]!.replace(/\s+/g, " ").trim();

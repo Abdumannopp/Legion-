@@ -424,6 +424,9 @@ ${c.green("Legion is starting.")}
 `);
 
 process.env.DATABASE_URL = DATABASE_URL;
+// A throwaway cluster on 127.0.0.1 that this script created and owns: its only role is the bootstrap
+// superuser. The API refuses that everywhere else (F-01); here it is said out loud, not silently allowed.
+process.env.DB_ALLOW_PRIVILEGED_ROLE = "true";
 process.env.JWT_SECRET = jwtSecret;
 process.env.PORT = String(apiPort);
 process.env.FRONTEND_URL = webUrl;
