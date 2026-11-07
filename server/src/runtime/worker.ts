@@ -21,7 +21,7 @@ type Outcome = { ok: true } | { defer: number };
 type Handler = (job: Job) => Promise<Outcome>;
 
 const uuid = z.string().regex(/^[0-9a-f-]{36}$/i);
-const PAUSE_RECHECK_SECONDS = 60;
+const PAUSE_RECHECK_SECONDS = 10; // lifting the emergency stop resumes held work within seconds
 const RUNNING_RECHECK_SECONDS = 15;
 
 const HANDLERS: Record<JobKind, Handler> = {

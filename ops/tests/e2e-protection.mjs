@@ -90,7 +90,9 @@ async function main() {
   await attack("185.220.101.204"); await settle(4000);
   check("nothing is blocked while it is on", !(await blocked()).includes("185.220.101.204"));
   await c.call("/actions/controls", { method: "POST", body: { paused: false } });
-  check("lifting it lets the held action through", Boolean(await until(async () => (await blocked()).includes("185.220.101.204"), 30_000, 500)));
+  const resumed = await until(async () => (await blocked()).includes("185.220.101.204"), 30_000, 500);
+  const failedNow = (await c.call("/actions?status=failed")).body?.actions ?? [];
+  check("lifting it lets the held action through", Boolean(resumed), JSON.stringify(failedNow.map((a) => [a.action_id, a.target, a.error])));
   const off = await c.call("/soc/protection", { method: "PUT", body: { mode: "manual" } });
   check("switching back to manual is accepted", off.status === 200 && off.body.protection.effective_mode === "manual");
   await attack("185.220.101.205"); await settle(4000);

@@ -28,7 +28,7 @@ export const protection = defineMessages({
       accept: "I have read this notice and I allow Legion to act on its own in my workspace, as chosen above.",
       required: "Accept the notice to turn this on.",
     },
-    save: "Save",
+    save: "Save protection mode",
     saved: "Saved",
     adminOnly: "Only administrators can change this.",
     planLocked: "Automatic protection is not part of your plan. Upgrade to let Legion act on its own.",
