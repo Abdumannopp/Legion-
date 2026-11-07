@@ -97,7 +97,18 @@ export async function seedDemoIfEmpty(): Promise<void> {
 
 /** Test helper: empties every table while keeping the schema. */
 export async function truncateAll(): Promise<void> {
-  await query(
-    "TRUNCATE notification_outbox, audit_log, subscriptions, alerts, assets, users, tenants, setup_token RESTART IDENTITY CASCADE"
-  );
+  // TRUNCATE takes an exclusive lock on every table. A transaction the previous test left finishing in the
+  // background can hold one of them while waiting for another, and PostgreSQL then aborts one side as the
+  // deadlock victim (40P01). That is its documented signal to try again; the other side finishes in
+  // milliseconds, so a short retry always succeeds. Any other error is raised at once.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await query("TRUNCATE notification_outbox, audit_log, subscriptions, alerts, assets, users, tenants, setup_token RESTART IDENTITY CASCADE");
+      return;
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (attempt >= 5 || (code !== "40P01" && code !== "55P03")) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 100 * attempt));
+    }
+  }
 }
