@@ -12,8 +12,11 @@
  *    server code, never by the request body or a model.
  *  - Approval is consumed atomically with the transition that uses it.
  *  - A queued action runs once: the move to `running` is a compare-and-set.
- *  - v0 only simulates. `live` is refused here, by the policy engine and by
- *    the database (CHECK), and there is no live executor to call.
+ *  - `live` (really doing it) exists only for the actions with an executor (actions/live.ts) and only in a
+ *    workspace whose administrator opted in (protection.ts). The policy engine decides each one; the
+ *    database refuses an AI-produced or critical live action without an approval; every live action is
+ *    re-checked by its executor at the moment it runs, is never retried when its outcome is unknown, and
+ *    is capped per hour (SOC_LIVE_ACTIONS_PER_HOUR; beyond it a person decides).
  *  - The workspace emergency stop refuses new actions and holds queued ones.
  */
 import { randomUUID } from "node:crypto";
@@ -27,16 +30,20 @@ import { evaluatePolicy, type PolicyOutcome } from "../policy/evaluate.js";
 import { getActivePolicy, recordDecision } from "../policy/store.js";
 import type { ActorRef, Origin } from "../policy/types.js";
 import { simulate } from "./simulate.js";
+import { executeLive, LiveRefused } from "./live.js";
+import { getProtection, policyView } from "../protection.js";
+import { enqueueProtectionNotice } from "../protection-notify.js";
+import { explain } from "../policy/explain.js";
 import { enqueueJob } from "../runtime/queue.js";
 import { recordSignal, type Signal } from "../memory/learning.js";
 import { appendAuditEvent, appendAuditEventNow } from "../audit/events.js";
 
-export type ActionStatus = "denied" | "recorded" | "awaiting_approval" | "rejected" | "expired" | "cancelled" | "queued" | "running" | "simulated" | "failed";
+export type ActionStatus = "denied" | "recorded" | "awaiting_approval" | "rejected" | "expired" | "cancelled" | "queued" | "running" | "simulated" | "executed" | "failed";
 
 export interface ActionRequest {
   id: string; tenant_id: string; idempotency_key: string; action_id: string; risk_class: string;
   input: Record<string, unknown>; action_digest: string; target: string | null; reason: string | null;
-  actor: ActorRef; origin: Origin; execution_mode: "shadow" | "simulation"; status: ActionStatus;
+  actor: ActorRef; origin: Origin; execution_mode: "shadow" | "simulation" | "live"; status: ActionStatus;
   policy_decision: string; policy_decision_id: string; approval_id: string | null;
   result: Record<string, unknown> | null; error: string | null; attempts: number; created_at: string; updated_at: string;
 }
@@ -98,7 +105,7 @@ export async function setPaused(tenantId: string, paused: boolean, userId: strin
 export async function proposeAction(tenantId: string, p: Proposal): Promise<{ action: ActionRequest; replayed: boolean }> {
   const entry = catalogEntry(p.action_id);
   if (!entry) throw new ActionError(422, "unknown_action", "Unknown action");
-  if (p.mode !== "shadow" && p.mode !== "simulation") throw new ActionError(422, "mode_not_available", "Only shadow and simulation modes are available");
+  if (p.mode !== "shadow" && p.mode !== "simulation" && p.mode !== "live") throw new ActionError(422, "mode_not_available", "Mode must be shadow, simulation or live");
   if (!IDEMPOTENCY.test(p.idempotency_key)) throw new ActionError(422, "bad_idempotency_key", "idempotency_key: 8–100 letters, digits, . _ : -");
   const parsed = entry.input.safeParse(p.input);
   if (!parsed.success) {
@@ -122,7 +129,22 @@ export async function proposeAction(tenantId: string, p: Proposal): Promise<{ ac
 
   const active = await getActivePolicy(tenantId);
   const started = process.hrtime.bigint();
-  const outcome: PolicyOutcome = evaluatePolicy({ action_id: p.action_id, actor: p.actor, origin: p.origin, mode: p.mode }, active?.document ?? null);
+  const live = p.mode === "live";
+  let outcome: PolicyOutcome = evaluatePolicy({
+    action_id: p.action_id, actor: p.actor, origin: p.origin, mode: p.mode,
+    protection: live ? policyView(await getProtection(tenantId)) : undefined,
+  }, active?.document ?? null);
+  // A ceiling on what Legion does on its own per hour: past it, a person decides. Counts what machines
+  // did without an approval (so a person's own actions and approved ones never use it up).
+  if (live && outcome.decision === "ALLOW" && p.actor.kind !== "human") {
+    const used = await queryOne<{ n: number }>(
+      `SELECT count(*)::int AS n FROM action_requests WHERE tenant_id = $1 AND execution_mode = 'live' AND approval_id IS NULL
+          AND actor->>'kind' <> 'human' AND status IN ('queued', 'running', 'executed', 'failed') AND created_at > now() - interval '1 hour'`, [tenantId]);
+    if ((used?.n ?? 0) >= config.socLiveActionsPerHour) {
+      const reason_codes = [...outcome.reason_codes, "LIVE_RATE_LIMIT"];
+      outcome = { ...outcome, decision: "REQUIRE_APPROVAL", reason_codes, explanation: explain("REQUIRE_APPROVAL", reason_codes, outcome.matched_rule_ids) };
+    }
+  }
   const latency = Number((process.hrtime.bigint() - started) / 1000n);
   const target = entry.targetOf(input);
 
@@ -137,7 +159,7 @@ export async function proposeAction(tenantId: string, p: Proposal): Promise<{ ac
     const action = await transaction(async (client) => {
       const id = randomUUID();
       const decisionId = await recordDecision(tenantId, outcome, {
-        enforcement: "enforced", call_site: "action_engine", actor: p.actor, origin: p.origin, mode: p.mode as "shadow" | "simulation",
+        enforcement: "enforced", call_site: "action_engine", actor: p.actor, origin: p.origin, mode: p.mode as "shadow" | "simulation" | "live",
         target, input_digest: digestOf(input), legacy_outcome: null, latency_us: latency,
         policy: active ? { version: active.version, hash: active.hash } : null,
       }, client);
@@ -156,6 +178,13 @@ export async function proposeAction(tenantId: string, p: Proposal): Promise<{ ac
           JSON.stringify(p.actor), p.origin, p.mode, status, outcome.decision, decisionId, approval?.id ?? null],
       )).rows[0]!;
       await event(client, tenantId, id, null, status, p.actor, outcome.reason_codes.join(","));
+      // A person is needed: tell the administrators now, not when they next open the dashboard.
+      if (live && status === "awaiting_approval") {
+        await enqueueProtectionNotice(client, tenantId, `approval:${id}`, {
+          kind: "approval", title: entry.summary, path: "/defense",
+          facts: [["Action", p.action_id], ["Target", target ?? "—"], ["Proposed by", p.actor.kind === "agent" ? p.actor.agent : p.actor.kind], ["Why it waits", outcome.explanation.slice(0, 300)]],
+        });
+      }
       // Durable: if nothing runs it inline (crash after commit), the runtime will.
       if (status === "queued") await enqueueJob(client, tenantId, "action.run", { action_request_id: id }, `action:${id}`);
       return toAction(row);
@@ -266,7 +295,105 @@ export async function failAbandoned(tenantId: string, actionId: string): Promise
   });
 }
 
+/** Why a queued live action must not run any more, or null when it may. Looked at again right before it runs. */
+async function noLongerAuthorized(tenantId: string, row: Row): Promise<string | null> {
+  const protection = await getProtection(tenantId);
+  if (protection.effective_mode === "manual") return "protection was turned off before it ran";
+  // A person approved it: that approval is the authority. Otherwise the policy must still allow it, today.
+  if (row.approval_id) return null;
+  const active = await getActivePolicy(tenantId);
+  const again = evaluatePolicy({ action_id: row.action_id, actor: row.actor, origin: row.origin, mode: "live", protection: policyView(protection) }, active?.document ?? null);
+  return again.decision === "ALLOW" ? null : `no longer authorized (${again.decision})`;
+}
+
+const FINISHED_NOTICE = (a: Row, result: Record<string, unknown> | null, error: string | null) => {
+  const entry = catalogEntry(a.action_id);
+  const by = a.actor.kind === "agent" ? `${a.actor.agent} (automatic)` : a.actor.kind === "human" ? "a person" : "Legion (automatic)";
+  return {
+    kind: (error ? "failed" : "acted") as "failed" | "acted",
+    title: error ? `${entry?.summary ?? a.action_id}: not done` : (entry?.summary ?? a.action_id),
+    path: "/defense",
+    facts: [
+      ["Action", a.action_id], ["Target", a.target ?? "—"], ["Done by", by],
+      ["Result", error ?? String(result?.did ?? "done")], ["Why", (a.reason ?? "—").slice(0, 300)], ["Action id", a.id],
+    ] as Array<[string, string]>,
+  };
+};
+
+/**
+ * Carries out a queued LIVE action, at most once.
+ *
+ *  - Only a `queued` action is taken. One already `running` is never taken over: its worker may have done
+ *    the thing and died before saying so, and doing it again blind is worse than asking a person to look
+ *    (the worker marks it failed with "outcome unknown"; see failLiveUnknown).
+ *  - Authority is checked again here, under the row lock (protection may have been turned off meanwhile).
+ *  - The executor checks the facts again, and can decline (LiveRefused) with nothing done.
+ *  - The outcome and the administrators' notice are written in one transaction.
+ */
+async function runLive(tenantId: string, actionId: string): Promise<ActionRequest | null> {
+  const system: ActorRef = { kind: "system", component: "action_engine" };
+  const claimed = await transaction(async (client) => {
+    if (await isPaused(tenantId, client)) return null;
+    const row = (await client.query<Row>(`SELECT ${COLUMNS} FROM action_requests WHERE tenant_id = $1 AND id = $2 FOR UPDATE`, [tenantId, actionId])).rows[0];
+    if (!row || row.execution_mode !== "live" || row.status !== "queued") return null;
+    const why = await noLongerAuthorized(tenantId, row);
+    if (why) {
+      await client.query("UPDATE action_requests SET status = 'cancelled', error = $3, updated_at = now() WHERE tenant_id = $1 AND id = $2", [tenantId, actionId, why.slice(0, 500)]);
+      await event(client, tenantId, actionId, "queued", "cancelled", system, why);
+      return null;
+    }
+    const r = (await client.query<Row>(
+      `UPDATE action_requests SET status = 'running', attempts = attempts + 1, updated_at = now() WHERE tenant_id = $1 AND id = $2 RETURNING ${COLUMNS}`, [tenantId, actionId],
+    )).rows[0]!;
+    await event(client, tenantId, actionId, "queued", "running", system);
+    return r;
+  });
+  if (!claimed) return getAction(tenantId, actionId);
+
+  let result: Record<string, unknown> | null = null;
+  let error: string | null = null;
+  try {
+    result = await executeLive(tenantId, claimed.action_id, claimed.input, { actionId: claimed.id, reason: claimed.reason });
+  } catch (e) {
+    error = (e instanceof LiveRefused ? `refused: ${e.message}` : `failed: ${e instanceof Error ? e.message : "unknown error"}`).slice(0, 500);
+  }
+  return transaction(async (client) => {
+    const to: ActionStatus = error ? "failed" : "executed";
+    const r = (await client.query<Row>(
+      `UPDATE action_requests SET status = $3, result = $4, error = $5, updated_at = now() WHERE tenant_id = $1 AND id = $2 AND status = 'running' RETURNING ${COLUMNS}`,
+      [tenantId, actionId, to, result ? JSON.stringify(result) : null, error],
+    )).rows[0];
+    if (!r) return null;
+    await event(client, tenantId, actionId, "running", to, system, error ?? undefined);
+    // Whatever Legion did (or failed to do) on its own is told to the administrators, in this same commit.
+    // A person's own action is not mailed to them, nor is the mail action itself.
+    if (r.actor.kind !== "human" && r.action_id !== "notify.admins") await enqueueProtectionNotice(client, tenantId, `done:${actionId}`, FINISHED_NOTICE(r, result, error));
+    return toAction(r);
+  });
+}
+
+/**
+ * A live action stuck in `running` past the stale window: its worker stopped while doing it. Whether it
+ * happened is unknown, so it is NOT retried — it is marked failed and the administrators are told.
+ */
+export async function failLiveUnknown(tenantId: string, actionId: string): Promise<boolean> {
+  const system: ActorRef = { kind: "system", component: "action_engine" };
+  return transaction(async (client) => {
+    const r = (await client.query<Row>(
+      `UPDATE action_requests SET status = 'failed', error = 'outcome unknown: the worker stopped while doing it. Check the result before trying again.', updated_at = now()
+        WHERE tenant_id = $1 AND id = $2 AND execution_mode = 'live' AND status = 'running' AND updated_at < now() - make_interval(secs => $3)
+        RETURNING ${COLUMNS}`, [tenantId, actionId, RUNNING_STALE_SECONDS],
+    )).rows[0];
+    if (!r) return false;
+    await event(client, tenantId, actionId, "running", "failed", system, "outcome unknown after a worker stopped; not retried");
+    await enqueueProtectionNotice(client, tenantId, `done:${actionId}`, FINISHED_NOTICE(r, null, r.error));
+    return true;
+  });
+}
+
 export async function runQueued(tenantId: string, actionId: string): Promise<ActionRequest | null> {
+  const mode = await queryOne<{ execution_mode: string }>("SELECT execution_mode FROM action_requests WHERE tenant_id = $1 AND id = $2", [tenantId, actionId]);
+  if (mode?.execution_mode === "live") return runLive(tenantId, actionId);
   const system: ActorRef = { kind: "system", component: "action_engine" };
   const claimed = await transaction(async (client) => {
     if (await isPaused(tenantId, client)) return null;

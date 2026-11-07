@@ -43,10 +43,17 @@ describe("evaluator: hard refusals", () => {
     expect(evaluatePolicy(agentReq("alert.triage", "Executor"), null).decision).toBe("DENY");
     expect(evaluatePolicy(agentReq("alert.triage", "root"), null).reason_codes).toEqual(["UNKNOWN_AGENT"]);
   });
-  it("live mode is denied whatever the policy says", () => {
+  it("live mode is denied unless an administrator opted in AND Legion can really do the action — whatever the policy says", () => {
     const allowAll = doc({ default_autonomy: "AUTONOMOUS", rules: [{ id: "all", effect: "ALLOW", actions: ["*"] }] });
-    expect(evaluatePolicy(agentReq("alert.set_status", "Oracle", { mode: "live" }), allowAll)).toMatchObject({ decision: "DENY", reason_codes: ["LIVE_MODE_DISABLED"] });
+    // No protection settings, or manual: refused, for a person and for an agent.
+    expect(evaluatePolicy(agentReq("ip.block", "Vanguard", { mode: "live" }), allowAll)).toMatchObject({ decision: "DENY", reason_codes: ["LIVE_NOT_ENABLED"] });
     expect(evaluatePolicy({ action_id: "ip.block", actor: human, origin: "human", mode: "live" }, allowAll).decision).toBe("DENY");
+    expect(evaluatePolicy({ action_id: "ip.block", actor: human, origin: "human", mode: "live", protection: { mode: "manual", auto_actions: ["ip.block"] } }, allowAll).reason_codes).toEqual(["LIVE_NOT_ENABLED"]);
+    // Opted in, but there is nothing to call for these: simulation only.
+    const auto = { mode: "automatic", auto_actions: [] } as const;
+    for (const id of ["alert.set_status", "ip.unblock", "payment.reject", "payment.release", "account.disable", "host.isolate"]) {
+      expect(evaluatePolicy({ action_id: id, actor: human, origin: "human", mode: "live", protection: auto }, allowAll).reason_codes, id).toEqual(["NO_LIVE_EXECUTOR"]);
+    }
   });
   it("actor and origin must agree: an agent cannot claim to be a human, a human request cannot be marked as model output", () => {
     expect(evaluatePolicy(agentReq("alert.set_status", "Oracle", { origin: "human" }), null).reason_codes).toEqual(["ACTOR_ORIGIN_MISMATCH"]);

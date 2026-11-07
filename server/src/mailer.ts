@@ -219,6 +219,41 @@ ${rows
 }
 
 /**
+ * What Legion did on its own (or needs a person to decide), for the workspace's administrators. Built from
+ * fixed templates plus a few short facts; every value is shown as text. The link goes to the dashboard
+ * only (no one-click action: a copy of this mail must not be a way to approve anything).
+ */
+export function protectionEmail(params: {
+  kind: "acted" | "failed" | "approval" | "notice";
+  title: string;
+  facts: Array<[string, string]>;
+  path: string;
+  locale?: Locale;
+}) {
+  const locale = params.locale ?? "en";
+  const t = {
+    en: {
+      subject: { acted: "Legion acted on its own", failed: "Legion tried to act and could not", approval: "Legion needs your decision", notice: "Message from Legion" },
+      footer: {
+        acted: "You allowed Legion to do this in Protection settings. Review it and undo it from the dashboard if it was wrong; you can switch to manual mode or press the emergency stop at any time.",
+        failed: "Nothing more was done. Check the action in the dashboard before trying again.",
+        approval: "Legion will not do this until a signed-in administrator approves it in the dashboard.",
+        notice: "",
+      },
+      open: "Open in Legion",
+    },
+  }[locale];
+  const url = `${config.frontendUrl}${params.path}`;
+  const rows = params.facts.map(([k, v]) => `<tr><td style="color:#857CA8;padding:3px 12px 3px 0">${escape(k)}</td><td style="color:#F6F4FB">${escape(v)}</td></tr>`).join("");
+  const footer = t.footer[params.kind];
+  return {
+    subject: `[Legion] ${t.subject[params.kind]}: ${params.title}`.slice(0, 200),
+    text: `${params.title}\n\n${params.facts.map(([k, v]) => `${k}: ${v}`).join("\n")}\n\n${footer}\n\n${t.open}: ${url}`,
+    html: layout(params.title, `<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;font-size:13px;margin-bottom:16px">${rows}</table>${footer ? para(escape(footer)) : ""}${button(url, t.open)}`, locale),
+  };
+}
+
+/**
  * Sent to an address an administrator asked to receive alert emails. Nothing is
  * sent to it until its owner confirms — the recipient may never have heard of
  * this organisation, so the wording says so and the default is "ignore".

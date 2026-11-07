@@ -10,6 +10,7 @@ tests:
       - { series: 'up{job="legion-api"}', values: '1x40' }
       - { series: 'legion_process_uptime_seconds', values: '3600x40' }
       - { series: 'legion_soc_actions_live', values: '0x40' }
+      - { series: 'legion_soc_workspaces_protection_active', values: '0x40' }
       - { series: 'legion_soc_runtime_worker_running', values: '1x40' }
       - { series: 'legion_soc_runtime_last_tick_age_seconds', values: '1x40' }
       - { series: 'legion_soc_jobs_oldest_due_age_seconds', values: '0x40' }
@@ -47,10 +48,11 @@ tests:
           - exp_labels: { severity: ticket }
             exp_annotations: { summary: "Legion's database is larger than 20 GiB. Check free disk space and that retention is on." }
 
-  - name: a live action pages immediately
+  - name: a live action with no workspace opted in pages immediately
     interval: 15s
     input_series:
       - { series: 'legion_soc_actions_live', values: '0 0 0 1 1 1 1 1' }
+      - { series: 'legion_soc_workspaces_protection_active', values: '0x8' }
     alert_rule_test:
       - eval_time: 30s
         alertname: LegionLiveActionDetected
@@ -60,8 +62,16 @@ tests:
         exp_alerts:
           - exp_labels: { severity: page }
             exp_annotations:
-              summary: An action exists in a mode other than shadow/simulation. Stop the pilot (PILOT.md §10 kill switch).
+              summary: An action exists in live mode although no workspace allowed Legion to act on its own. Stop the pilot (PILOT.md §10 kill switch).
               runbook: PILOT.md §10
+
+  - name: live actions in a workspace that opted in are normal, not a page
+    interval: 15s
+    input_series:
+      - { series: 'legion_soc_actions_live', values: '0 0 0 3 3 3 3 3' }
+      - { series: 'legion_soc_workspaces_protection_active', values: '1x8' }
+    alert_rule_test:
+      - { eval_time: 1m, alertname: LegionLiveActionDetected, exp_alerts: [] }
 
   - name: API down pages after two minutes
     interval: 15s

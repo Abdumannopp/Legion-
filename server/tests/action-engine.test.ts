@@ -20,7 +20,7 @@ import * as store from "../src/store.js";
 import type { User } from "../src/types.js";
 import { putPolicy } from "../src/policy/store.js";
 import { proposeAction, runQueued, syncWithApproval, type Proposal } from "../src/actions/engine.js";
-import { catalogList } from "../src/policy/catalog.js";
+import { catalogList, LIVE_ACTION_IDS } from "../src/policy/catalog.js";
 
 let tenantA: string; let tenantB: string;
 let admin1: User; let admin2: User; let analyst: User; let viewer: User; let adminB: User;
@@ -65,7 +65,8 @@ describe("the door: validation", () => {
     await propose(analyst, { action_id: "shell.exec", input: {} }).expect(422);
     await propose(analyst, { action_id: "ip.block", input: { ip: "not-an-ip", minutes: 30 } }).expect(422);
     await propose(analyst, { action_id: "ip.block", input: { ip: "185.220.101.4", minutes: 30, sudo: true } }).expect(422);
-    await propose(analyst, { action_id: "ip.block", input: { ip: "185.220.101.4", minutes: 30 }, mode: "live" }).expect(422);
+    await propose(analyst, { action_id: "ip.block", input: { ip: "185.220.101.4", minutes: 30 }, mode: "live" }).expect(403);   // only an administrator, and only where protection is on
+    await propose(analyst, { action_id: "ip.block", input: { ip: "185.220.101.4", minutes: 30 }, mode: "autopilot" }).expect(422);
     await propose(analyst, { action_id: "ip.block", input: { ip: "185.220.101.4", minutes: 30 }, idempotency_key: "x" }).expect(422);
     // The caller cannot say who is acting or where the request came from.
     await propose(analyst, { action_id: "alert.set_status", input: { alert_id: "SEC-1", status: "resolved" }, actor: { kind: "agent", agent: "Vanguard" } }).expect(422);
@@ -73,10 +74,12 @@ describe("the door: validation", () => {
     expect((await query("SELECT count(*)::int AS n FROM action_requests")).rows[0].n).toBe(0);
   });
 
-  it("the database itself refuses a live action and a high-risk action that runs without approval", async () => {
+  it("the database itself refuses an unknown mode, and a high-risk action that runs without approval", async () => {
     const { action } = await proposeAction(tenantA, vanguard("ip.block", { ip: "185.220.101.4", minutes: 30 }));
-    await expect(query("UPDATE action_requests SET execution_mode = 'live' WHERE id = $1", [action.id])).rejects.toThrow(/check constraint/);
+    await expect(query("UPDATE action_requests SET execution_mode = 'autopilot' WHERE id = $1", [action.id])).rejects.toThrow(/check constraint/);
     await expect(query("UPDATE action_requests SET status = 'queued' WHERE id = $1", [action.id])).rejects.toThrow(/check constraint/);
+    // An AI-produced action never runs live on its own, even if code tried: it needs an approval.
+    await expect(query("UPDATE action_requests SET execution_mode = 'live', origin = 'llm', status = 'queued', policy_decision = 'ALLOW' WHERE id = $1", [action.id])).rejects.toThrow(/check constraint/);
   });
 
   it("needs actions:propose (analyst) to propose and actions:read to look", async () => {
@@ -268,17 +271,31 @@ describe("v0 has no path to a side effect", () => {
     expect(await sideEffectSnapshot()).toBe(before);
   });
 
-  it("the action engine's code does not import anything that changes state outside its own tables", () => {
+  it("only actions/live.ts can change anything outside the engine's own tables — the engine and the simulator cannot", () => {
     const dir = join(__dirname, "..", "src", "actions");
-    const code = readdirSync(dir).map((f) => readFileSync(join(dir, f), "utf8")).join("\n");
-    for (const forbidden of [/\baddBlock\b/, /\brevokeBlock\b/, /\bresolvePayment\b/, /\bupdateAlertStatus\b/, /\bsendMail\b/, /\benqueue(?!Job\()\w*\(/, /\bfetch\(/, /mailer\.js/, /outbox\.js/, /child_process/]) {
-      expect(code, String(forbidden)).not.toMatch(forbidden);
+    const read = (f: string) => readFileSync(join(dir, f), "utf8");
+    expect(readdirSync(dir).sort()).toEqual(["engine.ts", "live.ts", "simulate.ts"]);   // a new file here needs this test read again
+    const engine = read("engine.ts"), sim = read("simulate.ts"), live = read("live.ts");
+
+    // The engine decides, queues and records. It reaches the outside world only through live.ts (and queues
+    // the administrators' notices, which are rows in the outbox, sent later by the worker).
+    for (const forbidden of [/\baddBlock\b/, /\brevokeBlock\b/, /\bresolvePayment\b/, /\bupdateAlertStatus\b/, /\bsendMail\b/, /\bfetch\(/, /mailer\.js/, /outbox\.js/, /child_process/,
+      /\benqueue(?!Job\(|ProtectionNotice\()\w*\(/]) {
+      expect(engine, `engine ${forbidden}`).not.toMatch(forbidden);
+      expect(sim, `simulate ${forbidden}`).not.toMatch(forbidden);
     }
-    // The only job the engine may queue is the simulation of its own action (runtime/worker.ts "action.run").
-    const kinds = [...code.matchAll(/enqueueJob\([^,]+,[^,]+,\s*"([^"]+)"/g)].map((m) => m[1]);
-    expect(kinds.length).toBeGreaterThan(0);
+    // The only job the engine may queue is the running of its own action (runtime/worker.ts "action.run").
+    const kinds = [...engine.matchAll(/enqueueJob\([^,]+,[^,]+,\s*"([^"]+)"/g)].map((m) => m[1]);
     expect(new Set(kinds)).toEqual(new Set(["action.run"]));
-    const sim = readFileSync(join(dir, "simulate.ts"), "utf8");
     expect(sim).not.toMatch(/\b(INSERT|UPDATE|DELETE)\b/);
+    expect(engine).not.toMatch(/blocklist\.js/);   // the simulator reads the blocklist; only live.ts (and not the engine) may write to it
+
+    // live.ts is the one door out, and it is small and closed: exactly the catalog's live actions, no shell,
+    // no network call, no way to send mail directly, nothing that moves money or edits an alert.
+    for (const forbidden of [/child_process/, /\bfetch\(/, /\bsendMail\b/, /mailer\.js/, /\bresolvePayment\b/, /\bupdateAlertStatus\b/, /\brevokeBlock\b/]) {
+      expect(live, `live ${forbidden}`).not.toMatch(forbidden);
+    }
+    const executors = [...live.matchAll(/^  "([a-z]+\.[a-z_]+)": async/gm)].map((m) => m[1]).sort();
+    expect(executors).toEqual([...LIVE_ACTION_IDS].sort());
   });
 });

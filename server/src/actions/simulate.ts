@@ -1,7 +1,7 @@
 /**
  * Simulators: what an action WOULD do, computed from current data with reads
- * only. Nothing here writes, sends, blocks or calls out — v0 has no live
- * executors at all, so there is no code path from an action to a side effect.
+ * only. Nothing here writes, sends, blocks or calls out. What Legion really does
+ * (only in a workspace that opted in) lives in live.ts and nowhere else.
  */
 import { queryOne } from "../db/pool.js";
 import * as blocklist from "../blocklist.js";

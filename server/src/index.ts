@@ -2536,7 +2536,7 @@ app.delete("/integrations/:id", requireRole("admin"), recentAuth, async (req: Au
 });
 
 registerSocRoutes(app, {
-  requirePermission, parse, log, stepUp: stepUpLimiter,
+  requirePermission, parse, log, stepUp: stepUpLimiter, recentAuth,
   verifyMfa: async (user, code) => user.mfa_enabled && (await checkTotp(user, code)) === "ok",
 });
 

@@ -11,9 +11,11 @@ whoever proposes them: a person, one of the five agents, or Legion itself.
 | `shadow` | The action is evaluated and the decision is recorded. Nothing else. |
 | `simulation` | The full path runs — policy, approval, queue — and the last step **computes** what would happen, using reads only. |
 
-`live` is refused by the policy engine, by the action engine, and by the
-database itself (a `CHECK` on `action_requests.execution_mode`). There is no
-code that executes an action, and tests fail if any is added.
+`live` is refused unless the workspace administrator opted in
+([PROTECTION.md](PROTECTION.md)), and then only for actions that have a real
+executor (`ip.block`, `notify.admins`). The policy engine, the action engine
+and the database (`CHECK`s) all enforce that list; tests fail if any other
+code changes state. Default mode is `manual`: nothing live happens.
 
 ## The path of an action
 
@@ -133,9 +135,9 @@ traffic, is the evidence needed before any enforcement is considered.
 
 ## Known limits of v0
 
-- Nothing is executed. Live execution needs: a migration allowing `live`, a
-  live executor per connector behind approval consumption, connector
-  credentials, and an explicit decision based on shadow data.
+- Only two actions can run live (block a public address, e-mail administrators),
+  and only after an administrator opted in ([PROTECTION.md](PROTECTION.md)).
+  Every other action is simulation only.
 - The dashboard has no screens for these routes yet (API only).
 - Workflows are code-defined; there is one (`alert_response`). No model is
   used by the orchestrator.

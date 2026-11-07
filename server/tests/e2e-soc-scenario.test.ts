@@ -181,11 +181,19 @@ describe("every autonomy mode", () => {
     expect((await query("SELECT count(*)::int AS n FROM approval_requests")).rows[0].n).toBe(0);
   });
 
-  it("LIVE is refused everywhere", async () => {
+  it("LIVE is refused wherever the administrator did not opt in, and for critical or AI-made actions even where they did", async () => {
     await policy({ default_autonomy: "AUTONOMOUS", rules: [{ id: "allow-all", effect: "ALLOW", actions: ["*"] }] });
+    // Manual (the default): refused by the policy, whatever the policy says.
     const r = await request(app).post("/actions").set(...as(admin)).send({ action_id: "ip.block", input: { ip: ATTACKER, minutes: 60 }, mode: "live", idempotency_key: "live-attempt-1" });
-    expect(r.status).toBe(422);
-    await expect(query("INSERT INTO action_requests (tenant_id, id, idempotency_key, action_id, risk_class, input, action_digest, actor, origin, execution_mode, status, policy_decision, policy_decision_id) VALUES ($1,$2,'live-direct-1','ip.block','R3','{}',$3,'{}','agent','live','queued','ALLOW',$2)", [tenantA, randomUUID(), "a".repeat(64)])).rejects.toThrow(/check constraint/);
+    expect(r.status).toBe(201);
+    expect(r.body.action).toMatchObject({ status: "denied", execution_mode: "live" });
+    expect((await query("SELECT count(*)::int AS n FROM ip_blocks")).rows[0].n).toBe(0);
+    // The database itself: a critical action, or one an AI model produced, cannot be queued live without an approval.
+    const insert = (id: string, risk: string, origin: string) => query(
+      "INSERT INTO action_requests (tenant_id, id, idempotency_key, action_id, risk_class, input, action_digest, actor, origin, execution_mode, status, policy_decision, policy_decision_id) VALUES ($1,$2,$3,'x',$4,'{}',$5,'{}',$6,'live','queued','ALLOW',$2)",
+      [tenantA, randomUUID(), id, risk, "a".repeat(64), origin]);
+    await expect(insert("live-direct-1", "R4", "agent")).rejects.toThrow(/check constraint/);
+    await expect(insert("live-direct-2", "R3", "llm")).rejects.toThrow(/check constraint/);
   });
 
   it("critical (R4) in the full flow: two other people with two-factor; not one", async () => {

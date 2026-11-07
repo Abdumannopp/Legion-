@@ -11,6 +11,7 @@ import Link from "next/link";
 import { Ban, Banknote, Eye, EyeOff, Loader2, Radar, ShieldAlert, ShieldCheck, TriangleAlert, Zap } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import ErrorNotice from "@/components/ErrorNotice";
+import ProtectionSection from "@/components/ProtectionSection";
 import {
   ApiError, AttackCampaign, AutoResponseSettings, IpBlock, PaymentCheck, PaymentConsent, ThreatCoverage,
   acknowledgePaymentNotice, blockAddress, getAutoResponse, getPaymentConsent, getBlocks, getCampaigns, getCoverage, getHeldPayments, rejectPayment, releasePayment, getMe, isLoggedIn, unblockAddress, updateAutoResponse,
@@ -143,6 +144,9 @@ export default function DefensePage() {
             <div className="flex justify-center py-16"><Loader2 size={18} className="animate-spin text-ink-faint" /></div>
           ) : (
             <>
+              {/* Protection mode: how much Legion may do on its own, chosen by an administrator */}
+              <ProtectionSection isAdmin={isAdmin} />
+
               {/* Automatic response */}
               <section className={card}>
                 <h2 className="text-ink font-medium flex items-center gap-2 mb-3"><Zap size={16} color={palette.warning} />{d.auto.title}</h2>

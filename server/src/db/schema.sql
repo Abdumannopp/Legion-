@@ -247,9 +247,12 @@ ALTER TABLE alerts ADD COLUMN IF NOT EXISTS ai_explanation_locale text;
 -- It is now an outbox job of its own kind, written in the alert's
 -- transaction and retried like an email. (The inline CHECK above is named
 -- notification_outbox_kind_check by Postgres; replacing it is idempotent.)
+-- protection_email: what Legion did on its own, or needs a person to decide (protection.ts). This file is
+-- applied again on every upgrade, so the constraint must carry the newest kind here too, not only in migration
+-- 0012: otherwise each upgrade would put the old list back and the next notice would be refused.
 ALTER TABLE notification_outbox DROP CONSTRAINT IF EXISTS notification_outbox_kind_check;
 ALTER TABLE notification_outbox ADD CONSTRAINT notification_outbox_kind_check
-  CHECK (kind IN ('alert_email', 'realtime_alert'));
+  CHECK (kind IN ('alert_email', 'realtime_alert', 'protection_email'));
 -- Queue health metrics: oldest undelivered job and the dead-letter count,
 -- without scanning delivered history.
 CREATE INDEX IF NOT EXISTS notification_outbox_undelivered_age

@@ -76,6 +76,8 @@ export async function collectMetrics(): Promise<string> {
   const ring = auditKeyring();
   const keyMismatch = heads.filter((h) => h.key_id !== currentAuditKeyId() && !ring.has(String(h.key_id))).length;
   const wf = m.wf;
+  // Counted from the tenants table itself (no workspace data, no RLS on it): how many opted in, with the notice accepted.
+  const protectionActive = Number((await query<{ n: number }>("SELECT count(*) FILTER (WHERE protection_mode <> 'manual' AND protection_ack_at IS NOT NULL)::int AS n FROM tenants")).rows[0]?.n ?? 0);
   const outbox = await queueMetrics();
   const rt = runtimeHealth();
   const ob = workerStatus();
@@ -94,8 +96,9 @@ export async function collectMetrics(): Promise<string> {
     g("legion_soc_jobs_oldest_due_age_seconds", "Age of the longest-waiting job that is due now.", maxOf(jobAges, "oldest_due")),
     g("legion_soc_jobs_expired_leases", "Running jobs whose worker lease ran out (a worker died).", sum(jobAges, "expired_leases")),
     // --- actions / approvals
-    byLabel("legion_soc_actions", "Action requests by status.", "status", ["denied", "recorded", "awaiting_approval", "rejected", "expired", "cancelled", "queued", "running", "simulated", "failed"], actions, "k"),
-    g("legion_soc_actions_live", "Actions in any mode other than shadow/simulation. Must be 0 during the pilot.", sum(act, "live")),
+    byLabel("legion_soc_actions", "Action requests by status.", "status", ["denied", "recorded", "awaiting_approval", "rejected", "expired", "cancelled", "queued", "running", "simulated", "executed", "failed"], actions, "k"),
+    g("legion_soc_actions_live", "Actions in live mode. Must be 0 unless a workspace opted in (legion_soc_workspaces_protection_active).", sum(act, "live")),
+    g("legion_soc_workspaces_protection_active", "Workspaces whose administrator allowed Legion to act on its own (hybrid or automatic).", protectionActive),
     g("legion_soc_actions_stuck_running", "Actions stuck in running past the recovery window.", sum(act, "stuck")),
     g("legion_soc_approvals_pending", "Approval requests waiting for a person.", sum(appr, "pending")),
     g("legion_soc_approvals_oldest_pending_age_seconds", "Age of the longest-waiting approval request.", maxOf(appr, "oldest")),

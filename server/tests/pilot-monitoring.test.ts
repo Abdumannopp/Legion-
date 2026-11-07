@@ -48,7 +48,7 @@ describe("pilot monitoring references real metrics", () => {
 
   it("the safety invariants are alerted on, with a page for the live-action check", () => {
     const alerts = read("monitoring/alerts.yml");
-    expect(alerts).toMatch(/alert: LegionLiveActionDetected[\s\S]*?expr: legion_soc_actions_live > 0[\s\S]*?severity: page/);
+    expect(alerts).toMatch(/alert: LegionLiveActionDetected[\s\S]*?expr: legion_soc_actions_live > 0 and on\(\) legion_soc_workspaces_protection_active == 0[\s\S]*?severity: page/);
     for (const a of ["LegionApiDown", "LegionSocWorkerStopped", "LegionSocWorkerStale", "LegionSocJobsBacklog", "LegionSocDeadJobs", "LegionActionStuckRunning", "LegionApprovalWaitingTooLong"]) {
       expect(alerts, a).toContain(`alert: ${a}`);
     }

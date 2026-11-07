@@ -327,6 +327,8 @@ export const config = {
    * ceiling one compromised account could fill the disk at the request-rate limit.
    */
   socActionsPerHour: Math.max(10, Math.floor(Number(process.env.SOC_ACTIONS_PER_HOUR ?? 3000)) || 3000),
+  /** Per workspace and hour, how many LIVE actions Legion takes on its own; past it, each waits for a person. */
+  socLiveActionsPerHour: Math.max(1, Math.floor(Number(process.env.SOC_LIVE_ACTIONS_PER_HOUR ?? 20)) || 20),
   runtimePollSeconds: Math.min(300, Math.max(1, Math.floor(Number(process.env.RUNTIME_POLL_SECONDS ?? 5)) || 5)),
   /**
    * Task 10 Orchestrator: run the alert workflow for every NEW alert, in the

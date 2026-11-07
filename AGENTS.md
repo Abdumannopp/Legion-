@@ -52,7 +52,7 @@ Authorization: Bearer <the agent's short-lived token>
 
 ## Safety rules (cannot be changed)
 
-- Skills **only read and recommend**. No skill blocks, deletes or changes
+- Skills **only read and recommend**. (Automatic action is a separate, opt-in path through the policy and action engines, see [PROTECTION.md](PROTECTION.md); agents' skills never use it.) No skill blocks, deletes or changes
   anything — not even Vanguard's. Every recommendation comes with
   `executed: false`; a person approves and carries it out (for example,
   blocking on the Dashboard → **Defense** page).

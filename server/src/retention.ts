@@ -84,7 +84,7 @@ export async function pruneAgentLogs(months = config.retentionAgentLogMonths): P
  * chain_prune_anchors, so verifyAuditChain() still proves the remaining chain (and still fails if a
  * surviving event was changed). The newest audit event is always kept. Legal holds are skipped.
  */
-export const SOC_TERMINAL_ACTIONS = ["denied", "recorded", "rejected", "expired", "cancelled", "simulated", "failed"] as const;
+export const SOC_TERMINAL_ACTIONS = ["denied", "recorded", "rejected", "expired", "cancelled", "simulated", "executed", "failed"] as const;
 
 export async function pruneSocHistory(days = config.retentionSocDays): Promise<Record<string, number>> {
   const counts: Record<string, number> = { soc_jobs: 0, action_requests: 0, approval_requests: 0, policy_decisions: 0, workflow_runs: 0, soc_audit_events: 0 };

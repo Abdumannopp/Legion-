@@ -11,7 +11,7 @@ import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { z } from "zod";
 import { config } from "../config.js";
-import { failAbandoned, getAction, isPaused, MAX_RUN_ATTEMPTS, reconcileApprovals, RUNNING_STALE_SECONDS, runQueued } from "../actions/engine.js";
+import { failAbandoned, failLiveUnknown, getAction, isPaused, MAX_RUN_ATTEMPTS, reconcileApprovals, RUNNING_STALE_SECONDS, runQueued } from "../actions/engine.js";
 import { runWorkflow } from "../orchestrator/engine.js";
 import { appendAuditEventNow } from "../audit/events.js";
 import { withTenant } from "../db/pool.js";
@@ -31,6 +31,12 @@ const HANDLERS: Record<JobKind, Handler> = {
     const before = await getAction(job.tenant_id, action_request_id);
     if (!before) return { ok: true }; // erased with its workspace
     if (before.status === "queued") { await runQueued(job.tenant_id, action_request_id); }
+    else if (before.status === "running" && before.execution_mode === "live") {
+      // A live action is never taken over: a stale one is settled as "outcome unknown" (and told to the
+      // administrators); a fresh one is still being done, so look again soon.
+      if (await failLiveUnknown(job.tenant_id, action_request_id)) return { ok: true };
+      return { defer: RUNNING_RECHECK_SECONDS };
+    }
     else if (before.status === "running") {
       // Someone is running it — or its worker died. A simulation takes milliseconds, so past the
       // stale window it is abandoned and runQueued takes it over; before that, look again soon.
@@ -42,7 +48,7 @@ const HANDLERS: Record<JobKind, Handler> = {
     return { ok: true }; // done, or settled some other way (cancelled, rejected, expired…)
   },
   "workflow.run": async (job) => {
-    const p = z.strictObject({ workflow: z.string().regex(/^[a-z_]{1,40}$/), alert_id: z.string().max(64), mode: z.enum(["shadow", "simulation"]) }).parse(job.payload);
+    const p = z.strictObject({ workflow: z.string().regex(/^[a-z_]{1,40}$/), alert_id: z.string().max(64), mode: z.enum(["shadow", "simulation", "live"]) }).parse(job.payload);
     if (await isPaused(job.tenant_id)) return { defer: PAUSE_RECHECK_SECONDS };
     await runWorkflow(job.tenant_id, p.workflow, p.alert_id, p.mode, { kind: "system", component: "runtime" });
     return { ok: true };

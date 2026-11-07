@@ -504,6 +504,15 @@ jobs:
           # F-04: the API runs with row-level security enforced; a code path without a workspace context fails the step.
           DB_RLS: enforce
         run: node ops/tests/production-probe.mjs
+      # Protection modes (manual / hybrid / automatic): Legion acts on its own only after an administrator
+      # allowed it, only as far as they allowed, never on a private or allowlisted address, stops at the
+      # emergency stop, and tells the administrators. Real API, separate database roles, RLS enforced.
+      # See ops/tests/e2e-protection.mjs and PROTECTION.md.
+      - name: Protection modes (opt-in automatic response, end to end)
+        env:
+          E2E_ADMIN_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/postgres
+          DB_RLS: enforce
+        run: node ops/tests/e2e-protection.mjs
       # Password hashing must not stall the instance, and the per-account
       # sign-in limit must hold across instances under concurrency
       # (PRODUCTION-VALIDATION-2026-10-01.md, RED-1). See ops/tests/auth-load-probe.mjs.

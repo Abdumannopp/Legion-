@@ -87,6 +87,14 @@ const entries: CatalogEntry[] = [
   },
 ];
 
+/**
+ * The actions Legion can really carry out (actions/live.ts has an executor for each). Everything else
+ * stays simulation-only, whatever a policy or a workspace says: there is nothing to call.
+ * The same list is a CHECK on tenants.protection_auto_actions (migration 0012), so adding one needs
+ * a migration as well as code, and a test (protection.test.ts) keeps the three in step.
+ */
+export const LIVE_ACTION_IDS: readonly string[] = ["ip.block", "notify.admins"];
+
 const byId = new Map(entries.map((e) => [e.id, Object.freeze(e)]));
 
 export function catalogEntry(id: string): CatalogEntry | null {

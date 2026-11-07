@@ -42,6 +42,7 @@ import { connect } from "./ns/connect";
 import { defense } from "./ns/defense";
 import { team } from "./ns/team";
 import { reauth } from "./ns/reauth";
+import { protection } from "./ns/protection";
 
 export { LOCALES, DEFAULT_LOCALE, isLocale } from "./core";
 export type { Locale } from "./core";
@@ -84,6 +85,7 @@ const namespaces = {
   defense,
   team,
   reauth,
+  protection,
 };
 
 type Namespaces = typeof namespaces;

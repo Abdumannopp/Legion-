@@ -118,7 +118,9 @@ describe("workflow runs", () => {
   it("validation, permissions and isolation", async () => {
     await alert("SEC-1", "critical", "185.220.101.4");
     await start(viewer, "SEC-1").expect(403);
-    await start(analyst, "SEC-1", "live").expect(422);
+    await start(analyst, "SEC-1", "live").expect(403);        // only an administrator may run a workflow for real…
+    await start(analyst, "SEC-1", "autopilot").expect(422);
+    expect((await start(admin, "SEC-1", "live")).status).toBe(409);   // …and only where protection is on (manual by default)
     await request(app).post("/workflows/alert_response/runs").set(...as(analyst)).send({ alert_id: "SEC-1", mode: "simulation", agent: "Vanguard" }).expect(422);
     await request(app).post("/workflows/delete_everything/runs").set(...as(analyst)).send({ alert_id: "SEC-1", mode: "simulation" }).expect(404);
     await start(adminB, "SEC-1").expect(404); // B cannot run A's alert

@@ -1136,3 +1136,46 @@ export function releasePayment(id: string): Promise<{ payment: PaymentCheck }> {
 export function rejectPayment(id: string): Promise<{ payment: PaymentCheck }> {
   return request(`/security/payments/${encodeURIComponent(id)}/reject`, { method: "POST" });
 }
+
+// --- Protection modes: how much Legion may do on its own, because a person said so (SOC core) ---
+
+export type ProtectionMode = "manual" | "hybrid" | "automatic";
+export interface ProtectionSettings {
+  mode: ProtectionMode; auto_actions: string[]; acknowledged: boolean;
+  acknowledged_at: string | null; acknowledged_by: string | null; effective_mode: ProtectionMode;
+}
+export interface LiveActionInfo { id: string; class: string; summary: string; reversible: boolean }
+export interface ProtectionState {
+  protection: ProtectionSettings;
+  notice: { version: string; lines: string[] };
+  live_actions: LiveActionInfo[];
+  live_per_hour: number;
+  plan_allows: boolean;
+  paused: boolean;
+}
+export interface ProtectionReport {
+  days: number;
+  totals: { automatic: number; approved_by_person: number; by_person: number; awaiting_approval: number; failed: number; refused_or_cancelled: number };
+  recent: Array<{ id: string; action_id: string; target: string | null; status: string; by: string; did: string | null; error: string | null; at: string }>;
+  changes: Array<{ at: string; by: string | null; detail: string | null }>;
+}
+export interface SocApproval {
+  id: string; action_id: string; risk_class: string; summary: string; action_digest: string; require_mfa: boolean;
+  required_approvals: number; approvals: number; status: string; expires_at: string; created_at: string;
+  requested_by: { kind: string; agent?: string };
+}
+
+export const getProtection = () => request<ProtectionState>("/soc/protection");
+export const getProtectionReport = (days = 7) => request<ProtectionReport>(`/soc/protection/report?days=${days}`);
+export function updateProtection(patch: { mode?: ProtectionMode; auto_actions?: string[]; acknowledge?: boolean }): Promise<{ protection: ProtectionSettings }> {
+  return request("/soc/protection", { method: "PUT", body: JSON.stringify(patch) });
+}
+/** The emergency stop: refuses new actions and holds queued ones until lifted. */
+export const setActionsPaused = (paused: boolean, reason?: string) =>
+  request<{ paused: boolean }>("/actions/controls", { method: "POST", body: JSON.stringify(reason ? { paused, reason } : { paused }) });
+export const getSocApprovals = () => request<{ approvals: SocApproval[] }>("/approvals?status=pending");
+export function decideSocApproval(a: SocApproval, decision: "approve" | "reject", opts: { reason?: string; mfa_code?: string } = {}) {
+  return request(`/approvals/${encodeURIComponent(a.id)}/decision`, {
+    method: "POST", body: JSON.stringify({ decision, action_digest: a.action_digest, ...opts }),
+  });
+}

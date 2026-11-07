@@ -24,6 +24,8 @@ import { isPublicAddress } from "../blocklist.js";
 import * as store from "../store.js";
 import type { Agent, Alert } from "../types.js";
 import { ActionError, proposeAction, runQueued, type ActionRequest } from "../actions/engine.js";
+import { hasLiveExecutor } from "../actions/live.js";
+import { getProtection } from "../protection.js";
 import type { ActorRef } from "../policy/types.js";
 import { recall, type Memory } from "../memory/store.js";
 import { appendAuditEventNow } from "../audit/events.js";
@@ -83,7 +85,7 @@ export class WorkflowError extends Error {
 }
 
 export interface WorkflowRun {
-  id: string; tenant_id: string; workflow: string; trigger_type: string; trigger_id: string; mode: "shadow" | "simulation";
+  id: string; tenant_id: string; workflow: string; trigger_type: string; trigger_id: string; mode: "shadow" | "simulation" | "live";
   status: "running" | "completed" | "failed"; steps: StepResult[]; started_by: ActorRef; error: string | null; created_at: string; finished_at: string | null;
 }
 type Row = Omit<WorkflowRun, "created_at" | "finished_at"> & { created_at: Date; finished_at: Date | null };
@@ -94,12 +96,16 @@ const toRun = (r: Row): WorkflowRun => ({ ...r, created_at: r.created_at.toISOSt
  * Runs (or returns the existing run of) a workflow for one alert.
  * `startedBy` is who asked for the run; each step still acts as its own agent.
  */
-export async function runWorkflow(tenantId: string, name: string, alertId: string, mode: "shadow" | "simulation", startedBy: ActorRef): Promise<{ run: WorkflowRun; replayed: boolean }> {
+export async function runWorkflow(tenantId: string, name: string, alertId: string, mode: "shadow" | "simulation" | "live", startedBy: ActorRef): Promise<{ run: WorkflowRun; replayed: boolean }> {
   const wf = WORKFLOWS.find((w) => w.name === name);
   if (!wf) throw new WorkflowError(404, "unknown_workflow", "No such workflow");
   if (wf.steps.length > MAX_STEPS) throw new WorkflowError(500, "too_many_steps", "Workflow is too long");
   const alert = await store.getAlert(tenantId, alertId);
   if (!alert) throw new WorkflowError(404, "alert_not_found", "Alert not found");
+  // Live: only in a workspace whose administrator opted in. Each step is still decided by the policy engine.
+  if (mode === "live" && (await getProtection(tenantId)).effective_mode === "manual") {
+    throw new WorkflowError(409, "protection_off", "This workspace is in manual protection mode: nothing runs on its own");
+  }
 
   const id = randomUUID();
   const inserted = await queryOne<Row>(
@@ -128,8 +134,10 @@ export async function runWorkflow(tenantId: string, name: string, alertId: strin
       if ("skip" in derived && typeof derived.skip === "string") { results.push({ ...base, outcome: "skipped", action_request_id: null, action_status: null, note: derived.skip }); continue; }
       const input = derived as Record<string, unknown>;
       try {
+        // In a live run each step really happens if Legion can do it for real; the rest is simulated, as before.
+        const stepMode = mode === "live" ? (hasLiveExecutor(step.action_id) ? "live" : "simulation") : mode;
         const { action } = await proposeAction(tenantId, {
-          action_id: step.action_id, input, mode,
+          action_id: step.action_id, input, mode: stepMode,
           actor: { kind: "agent", agent: step.agent }, origin: "agent",
           idempotency_key: `wf:${id}:${step.name}`,
           reason: `workflow ${wf.name}, step ${step.name}`,

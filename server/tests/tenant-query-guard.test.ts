@@ -52,6 +52,10 @@ const REVIEWED: Exception[] = [
   // --- workers: rows were claimed first; the row carries tenant_id and the work uses it
   { file: "outbox.ts", table: "notification_outbox", reason: "worker bookkeeping by row id after a claim; delivery uses row.tenant_id/recipient fixed at enqueue" },
   { file: "plan-limits.ts", table: "tenants", match: /^SELECT id FROM tenants/i, reason: "retention job: visits every workspace and prunes each by its OWN plan" },
+  { file: "protection.ts", table: "tenants", match: /^UPDATE tenants SET protection_mode = \$2, protection_auto_actions = \$3,/i,
+    reason: "updateProtection(tenantId): WHERE id = $1; the only caller is PUT /soc/protection (policy:manage, a recent password confirmation), which passes req.user.tenant_id" },
+  { file: "metrics.ts", table: "tenants", match: /^SELECT count\(\*\) FILTER \(WHERE protection_mode <> 'manual' AND protection_ack_at IS NOT NULL\)::int AS n FROM tenants$/i,
+    reason: "/metrics: how many workspaces opted in to automatic protection; a count, no workspace data" },
   { file: "retention.ts", table: "tenants", match: /^SELECT id FROM tenants/i, reason: "retention job: visits every workspace not on legal hold and prunes each in its own transaction" },
   { file: "tenant-deletion.ts", table: "tenants", match: /^UPDATE tenants SET deletion_notice_at/i, reason: "opt-in auto-delete job: clears or sets the deletion notice of workspaces it has just selected itself (by id), after the e-mail was sent" },
   { file: "outbox.ts", table: "tenants", reason: "enqueue reads the ALERT's own tenant's notification address" },

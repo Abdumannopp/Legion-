@@ -26,7 +26,11 @@ export const AGENTS = ["Sentinel", "Hunter", "Guardian", "Oracle", "Vanguard"] a
 export const ORIGINS = ["human", "agent", "llm", "system"] as const;
 export type Origin = (typeof ORIGINS)[number];
 
-/** v0 runs nothing live: shadow (observe only) and simulation (compute, never apply). */
+/**
+ * shadow (observe only), simulation (compute, never apply) and live (really done). Live is possible only for
+ * actions with an executor, only in a workspace whose administrator opted in (protection.ts), and never
+ * for a critical action or an AI-produced one without a person's approval.
+ */
 export const EXECUTION_MODES = ["shadow", "simulation", "live"] as const;
 export type ExecutionMode = (typeof EXECUTION_MODES)[number];
 
@@ -39,3 +43,6 @@ export type ActorRef =
   | { kind: "human"; user_id: string; role: Role }
   | { kind: "agent"; agent: Agent }
   | { kind: "system"; component: string };
+
+/** What the workspace's protection settings say, as far as the policy decision needs it (protection.ts). */
+export interface ProtectionView { mode: "manual" | "hybrid" | "automatic"; auto_actions: readonly string[] }

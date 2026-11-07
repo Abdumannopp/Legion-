@@ -40,7 +40,7 @@ Legend: **Built** (code + tests) · **Partial** (works but missing something an 
 | Customers manage integrations and credentials | Yes (`/integrations`, secrets sealed with `LEGION_ENCRYPTION_KEYS`, write-only); no rotation reminder, no per-integration permission |
 | Customers inspect agent decisions and audit | Yes via API (`/policy/decisions`, `/soc/audit`, `/audit`); limited UI |
 | No cross-customer access | Yes for customers. **Must stay true for MSSPs and for our own support staff** — §3 designs both without a bypass |
-| Autonomous actions bounded by policy | Yes, and stronger: live actions are refused at API, engine and DB |
+| Autonomous actions bounded by policy | Yes, and stronger: live actions run only after an administrator opts in, only for two vetted actions, and are refused otherwise at API, engine and DB ([PROTECTION.md](PROTECTION.md)) |
 
 ---
 
@@ -69,7 +69,7 @@ Legend: **Built** (code + tests) · **Partial** (works but missing something an 
 Principles that do not change:
 1. **The workspace is the isolation boundary.** Every new table carries `tenant_id`; the tenant-query guard and the isolation sweep extend to it in the same change.
 2. **No god mode.** Neither an MSSP nor Legion staff gets a code path that skips membership checks. Access to a workspace is always a membership (possibly delegated and time-bound), visible to and revocable by the customer, and audited.
-3. **Effective autonomy = min(platform ceiling, plan ceiling, customer policy).** The platform ceiling stays "no live actions" until a separate approval (Task 13 stage 5).
+3. **Effective autonomy = min(platform ceiling, plan ceiling, customer policy).** The platform ceiling is the two executor-backed actions (`LIVE_ACTION_IDS`); everything else stays simulation. Plan ceiling: automatic blocking is a Business+ feature.
 4. **One way in for identity.** Password, OIDC, SAML all end at `startSession()`; SCIM only calls the membership functions.
 5. **Second layer for isolation:** add Postgres row-level security keyed by a per-transaction `app.tenant_id`, in addition to the application guard (closes Task 13 K-4).
 
@@ -153,7 +153,7 @@ Every administrative change writes to the workspace (or org) audit log with acto
 | Reports | On-screen | + scheduled | + SLA report | + custom | + rollup |
 | Support / SLA | Email | Priority email | Priority | SLA + named contact | Partner SLA |
 
-\* AUTO stays shadow/simulation until the platform ceiling is raised by a separate approval. Prices: unchanged; packaging changes need your decision (§9) and **will not be applied to live billing** without explicit authorization.
+\* AUTO is limited to the two live-capable actions, only after an administrator opts in (PROTECTION.md). Prices: unchanged; packaging changes need your decision (§9) and **will not be applied to live billing** without explicit authorization.
 
 ---
 

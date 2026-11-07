@@ -50,13 +50,14 @@ groups:
 
   - name: legion-pilot-safety
     rules:
-      # THE pilot invariant. Nothing may run outside shadow or simulation.
+      # THE pilot invariant. Nothing runs live unless an administrator allowed it: a live action while NO
+      # workspace is in hybrid/automatic protection mode means something bypassed the opt-in.
       - alert: LegionLiveActionDetected
-        expr: legion_soc_actions_live > 0
+        expr: legion_soc_actions_live > 0 and on() legion_soc_workspaces_protection_active == 0
         for: 0m
         labels: { severity: page }
         annotations:
-          summary: An action exists in a mode other than shadow/simulation. Stop the pilot (PILOT.md §10 kill switch).
+          summary: An action exists in live mode although no workspace allowed Legion to act on its own. Stop the pilot (PILOT.md §10 kill switch).
           runbook: PILOT.md §10
 
       # A wrong or accidentally changed SOC_AUDIT_KEY: the audit chain refuses to grow (fail closed)

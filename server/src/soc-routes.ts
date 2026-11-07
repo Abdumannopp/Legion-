@@ -7,7 +7,10 @@ import type { Express, NextFunction, Request, RequestHandler, Response } from "e
 import { z } from "zod";
 import type { Permission } from "./permissions.js";
 import type { User } from "./types.js";
-import { catalogList, CATALOG_VERSION, ACTION_IDS } from "./policy/catalog.js";
+import { catalogList, CATALOG_VERSION, ACTION_IDS, LIVE_ACTION_IDS } from "./policy/catalog.js";
+import { config } from "./config.js";
+import { allows, planRefusal, resolvePlan } from "./plan-limits.js";
+import { getProtection, PROTECTION_MODES, PROTECTION_NOTICE, PROTECTION_NOTICE_VERSION, ProtectionError, protectionReport, updateProtection } from "./protection.js";
 import { DEFAULT_POLICY, parsePolicyDocument } from "./policy/document.js";
 import { ENGINE_VERSION, evaluatePolicy } from "./policy/evaluate.js";
 import { getActivePolicy, listDecisions, listPolicyVersions, PolicyConflict, PolicyInvalid, putPolicy, rollbackPolicy } from "./policy/store.js";
@@ -36,11 +39,13 @@ export interface SocRouteDeps {
   verifyMfa: (user: User, code: string) => Promise<boolean>;
   /** Counts failed attempts per signed-in user (wrong codes): brute-force brake. */
   stepUp: RequestHandler;
+  /** Refuses (403 reauth_required) unless the person confirmed their password in the last 10 minutes. */
+  recentAuth: RequestHandler;
 }
 
 const limitOf = (v: unknown, max = 200) => Math.min(max, Math.max(1, Math.floor(Number(v ?? 50)) || 50));
 
-const ACTION_STATUSES = ["denied", "recorded", "awaiting_approval", "rejected", "expired", "cancelled", "queued", "running", "simulated", "failed"] as const;
+const ACTION_STATUSES = ["denied", "recorded", "awaiting_approval", "rejected", "expired", "cancelled", "queued", "running", "simulated", "executed", "failed"] as const;
 const humanOf = (u: User) => ({ kind: "human" as const, user_id: u.id, role: u.role });
 
 /** v0: a queued simulation runs right away (Background Runtime takes this over later). */
@@ -50,7 +55,7 @@ async function settle(tenantId: string, a: ActionRequest | null): Promise<Action
 
 const APPROVAL_STATUSES = ["pending", "approved", "rejected", "expired", "consumed", "cancelled"] as const;
 
-export function registerSocRoutes(app: Express, { requirePermission, parse, log, verifyMfa, stepUp }: SocRouteDeps): void {
+export function registerSocRoutes(app: Express, { requirePermission, parse, log, verifyMfa, stepUp, recentAuth }: SocRouteDeps): void {
   // --- Policy Engine v0 -------------------------------------------------------
 
   app.get("/policy", requirePermission("policy:read"), async (req: AuthedRequest, res) => {
@@ -146,11 +151,13 @@ export function registerSocRoutes(app: Express, { requirePermission, parse, log,
     const body = parse(z.strictObject({
       action_id: z.string().max(64),
       input: z.record(z.string(), z.unknown()),
-      mode: z.enum(["shadow", "simulation"]),
+      mode: z.enum(["shadow", "simulation", "live"]),
       idempotency_key: z.string().regex(/^[A-Za-z0-9_.:-]{8,100}$/, "idempotency_key: 8–100 letters, digits, . _ : -"),
       reason: z.string().max(500).refine((s) => !/[\u0000-\u001f\u007f]/.test(s), "No control characters").optional(),
     }), req.body, res); if (!body) return;
     const user = req.user!;
+    // Doing something for real by hand is an administrator's call, as it is everywhere else in the dashboard.
+    if (body.mode === "live" && user.role !== "admin") return res.status(403).json({ detail: "Only an administrator can run an action for real" });
     try {
       const { action, replayed } = await proposeAction(user.tenant_id, { ...body, actor: humanOf(user), origin: "human" });
       if (!replayed) await log(req, "action.proposed", "action", action.id, `${action.action_id} → ${action.status} (${action.execution_mode})`);
@@ -218,8 +225,9 @@ export function registerSocRoutes(app: Express, { requirePermission, parse, log,
   app.post("/workflows/:name/runs", requirePermission("workflows:run"), async (req: AuthedRequest, res) => {
     const body = parse(z.strictObject({
       alert_id: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_.:-]+$/, "Not an alert id"),
-      mode: z.enum(["shadow", "simulation"]),
+      mode: z.enum(["shadow", "simulation", "live"]),
     }), req.body, res); if (!body) return;
+    if (body.mode === "live" && req.user!.role !== "admin") return res.status(403).json({ detail: "Only an administrator can run a workflow for real" });
     const name = String(req.params.name);
     if (!/^[a-z_]{1,40}$/.test(name)) return res.status(404).json({ detail: "No such workflow" });
     try {
@@ -232,6 +240,48 @@ export function registerSocRoutes(app: Express, { requirePermission, parse, log,
     }
   });
 
+  // --- Protection modes: how much Legion may do on its own, because a person said so ------------
+
+  app.get("/soc/protection", requirePermission("actions:read"), async (req: AuthedRequest, res) => {
+    const tenantId = req.user!.tenant_id;
+    const plan = await resolvePlan(tenantId);
+    res.json({
+      protection: await getProtection(tenantId),
+      notice: { version: PROTECTION_NOTICE_VERSION, lines: PROTECTION_NOTICE },
+      modes: PROTECTION_MODES,
+      live_actions: catalogList().filter((a) => LIVE_ACTION_IDS.includes(a.id)),
+      live_per_hour: config.socLiveActionsPerHour,
+      plan_allows: allows(plan, "autoBlocking"),
+      paused: await isPaused(tenantId),
+    });
+  });
+
+  // Turning protection ON or widening it needs an administrator who confirmed their password a moment ago.
+  // Turning it OFF (manual) never does: in an emergency nothing may stand between a person and "stop".
+  const recentUnlessManual: RequestHandler = (req, res, next) => (req.body?.mode === "manual" ? next() : recentAuth(req, res, next));
+  app.put("/soc/protection", requirePermission("policy:manage"), recentUnlessManual, async (req: AuthedRequest, res) => {
+    const body = parse(z.strictObject({
+      mode: z.enum(PROTECTION_MODES).optional(),
+      auto_actions: z.array(z.string().max(64)).max(20).optional(),
+      acknowledge: z.boolean().optional(),
+    }), req.body, res); if (!body) return;
+    try {
+      const protection = await updateProtection(req.user!.tenant_id, body, { id: req.user!.id, email: req.user!.email });
+      await log(req, "protection.changed", "tenant", req.user!.tenant_id, `${protection.mode}; automatic: ${protection.auto_actions.join(", ") || "none"}`);
+      res.json({ protection });
+    } catch (error) {
+      if (error instanceof ProtectionError) {
+        const extra = error.code === "plan_feature" ? planRefusal("autoBlocking", (await resolvePlan(req.user!.tenant_id)).plan) : {};
+        return res.status(error.status).json({ ...extra, detail: error.message, code: error.code });
+      }
+      throw error;
+    }
+  });
+
+  app.get("/soc/protection/report", requirePermission("actions:read"), async (req: AuthedRequest, res) => {
+    res.json(await protectionReport(req.user!.tenant_id, Number(req.query.days ?? 7)));
+  });
+
   // --- Universal Integration Layer (foundation) --------------------------------
 
   app.get("/integrations/capabilities", requirePermission("integrations:read"), async (req: AuthedRequest, res) => {
@@ -241,7 +291,9 @@ export function registerSocRoutes(app: Express, { requirePermission, parse, log,
       connectors: connectorsFor(a.id).map((c) => c.manifest.kind),
       connected: await connectedFor(tenantId, a.id),
     })));
-    res.json({ connectors: actionConnectors(), actions, live_execution: false });
+    // live_actions: what Legion can really do, in a workspace whose administrator opted in (GET /soc/protection).
+    // Everything else in `actions` stays simulation-only: there is no executor for it.
+    res.json({ connectors: actionConnectors(), actions: actions.map((a) => ({ ...a, mode: LIVE_ACTION_IDS.includes(a.action_id) ? "live_if_enabled" as const : a.mode })), live_actions: LIVE_ACTION_IDS });
   });
 
   // --- Audit and observability ------------------------------------------------

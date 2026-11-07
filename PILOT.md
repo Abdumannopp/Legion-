@@ -12,7 +12,7 @@ Evidence for every claim is in `pilot-results/rehearsal.json` (a live rehearsal 
 |---|---|---|
 | `POLICY_ENGINE_MODE` | `shadow` | Existing paths (blocks, alert status, payments) are *also* evaluated by the policy engine and the would-be decision is recorded. It never changes what happens. There is no enforcing value. |
 | `ORCHESTRATOR_AUTO_MODE` | `shadow` | Each new alert queues the alert workflow in shadow: decisions recorded, no approval requests, nothing done. |
-| Action modes | `shadow`, `simulation` only | `live` is refused in the API (422), in the engine, and by a database `CHECK`. There is no code that executes an action. |
+| Action modes | `shadow`, `simulation` only | `live` is refused unless a workspace administrator opted in to hybrid/automatic protection ([PROTECTION.md](PROTECTION.md)); pilot workspaces stay in `manual`, so no action is executed. Only block-address and e-mail-admins have executors. |
 | Autonomy | no policy ⇒ `OBSERVE` | Agents' proposals are recorded only. `ASSIST` (ask a person) may be set by the pilot owner. **`AUTONOMOUS` is not part of this pilot** (§12.3). |
 | Critical actions (R4) | always two other people + a fresh second factor | Enforced in code and by a database `CHECK`; no policy can lower it. |
 | High-risk (R3) by an agent, Legion, or anything model-proposed | always a person's approval | Policy floor. |
@@ -189,7 +189,7 @@ Rows: **Pilot safety** (live actions must be 0; emergency stop; API up; worker r
 
 ### 9.3 Prove the alert path (Gate C)
 1. Stop the backend (`docker compose stop backend`), wait 3 minutes, and confirm a human received **LegionApiDown**; start it again and confirm the *resolved* message.
-2. Prove the page route for the safety alert: temporarily change the rule to `expr: legion_soc_actions_live >= 0` (always true), reload Prometheus, confirm a human received **LegionLiveActionDetected**, then revert the rule. (A real live action cannot be created — the database refuses it — so the test must use the threshold.)
+2. Prove the page route for the safety alert: temporarily change the rule to `expr: legion_soc_actions_live >= 0` (always true), reload Prometheus, confirm a human received **LegionLiveActionDetected**, then revert the rule. (Do not create a real live action for this test — pilot workspaces stay manual — so use the threshold. Note the alert is silenced when a workspace has deliberately opted in.)
 
 ### 9.4 Runbooks
 - **API down:** `docker compose ps`; `docker compose logs --tail 100 backend` (a refusal to start prints the exact reason); `curl -s 127.0.0.1:8000/health`; if the database is down, §11 level B/C. The worker is in the same process.
@@ -262,7 +262,7 @@ Never edit an applied migration (checksum guard) and never "fix" a chain by dele
 12. Approvers: median approval wait < 1 h; ≥ 90 % of reviewed proposals judged "sensible" by the approvers; false-positive proposals recorded as memory.
 13. Alert mail and Wazuh ingestion lossless: events sent = alerts stored (reconcile on 3 sampled days).
 
-**To ask for autonomous actions (separate, explicit approval; not part of this pilot):** criteria 1–13 met; the dashboard has approval and action screens (R-5); the migrator/runtime role split is done (R-3); the live executor design for a *single* low-risk, reversible action (e.g. block an address for ≤ 60 min) is reviewed; connector credentials are scoped to that action; a rollback of that action is rehearsed; and the pilot owner signs.
+**To ask for autonomous actions (separate, explicit approval; not part of this pilot):** criteria 1–13 met; the dashboard has approval and action screens (R-5); the migrator/runtime role split is done (R-3); the live executor for a *single* low-risk, reversible action (block a public address) exists and is described in [PROTECTION.md](PROTECTION.md) but still needs your review, a rehearsed rollback and an independent attack assessment before any pilot workspace opts in; connector credentials are scoped to that action; a rollback of that action is rehearsed; and the pilot owner signs.
 
 ## 13. Risk and limitation register
 
