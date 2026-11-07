@@ -22,6 +22,9 @@ import * as integrations from "./integrations/registry.js";
 import * as connections from "./integrations/connections.js";
 import { ingestFindings } from "./integrations/ingest.js";
 import { wazuhAdapter } from "./integrations/wazuh.js";
+import { genericWebhookAdapter } from "./integrations/generic.js";
+import { cefAdapter } from "./integrations/cef.js";
+import type { PushAdapter } from "./integrations/types.js";
 import { closePool, currentRoleAttributes, inTenant, migrate, query, transaction, withTenant } from "./db/pool.js";
 import { databaseRoleDecision, refusePrivilegedRole } from "./db/provision.js";
 import { SETUP_LOCK_KEY, consumeSetupToken, ensureSetupToken, removeSetupTokenFile, setupBanner } from "./setup-token.js";
@@ -77,19 +80,22 @@ app.use(accessLog(() => config.accessLog));
 app.use(securityHeaders());
 app.use(corsMiddleware());
 // Machine endpoints authenticated by signature; they are not browsers.
-app.use(originGuard(/^\/(security-events\/webhook|billing\/webhook)$/));
+app.use(originGuard(/^\/(security-events\/webhook(\/(generic|cef))?|billing\/webhook)$/));
 // Paddle signs the RAW bytes, so keep a copy before JSON.parse rewrites them.
 // The sensor webhook is parsed by its own route instead (below): its body is
 // kept as raw bytes and only parsed AFTER the signature over those bytes checks
 // out, so an unauthenticated sender never gets its JSON parsed at all.
 export const WEBHOOK_PATH = "/security-events/webhook";
+// The same signed webhook for other formats: free-form JSON (Elastic, Splunk, custom) and Syslog/CEF text.
+export const WEBHOOK_GENERIC_PATH = "/security-events/webhook/generic";
+export const WEBHOOK_CEF_PATH = "/security-events/webhook/cef";
 // The Wazuh manager's pull of its blocklist: signed like the webhook, so raw too.
 export const BLOCKLIST_PATH = "/security-events/blocklist";
 const jsonBody = express.json({
   limit: "256kb",
   verify: (req, _res, buf) => { (req as Request & { rawBody?: Buffer }).rawBody = buf; },
 });
-app.use((req, res, next) => (req.path === WEBHOOK_PATH || req.path === BLOCKLIST_PATH || req.path === payments.PAYMENT_CHECK_PATH ? next() : jsonBody(req, res, next)));
+app.use((req, res, next) => (req.path === WEBHOOK_PATH || req.path === WEBHOOK_GENERIC_PATH || req.path === WEBHOOK_CEF_PATH || req.path === BLOCKLIST_PATH || req.path === payments.PAYMENT_CHECK_PATH ? next() : jsonBody(req, res, next)));
 app.use(express.urlencoded({ extended: false, limit: "32kb" }));
 app.use(cookieParser());
 // Error messages and confirmations in the reader's language (Accept-Language).
@@ -108,7 +114,7 @@ app.use(rejectNul);
  * reason — their callers are authenticated or trivial, and rate limiting them
  * breaks the integration rather than protecting it.
  */
-const RATE_LIMIT_EXEMPT = /^\/(health|security-events\/webhook|billing\/webhook)$/;
+const RATE_LIMIT_EXEMPT = /^\/(health|security-events\/webhook(\/(generic|cef))?|billing\/webhook)$/;
 app.use((req, res, next) => {
   if (RATE_LIMIT_EXEMPT.test(req.path)) return next();
   return apiLimiter(req, res, next);
@@ -2218,12 +2224,18 @@ app.post("/security-events/sync", requireRole("admin"), async (req: AuthedReques
 // eventTime moved to the Wazuh adapter; re-exported for existing callers.
 export { eventTime } from "./integrations/wazuh.js";
 
-app.post(WEBHOOK_PATH,
+/**
+ * One signed ingestion route per format, all with the same gate: the failure gate, raw bytes only, the
+ * credential's HMAC over those bytes, THEN parsing, then the adapter, then the shared ingestion path.
+ * `wazuh` and `generic_webhook` take JSON; `cef` takes text/plain lines.
+ */
+function sensorIngest(adapter: PushAdapter, contentType: "application/json" | "text/plain") {
+  return [
   // Refuses an address that keeps failing BEFORE its body is read.
   webhookFailureGate,
-  // Raw bytes only, JSON content types only; nothing is parsed yet.
-  express.raw({ type: "application/json", limit: config.webhookMaxBodyBytes }),
-  async (req, res) => {
+  // Raw bytes only, one content type per route; nothing is parsed yet.
+  express.raw({ type: contentType, limit: config.webhookMaxBodyBytes }),
+  async (req: Request, res: Response) => {
   // The organisation is whatever the credential belongs to. Nothing the sender
   // types — including the old x-tenant-id header, which is only cross-checked —
   // can choose it. See webhook-auth.ts for the scheme.
@@ -2247,11 +2259,15 @@ app.post(WEBHOOK_PATH,
   // the body parsed. A signed document that is not valid JSON is the sender's
   // bug: 400, no stack trace.
   let body: unknown;
-  try {
-    const parsed: unknown = JSON.parse(rawBody!.toString("utf8"));
-    body = parsed !== null && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return res.status(400).json({ detail: "Invalid request" });
+  if (contentType === "text/plain") {
+    body = rawBody!.toString("utf8");
+  } else {
+    try {
+      const parsed: unknown = JSON.parse(rawBody!.toString("utf8"));
+      body = parsed !== null && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return res.status(400).json({ detail: "Invalid request" });
+    }
   }
 
   // Data residency: this deployment stores data only for its own region's
@@ -2266,16 +2282,21 @@ app.post(WEBHOOK_PATH,
   // commit, and nothing here waits on SMTP or Redis — the outbox worker does
   // that, with retries. If the commit fails the request fails (5xx) and the
   // sensor retries; nothing was stored, so the retry is not a duplicate.
-  const normalized = wazuhAdapter.normalize(body);
+  const normalized = adapter.normalize(body);
   if (normalized.skipped) return res.status(202).json({ status: "skipped" });
   const report = await ingestFindings(tenantId, normalized.source, normalized.findings, { realtime: newAlertFrame });
   // Idempotent by construction: retries from the sensor collapse onto the same
   // primary key instead of creating duplicates.
   const id = report.ingested[0] ?? report.duplicates[0]!;
   if (!report.ingested.length) return res.status(202).json({ status: "skipped", reason: "duplicate", alert_id: id });
-  return res.status(202).json({ status: "ingested", alert_id: id });
+  return res.status(202).json({ status: "ingested", alert_id: id, ...(normalized.findings.length > 1 ? { ingested: report.ingested.length, duplicates: report.duplicates.length } : {}) });
   });
-  });
+  },
+  ];
+}
+app.post(WEBHOOK_PATH, ...sensorIngest(wazuhAdapter, "application/json"));
+app.post(WEBHOOK_GENERIC_PATH, ...sensorIngest(genericWebhookAdapter, "application/json"));
+app.post(WEBHOOK_CEF_PATH, ...sensorIngest(cefAdapter, "text/plain"));
 
 // --- Attack campaigns and automatic response ---------------------------------
 // Campaigns are correlated attacks (campaigns.ts); the blocklist is what this

@@ -164,7 +164,7 @@ export function createAgentLayer(deps: AgentLayerDeps, opts: { withModel: boolea
   const identity = createAgentIdentity({
     pool,
     host,
-    exemptPaths: ["/health", "/security-events/webhook", "/billing/webhook"],
+    exemptPaths: ["/health", "/security-events/webhook", "/security-events/webhook/generic", "/security-events/webhook/cef", "/billing/webhook"],
     skillData: skillData(),
     skillModel: opts.withModel ? skillModel : undefined,
     // Without SMTP, suspension notices stay visible (undeliverable) at

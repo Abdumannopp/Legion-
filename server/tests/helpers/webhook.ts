@@ -35,6 +35,8 @@ export interface SendOptions {
   tenantHeader?: string;
   /** Another signed sensor endpoint (default: the webhook). */
   path?: string;
+  /** Content-Type of the request (default application/json). */
+  contentType?: string;
 }
 
 /** POSTs `body` (a string is sent byte-for-byte) signed with `cred`. */
@@ -44,7 +46,7 @@ export function sendSigned(app: Application, cred: TestCredential, body: unknown
   const nonce = opts.nonce ?? freshNonce();
   const req = request(app)
     .post(opts.path ?? "/security-events/webhook")
-    .set("content-type", "application/json")
+    .set("content-type", opts.contentType ?? "application/json")
     .set("x-legion-key-id", opts.keyId ?? cred.keyId)
     .set("x-legion-timestamp", ts)
     .set("x-legion-nonce", nonce)

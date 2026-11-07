@@ -8,9 +8,12 @@
  * storage, the worker, notifications or tenant isolation.
  */
 import type { Adapter, IntegrationManifest, PullAdapter, PushAdapter } from "./types.js";
+import { cefAdapter } from "./cef.js";
+import { genericWebhookAdapter } from "./generic.js";
 import { wazuhAdapter } from "./wazuh.js";
 
 const adapters = new Map<string, Adapter>();
+const BUILT_IN = new Set(["wazuh", "generic_webhook", "cef"]);
 
 export function register(adapter: Adapter): void {
   if (!/^[a-z][a-z0-9_]{1,40}$/.test(adapter.manifest.kind)) throw new Error(`invalid integration kind: ${adapter.manifest.kind}`);
@@ -18,7 +21,7 @@ export function register(adapter: Adapter): void {
 }
 /** Test hook: remove an adapter registered by a test. */
 export function unregister(kind: string): void {
-  if (kind !== "wazuh") adapters.delete(kind);
+  if (!BUILT_IN.has(kind)) adapters.delete(kind);
 }
 
 export function pushAdapter(kind: string): PushAdapter | null {
@@ -31,6 +34,8 @@ export function pullAdapter(kind: string): PullAdapter | null {
 }
 
 register(wazuhAdapter);
+register(genericWebhookAdapter);
+register(cefAdapter);
 
 /**
  * The roadmap, as contracts. Each is the adapter type it will be, the data it
