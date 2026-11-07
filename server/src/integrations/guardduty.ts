@@ -3,7 +3,7 @@
  *
  * Authentication: an IAM user's access key limited to guardduty:ListDetectors, ListFindings and GetFindings
  * (read only; the policy is in INTEGRATIONS.md). The secret key is sealed per connection. The only hosts
- * reachable are guardduty.<region>.amazonaws.com. Cross-account role assumption (STS) is not built.
+ * reachable are guardduty.<region>.amazonaws.com and sts.amazonaws.com (for the optional cross-account role).
  *
  * Cursor: the newest finding updatedAt (epoch ms). The filter is ">=", the boundary finding repeats and is
  * dropped as a duplicate. A finding is stored once, by its id.
@@ -48,10 +48,34 @@ export function findingFromGuardDuty(f: Obj): Finding | null {
   };
 }
 
-async function call(conn: ConnectionContext, region: string, method: "GET" | "POST", path: string, body: unknown, signal: AbortSignal): Promise<Obj> {
+interface AwsCreds { accessKeyId: string; secretAccessKey: string; sessionToken?: string }
+
+/**
+ * Optional cross-account role: with config.role_arn, the stored key only needs sts:AssumeRole on that one role
+ * (with the external id the customer set in the role's trust policy); GuardDuty is then read with short-lived
+ * credentials (15 minutes). Without role_arn the stored key reads GuardDuty directly.
+ */
+export async function credentialsFor(conn: ConnectionContext, signal: AbortSignal): Promise<AwsCreds> {
+  const base: AwsCreds = { accessKeyId: conn.secrets.access_key_id ?? "", secretAccessKey: conn.secrets.secret_access_key ?? "" };
+  const roleArn = typeof conn.config.role_arn === "string" ? conn.config.role_arn : "";
+  if (!roleArn) return base;
+  const query: Record<string, string> = { Action: "AssumeRole", Version: "2011-06-15", RoleArn: roleArn, RoleSessionName: "legion-guardduty", DurationSeconds: "900" };
+  if (typeof conn.config.external_id === "string" && conn.config.external_id) query.ExternalId = conn.config.external_id;
+  const signed = signV4({ method: "GET", host: "sts.amazonaws.com", path: "/", query, region: "us-east-1", service: "sts", ...base });
+  const qs = Object.entries(query).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
+  const res = await adapterFetch(guarddutyManifest, `https://sts.amazonaws.com/?${qs}`, { method: "GET", signal, timeoutMs: 15_000, maxBytes: 64 * 1024, headers: signed });
+  if (res.status === 429 || res.status >= 500) throw new Error(`AWS STS answered ${res.status}; will retry`);
+  if (res.status !== 200) throw new Error(`AWS STS refused to assume the role (${res.status}); check the role's trust policy and external id`);
+  const pick = (tag: string) => new RegExp(`<${tag}>([^<]{1,2048})</${tag}>`).exec(res.body)?.[1];
+  const accessKeyId = pick("AccessKeyId"), secretAccessKey = pick("SecretAccessKey"), sessionToken = pick("SessionToken");
+  if (!accessKeyId || !secretAccessKey || !sessionToken) throw new Error("AWS STS returned no credentials");
+  return { accessKeyId, secretAccessKey, sessionToken };
+}
+
+async function call(conn: ConnectionContext, creds: AwsCreds, region: string, method: "GET" | "POST", path: string, body: unknown, signal: AbortSignal): Promise<Obj> {
   const host = `guardduty.${region}.amazonaws.com`;
   const payload = body === undefined ? "" : JSON.stringify(body);
-  const signed = signV4({ method, host, path, body: payload, region, service: "guardduty", accessKeyId: conn.secrets.access_key_id ?? "", secretAccessKey: conn.secrets.secret_access_key ?? "" });
+  const signed = signV4({ method, host, path, body: payload, region, service: "guardduty", ...creds });
   const res = await adapterFetch(guarddutyManifest, `https://${host}${path}`, {
     method, signal, timeoutMs: 30_000, maxBytes: 8 * 1024 * 1024, body: payload || undefined,
     headers: { ...signed, ...(payload ? { "content-type": "application/json" } : {}) },
@@ -64,31 +88,36 @@ async function call(conn: ConnectionContext, region: string, method: "GET" | "PO
 
 const guarddutyManifest = {
   kind: "guardduty", displayName: "AWS GuardDuty", vendor: "Amazon Web Services", status: "available" as const, plane: "data" as const, inbound: "pull" as const, outbound: [] as [],
-  egressHosts: ["guardduty.*.amazonaws.com"],
+  egressHosts: ["guardduty.*.amazonaws.com", "sts.amazonaws.com"],
   summary: "GuardDuty findings from the regions you list, polled by update time. Read only.",
-  auth: "IAM access key limited to guardduty:ListDetectors, ListFindings, GetFindings; the secret key is sealed per connection.",
+  auth: "IAM access key limited to guardduty:ListDetectors, ListFindings, GetFindings — or, with role_arn, only to sts:AssumeRole on a read-only role in the customer account (external id). Sealed per connection.",
 };
 
 export const guarddutyAdapter: PullAdapter = {
   manifest: guarddutyManifest,
-  configSchema: z.strictObject({ regions: z.array(z.string().regex(REGION, "An AWS region such as eu-west-1")).min(1).max(5) }),
+  configSchema: z.strictObject({
+    regions: z.array(z.string().regex(REGION, "An AWS region such as eu-west-1")).min(1).max(5),
+    role_arn: z.string().regex(/^arn:aws:iam::\d{12}:role\/[A-Za-z0-9+=,.@_\/-]{1,128}$/, "An IAM role ARN").optional(),
+    external_id: z.string().regex(/^[A-Za-z0-9+=,.@:\/-]{2,1224}$/).optional(),
+  }),
   secretFields: ["access_key_id", "secret_access_key"],
   async poll(conn, cursor, signal) {
     const sinceMs = typeof (cursor as { since?: unknown } | null)?.since === "number" ? (cursor as { since: number }).since : Date.now() - 24 * 3600_000;
     const findings: Finding[] = [];
     let newest = sinceMs;
+    const creds = await credentialsFor(conn, signal);
     for (const region of conn.config.regions as string[]) {
-      const detectors = await call(conn, region, "GET", "/detector", undefined, signal);
+      const detectors = await call(conn, creds, region, "GET", "/detector", undefined, signal);
       for (const detectorId of (Array.isArray(detectors.detectorIds) ? detectors.detectorIds : []).filter((d): d is string => typeof d === "string" && /^[a-z0-9]{1,64}$/.test(d)).slice(0, 5)) {
         let nextToken: string | undefined;
         for (let page = 0; page < 5; page++) {
-          const list = await call(conn, region, "POST", `/detector/${detectorId}/findings`, {
+          const list = await call(conn, creds, region, "POST", `/detector/${detectorId}/findings`, {
             findingCriteria: { criterion: { updatedAt: { greaterThanOrEqual: sinceMs } } },
             sortCriteria: { attributeName: "updatedAt", orderBy: "ASC" }, maxResults: 50, ...(nextToken ? { nextToken } : {}),
           }, signal);
           const ids = (Array.isArray(list.findingIds) ? list.findingIds : []).filter((x): x is string => typeof x === "string").slice(0, 50);
           if (ids.length) {
-            const got = await call(conn, region, "POST", `/detector/${detectorId}/findings/get`, { findingIds: ids }, signal);
+            const got = await call(conn, creds, region, "POST", `/detector/${detectorId}/findings/get`, { findingIds: ids }, signal);
             for (const f of Array.isArray(got.findings) ? got.findings : []) {
               if (!isObj(f)) continue;
               const x = findingFromGuardDuty(f);

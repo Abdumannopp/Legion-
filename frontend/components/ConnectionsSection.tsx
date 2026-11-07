@@ -14,7 +14,7 @@ const KINDS: Kind[] = ["m365", "guardduty", "slack", "jira"];
 // Technical identifiers: they must match the server's schema for each connector.
 const FIELDS: Record<Kind, Field[]> = {
   m365: [{ key: "directory_id", where: "config", type: "text" }, { key: "client_id", where: "config", type: "text" }, { key: "client_secret", where: "secrets", type: "password" }],
-  guardduty: [{ key: "regions", where: "config", type: "regions" }, { key: "access_key_id", where: "secrets", type: "text" }, { key: "secret_access_key", where: "secrets", type: "password" }],
+  guardduty: [{ key: "regions", where: "config", type: "regions" }, { key: "access_key_id", where: "secrets", type: "text" }, { key: "secret_access_key", where: "secrets", type: "password" }, { key: "role_arn", where: "config", type: "text" }, { key: "external_id", where: "config", type: "text" }],
   slack: [{ key: "webhook_url", where: "secrets", type: "password" }, { key: "min_severity", where: "config", type: "severity" }],
   jira: [{ key: "site", where: "config", type: "text" }, { key: "project_key", where: "config", type: "text" }, { key: "email", where: "secrets", type: "text" }, { key: "api_token", where: "secrets", type: "password" }, { key: "min_severity", where: "config", type: "severity" }],
 };

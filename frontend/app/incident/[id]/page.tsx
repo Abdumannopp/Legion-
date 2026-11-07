@@ -1,5 +1,6 @@
 "use client";
 
+import AlertDeliveries from "@/components/AlertDeliveries";
 import AiBadge from "@/components/AiBadge";
 import { useState, useEffect } from "react";
 import { useRouter, useParams } from "next/navigation";
@@ -227,6 +228,8 @@ export default function IncidentDetailsPage() {
           {error != null && (
             <div className="mb-4"><ErrorNotice error={error} /></div>
           )}
+
+          <AlertDeliveries alertId={id} />
 
           <div className="grid md:grid-cols-2 gap-4">
             {/* Left: technical details */}

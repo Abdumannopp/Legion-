@@ -42,7 +42,7 @@ export async function enqueueIntegrationMessages(client: PoolClient, alert: Aler
       type: adapter.manifest.outbound.includes("ticket") ? "ticket" : "notify",
       alertId: alert.id, title: alert.title.slice(0, 300), severity: alert.severity, summary: (alert.summary ?? "").slice(0, 2000),
       sourceIp: alert.source_ip ?? null, target: alert.target ?? null,
-      link: `${config.frontendUrl.replace(/\/$/, "")}/alerts/${encodeURIComponent(alert.id)}`,
+      link: `${config.frontendUrl.replace(/\/$/, "")}/incident/${encodeURIComponent(alert.id)}`,
     };
     const r = await client.query(
       `INSERT INTO notification_outbox (id, tenant_id, kind, dedupe_key, recipient, payload, max_attempts)
@@ -52,6 +52,23 @@ export async function enqueueIntegrationMessages(client: PoolClient, alert: Aler
     queued += r.rowCount ?? 0;
   }
   return queued;
+}
+
+export interface AlertDelivery { connection: string; kind: string; status: string; ticket: { key: string; url: string } | null; last_error: string | null; sent_at: string | null }
+
+/** Where one alert was sent (Slack, Jira…) and, for tickets, which ticket it became. Tenant-scoped. */
+export async function deliveriesForAlert(tenantId: string, alertId: string): Promise<AlertDelivery[]> {
+  const rows = await query<{ name: string | null; kind: string | null; status: string; payload: { ticket?: { key?: unknown; url?: unknown } }; last_error: string | null; sent_at: string | null }>(
+    `SELECT c.name, c.kind, o.status, o.payload, o.last_error, o.sent_at
+       FROM notification_outbox o LEFT JOIN integration_connections c ON c.id::text = o.recipient AND c.tenant_id = o.tenant_id
+      WHERE o.tenant_id = $1 AND o.kind = 'integration_message' AND o.payload->>'alertId' = $2
+      ORDER BY o.created_at`, [tenantId, alertId],
+  );
+  return rows.rows.map((r) => {
+    const t = r.payload?.ticket;
+    const ticket = t && typeof t.key === "string" && typeof t.url === "string" && /^https:\/\/[a-z0-9-]+\.atlassian\.net\/browse\//.test(t.url) ? { key: t.key, url: t.url } : null;
+    return { connection: r.name ?? "(removed)", kind: r.kind ?? "unknown", status: r.status, ticket, last_error: r.last_error, sent_at: r.sent_at ? new Date(r.sent_at).toISOString() : null };
+  });
 }
 
 export type DeliveryOutcome = { ok: true } | { ok: false; detail: string; permanent?: boolean };

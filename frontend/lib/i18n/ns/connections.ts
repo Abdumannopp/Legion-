@@ -24,6 +24,8 @@ export const connections = defineMessages({
       regions: "AWS regions (comma separated)",
       access_key_id: "Access key ID",
       secret_access_key: "Secret access key",
+      role_arn: "Role ARN in the account to read (optional, recommended)",
+      external_id: "External ID of that role (optional)",
       webhook_url: "Incoming webhook URL",
       min_severity: "Send from severity",
       site: "Jira site name (acme for acme.atlassian.net)",
@@ -43,6 +45,11 @@ export const connections = defineMessages({
     remove: "Remove",
     removeConfirm: "Remove this connection? Its saved secrets are deleted.",
     saved: "Connection saved.",
+    deliveries: {
+      title: "Sent to",
+      status: { pending: "Waiting to send", sending: "Sending", sent: "Delivered", dead: "Could not be delivered" },
+      ticket: (key: string) => `Ticket ${key}`,
+    },
     cannotAct: "These connections only read alerts, notify people or open tickets. They never change anything in your systems.",
   },
 });

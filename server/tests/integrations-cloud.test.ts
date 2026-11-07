@@ -158,10 +158,30 @@ describe("GuardDuty", () => {
     respond = () => ({ status: 503 });
     expect(((await guarddutyAdapter.poll(conn, null, new AbortController().signal).catch((x: Error) => x)) as Error).message).toMatch(/will retry/);
   });
+  it("with role_arn: assumes the role through STS (external id) and reads GuardDuty with the short-lived session", async () => {
+    const roleConn = { ...conn, config: { regions: ["eu-west-1"], role_arn: "arn:aws:iam::210987654321:role/LegionGuardDutyRead", external_id: "legion-ext-42" } };
+    const inner = api([gd()]);
+    respond = (c) => c.url.startsWith("https://sts.amazonaws.com/")
+      ? { status: 200, body: "<AssumeRoleResponse><AssumeRoleResult><Credentials><AccessKeyId>ASIATEMP</AccessKeyId><SecretAccessKey>tempsecret</SecretAccessKey><SessionToken>tok123</SessionToken></Credentials></AssumeRoleResult></AssumeRoleResponse>" }
+      : inner(c);
+    const r = await guarddutyAdapter.poll(roleConn, null, new AbortController().signal);
+    expect(r.findings).toHaveLength(1);
+    const sts = new URL(calls[0]!.url);
+    expect(sts.hostname).toBe("sts.amazonaws.com");
+    expect(sts.searchParams.get("RoleArn")).toBe("arn:aws:iam::210987654321:role/LegionGuardDutyRead");
+    expect(sts.searchParams.get("ExternalId")).toBe("legion-ext-42");
+    expect(calls[0]!.headers.authorization).toMatch(/Credential=AKIAEXAMPLE\/\d{8}\/us-east-1\/sts\/aws4_request/);
+    const gdCalls = calls.slice(1);
+    expect(gdCalls.every((c) => /Credential=ASIATEMP\//.test(c.headers.authorization!) && c.headers["x-amz-security-token"] === "tok123")).toBe(true);
+    respond = (c) => c.url.startsWith("https://sts.amazonaws.com/") ? { status: 403, body: "AccessDenied" } : inner(c);
+    expect(((await guarddutyAdapter.poll(roleConn, null, new AbortController().signal).catch((x: Error) => x)) as Error).message).toMatch(/trust policy and external id/);
+  });
   it("rejects a region that is not a region (no host injection) and an empty list", async () => {
     const mk = (regions: unknown) => request(app).post("/integrations").set(...bearer(adminA)).send({ kind: "guardduty", name: "AWS", config: { regions }, secrets: { access_key_id: "AKIAEXAMPLE", secret_access_key: "x".repeat(30) } });
     expect((await mk(["eu-west-1.evil.com"])).status).toBe(400);
     expect((await mk([])).status).toBe(400);
     expect((await mk(["eu-west-1", "us-east-2"])).status).toBe(201);
+    const bad = await request(app).post("/integrations").set(...bearer(adminA)).send({ kind: "guardduty", name: "AWS", config: { regions: ["eu-west-1"], role_arn: "arn:aws:iam::1:role/x\nHost: evil" }, secrets: { access_key_id: "AKIAEXAMPLE", secret_access_key: "x".repeat(30) } });
+    expect(bad.status).toBe(400);
   });
 });

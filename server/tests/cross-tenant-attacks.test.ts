@@ -545,6 +545,7 @@ describe("route coverage", () => {
   /** Every route with a path parameter, and where its cross-tenant attack lives. */
   const COVERED: Record<string, string> = {
     "GET /alerts/:id": "tenant A accessing tenant B's alerts",
+    "GET /alerts/:id/deliveries": "tenant A accessing tenant B's alerts (also integrations-outbound.test.ts: B gets 404)",
     "PATCH /alerts/:id/status": "tenant A accessing tenant B's alerts",
     "POST /alerts/:id/explain": "tenant A accessing tenant B's alerts / AI context",
     "POST /users/:id/resend-invite": "tenant A accessing tenant B's users",

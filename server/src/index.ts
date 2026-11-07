@@ -24,6 +24,7 @@ import { ingestFindings } from "./integrations/ingest.js";
 import { wazuhAdapter } from "./integrations/wazuh.js";
 import { genericWebhookAdapter } from "./integrations/generic.js";
 import { cefAdapter } from "./integrations/cef.js";
+import { deliveriesForAlert } from "./integration-notify.js";
 import type { PushAdapter } from "./integrations/types.js";
 import { closePool, currentRoleAttributes, inTenant, migrate, query, transaction, withTenant } from "./db/pool.js";
 import { databaseRoleDecision, refusePrivilegedRole } from "./db/provision.js";
@@ -1448,6 +1449,12 @@ app.post("/alerts", requireRole("analyst"), async (req: AuthedRequest, res) => {
 app.get("/alerts/:id", auth, async (req: AuthedRequest, res) => {
   const alert = await store.getAlert(req.user!.tenant_id, String(req.params.id));
   return alert ? res.json(outputAlert(alert)) : res.status(404).json({ detail: "Alert not found" });
+});
+
+app.get("/alerts/:id/deliveries", auth, async (req: AuthedRequest, res) => {
+  const alert = await store.getAlert(req.user!.tenant_id, String(req.params.id));
+  if (!alert) return res.status(404).json({ detail: "Alert not found" });
+  res.json({ deliveries: await deliveriesForAlert(req.user!.tenant_id, alert.id) });
 });
 
 app.patch("/alerts/:id/status", requireRole("analyst"), async (req: AuthedRequest, res) => {

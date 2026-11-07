@@ -33,6 +33,7 @@ interface Fixture {
 const row = (sql: string, params: unknown[]) => async () => (await query(sql, params)).rows;
 
 const FIXTURES: Record<string, Fixture> = {
+  "GET /alerts/:id/deliveries": { make: async () => ({ params: { id: ALERT }, snapshot: row("SELECT count(*)::int AS n FROM notification_outbox WHERE tenant_id = $1", [tA]) }) },
   "GET /alerts/:id": { make: async () => ({ params: { id: ALERT }, snapshot: row("SELECT status FROM alerts WHERE tenant_id = $1 AND id = $2", [tA, ALERT]) }) },
   "PATCH /alerts/:id/status": { make: async () => ({ params: { id: ALERT }, body: { status: "resolved" }, snapshot: row("SELECT status, resolved_at FROM alerts WHERE tenant_id = $1 AND id = $2", [tA, ALERT]) }) },
   "POST /alerts/:id/explain": { make: async () => ({ params: { id: ALERT }, snapshot: row("SELECT ai_explanation FROM alerts WHERE tenant_id = $1 AND id = $2", [tA, ALERT]) }) },

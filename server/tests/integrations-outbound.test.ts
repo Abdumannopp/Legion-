@@ -199,6 +199,20 @@ describe("Jira tickets", () => {
     expect(JSON.parse(post.body).fields.labels).toContain("severity-high");
     expect((await outbox())[0]).toMatchObject({ status: "sent", payload: { ticket: { key: "SEC-8", url: "https://acme.atlassian.net/browse/SEC-8" } } });
   });
+  it("the alert page shows which ticket an alert became; another workspace gets 404", async () => {
+    await create(adminA, jiraBody);
+    respond = jiraRespond({ exists: false, created: 0 });
+    await ingestFindings(tA, "wazuh", [finding("j9")]);
+    await deliverDue({ kind: "integration_message" });
+    const alertId = (await query<{ id: string }>("SELECT id FROM alerts WHERE tenant_id = $1", [tA])).rows[0]!.id;
+    const r = await request(app).get(`/alerts/${alertId}/deliveries`).set(...bearer(analystA));
+    expect(r.status).toBe(200);
+    expect(r.body.deliveries).toEqual([expect.objectContaining({ connection: "SEC board", kind: "jira", status: "sent", ticket: { key: "SEC-8", url: "https://acme.atlassian.net/browse/SEC-8" } })]);
+    expect(JSON.stringify(r.body)).not.toContain("jira-token");
+    expect((await request(app).get(`/alerts/${alertId}/deliveries`).set(...bearer(adminB))).status).toBe(404);
+    // the message links back to the real dashboard route
+    expect(JSON.parse(calls.find((c) => c.method === "POST")!.body).fields.description.content.at(-1).content[0].text).toMatch(/\/incident\//);
+  });
   it("a retry finds the existing ticket instead of creating a second one", async () => {
     await create(adminA, jiraBody);
     const state = { exists: true, created: 0 }; respond = jiraRespond(state);

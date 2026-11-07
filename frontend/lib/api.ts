@@ -913,6 +913,10 @@ export interface ConnectionInfo {
   id: string; kind: string; name: string; status: "active" | "paused" | "error" | "disabled";
   config: Record<string, unknown>; has_secrets: boolean; last_success_at: string | null; last_error: string | null; failures: number; created_at: string;
 }
+export interface AlertDelivery { connection: string; kind: string; status: "pending" | "sending" | "sent" | "dead"; ticket: { key: string; url: string } | null; last_error: string | null; sent_at: string | null }
+export function getAlertDeliveries(id: string): Promise<{ deliveries: AlertDelivery[] }> {
+  return request(`/alerts/${encodeURIComponent(id)}/deliveries`);
+}
 export function listConnections(): Promise<{ connections: ConnectionInfo[] }> {
   return request("/integrations");
 }
