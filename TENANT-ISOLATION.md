@@ -75,3 +75,6 @@ and which tests prove it. Audit of 2026-09-29.
   - a credential revoke without a tenant check
 
   A newly planted unscoped query fails the static guard.
+
+
+**2026-11-08 (audit A-3):** `notification_outbox` and `integration_connections` are now under row-level security too (migration 0014; 16 tables). Background workers reach other workspaces' due work only through bounded `SECURITY DEFINER` functions and then act on each row inside that row's workspace.

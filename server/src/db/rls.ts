@@ -27,6 +27,8 @@ export const RLS_TABLES = [
   "policy_documents", "policy_active", "policy_decisions",
   "approval_requests", "approval_decisions", "action_requests", "action_events",
   "soc_controls", "workflow_runs", "learning_signals", "soc_audit_events",
+  // Audit A-3 (migration 0014): reached by workers only through bounded SECURITY DEFINER functions.
+  "notification_outbox", "integration_connections",
 ] as const;
 
 // Also a quoted name ("alerts"), as statements built from a table list write it.

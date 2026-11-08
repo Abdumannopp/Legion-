@@ -39,6 +39,7 @@ import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { config } from "./config.js";
 import { query, transaction } from "./db/pool.js";
+import { withTenant } from "./db/rls.js";
 import { alertEmail, mailEnabled, sendMail, type MailResult } from "./mailer.js";
 import { isLocale } from "./i18n.js";
 import { publishOrThrow } from "./realtime.js";
@@ -201,15 +202,8 @@ interface OutboxRow {
  * max_attempts — and if the message itself kills the process, loop forever.
  */
 async function deadLetterAbandoned(kind: JobKind | null): Promise<number> {
-  const res = await query<{ id: string }>(
-    `UPDATE notification_outbox
-        SET status = 'dead', locked_until = NULL,
-            last_error = 'worker stopped during the final attempt; outcome unknown'
-      WHERE status = 'sending' AND locked_until < now() AND attempts >= max_attempts
-        AND ($1::text IS NULL OR kind = $1)
-      RETURNING id`,
-    [kind]
-  );
+  // Every workspace's rows: through the bounded owner function (migration 0014), not a direct statement.
+  const res = await query<{ id: string }>("SELECT id FROM legion_outbox_dead_abandoned($1) AS id", [kind]);
   for (const r of res.rows) console.error(`Legion: notification ${r.id} dead-lettered (worker stopped during final attempt)`);
   return res.rowCount ?? 0;
 }
@@ -217,36 +211,25 @@ async function deadLetterAbandoned(kind: JobKind | null): Promise<number> {
 /** Claims due rows: pending ones whose time has come, and 'sending' ones
  *  whose worker died (lease expired) and that still have attempts left. */
 async function claim(limit: number, kind: JobKind | null): Promise<OutboxRow[]> {
-  const res = await query<OutboxRow>(
-    `UPDATE notification_outbox SET status = 'sending', attempts = attempts + 1,
-            locked_until = now() + make_interval(secs => $2)
-      WHERE id IN (
-        SELECT id FROM notification_outbox
-         WHERE ((status = 'pending' AND next_attempt_at <= now())
-            OR (status = 'sending' AND locked_until < now() AND attempts < max_attempts))
-           AND ($3::text IS NULL OR kind = $3)
-         ORDER BY next_attempt_at
-         LIMIT $1
-         FOR UPDATE SKIP LOCKED)
-      RETURNING id, tenant_id, kind, recipient, payload, attempts, max_attempts`,
-    [limit, LEASE_SECONDS, kind]
-  );
+  // Due rows of every workspace, through the bounded owner function (migration 0014): row-level security
+  // keeps this table per workspace, and only this function (and the ones below) may look across.
+  const res = await query<OutboxRow>("SELECT * FROM legion_outbox_claim($1, $2, $3)", [limit, LEASE_SECONDS, kind]);
   return res.rows;
 }
 
 /** Re-takes the lease right before an attempt. False: another worker owns it. */
 async function renewLease(row: OutboxRow): Promise<boolean> {
-  const res = await query(
+  const res = await withTenant(row.tenant_id, () => query(
     `UPDATE notification_outbox SET locked_until = now() + make_interval(secs => $3)
       WHERE id = $1 AND status = 'sending' AND attempts = $2`,
     [row.id, row.attempts, LEASE_SECONDS]
-  );
+  ));
   return (res.rowCount ?? 0) === 1;
 }
 
 /** Records an outcome only if this worker still holds the row (fencing). */
 async function complete(row: OutboxRow, sql: string, params: unknown[]): Promise<boolean> {
-  const res = await query(`${sql} WHERE id = $1 AND status = 'sending' AND attempts = $2`, [row.id, row.attempts, ...params]);
+  const res = await withTenant(row.tenant_id, () => query(`${sql} WHERE id = $1 AND status = 'sending' AND attempts = $2`, [row.id, row.attempts, ...params]));
   if ((res.rowCount ?? 0) === 1) return true;
   console.warn(`Legion: notification ${row.id} attempt ${row.attempts} finished after losing its lease; outcome not recorded`);
   return false;
@@ -316,16 +299,16 @@ export function heldOutcomes(): { unrecorded: number; untouched: number } {
 
 async function settleHeld(report: DeliveryReport): Promise<void> {
   for (const [id, h] of [...unrecorded]) {
-    const res = await query(`${h.sql} WHERE id = $1 AND status = 'sending' AND attempts = $2`, [h.row.id, h.row.attempts, ...h.params]);
+    const res = await withTenant(h.row.tenant_id, () => query(`${h.sql} WHERE id = $1 AND status = 'sending' AND attempts = $2`, [h.row.id, h.row.attempts, ...h.params]));
     unrecorded.delete(id);
     if ((res.rowCount ?? 0) === 1 && h.counts) report[h.counts]++;
   }
   for (const [id, row] of [...untouched]) {
-    await query(
+    await withTenant(row.tenant_id, () => query(
       `UPDATE notification_outbox SET status = 'pending', attempts = attempts - 1, locked_until = NULL, next_attempt_at = now()
         WHERE id = $1 AND status = 'sending' AND attempts = $2`,
       [row.id, row.attempts],
-    );
+    ));
     untouched.delete(id);
   }
 }
@@ -355,7 +338,8 @@ export async function deliverDue(opts: DeliverOptions = {}): Promise<DeliveryRep
 
     let outcome: Outcome;
     try {
-      outcome = await withTimeout(attempt(row, send, publish), opts.attemptTimeoutMs ?? ATTEMPT_TIMEOUT_MS);
+      // The attempt runs in the row's own workspace (it may read that workspace's connection), whoever kicked the worker.
+      outcome = await withTimeout(withTenant(row.tenant_id, () => attempt(row, send, publish)), opts.attemptTimeoutMs ?? ATTEMPT_TIMEOUT_MS);
     } catch (error) {
       outcome = { ok: false, detail: error instanceof Error ? error.message : String(error) };
     }
@@ -405,7 +389,9 @@ export interface QueueMetrics {
 
 /** Queue health, for one organisation or (no tenantId) the whole platform. */
 export async function queueMetrics(tenantId?: string): Promise<QueueMetrics & { by_kind: Record<string, QueueMetrics> }> {
-  const res = await query<{ kind: string; pending: string; retrying: string; in_flight: string; dead: string; oldest: string | null }>(
+  type MRow = { kind: string; pending: string; retrying: string; in_flight: string; dead: string; oldest: string | null };
+  // The whole platform: counts only, through the owner function (migration 0014). One workspace: its own rows.
+  const res = tenantId === undefined ? await query<MRow>("SELECT * FROM legion_outbox_metrics()") : await withTenant(tenantId, () => query<MRow>(
     `SELECT kind,
             count(*) FILTER (WHERE status = 'pending')                  AS pending,
             count(*) FILTER (WHERE status = 'pending' AND attempts > 0) AS retrying,
@@ -417,7 +403,7 @@ export async function queueMetrics(tenantId?: string): Promise<QueueMetrics & { 
         AND ($1::uuid IS NULL OR tenant_id = $1)
       GROUP BY kind`,
     [tenantId ?? null]
-  );
+  ));
   const empty = (): QueueMetrics => ({ pending: 0, retrying: 0, in_flight: 0, dead: 0, oldest_pending_age_seconds: null });
   const total = empty();
   const by_kind: Record<string, QueueMetrics> = { alert_email: empty(), realtime_alert: empty(), protection_email: empty(), integration_message: empty() };
@@ -437,10 +423,7 @@ export async function queueMetrics(tenantId?: string): Promise<QueueMetrics & { 
 
 /** Delivered realtime frames have no value once pushed; keep a day for debugging. */
 export async function pruneDeliveredRealtime(): Promise<number> {
-  const res = await query(
-    "DELETE FROM notification_outbox WHERE kind = 'realtime_alert' AND status = 'sent' AND sent_at < now() - interval '1 day'"
-  );
-  return res.rowCount ?? 0;
+  return (await query<{ n: number }>("SELECT legion_outbox_prune_realtime() AS n")).rows[0]?.n ?? 0;
 }
 
 /**
@@ -451,11 +434,7 @@ export async function pruneDeliveredRealtime(): Promise<number> {
  */
 export async function pruneDeliveredEmails(days = config.notifyRetentionDays): Promise<number> {
   if (!(days > 0)) return 0;
-  const res = await query(
-    "DELETE FROM notification_outbox WHERE kind IN ('alert_email', 'protection_email', 'integration_message') AND status = 'sent' AND sent_at < now() - make_interval(days => $1)",
-    [Math.floor(days)],
-  );
-  return res.rowCount ?? 0;
+  return (await query<{ n: number }>("SELECT legion_outbox_prune_delivered($1) AS n", [Math.floor(days)])).rows[0]?.n ?? 0;
 }
 
 /**

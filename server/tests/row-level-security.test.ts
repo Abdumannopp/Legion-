@@ -74,6 +74,43 @@ afterAll(async () => {
   await closePool();
 });
 
+describe("audit A-3: the notification queue and integration connections are per workspace in the database too", () => {
+  const outboxRow = (t: string, id: string) => asApp(t, (c) => c.query(
+    "INSERT INTO notification_outbox (id, tenant_id, kind, dedupe_key, recipient, payload, max_attempts) VALUES ($1, $2, 'alert_email', $3, 'x@y.io', '{\"subject\":\"s\",\"text\":\"t\"}', 3)", [randomUUID(), t, id]));
+  const connRow = (t: string, kind: string) => asApp(t, (c) => c.query(
+    "INSERT INTO integration_connections (id, tenant_id, kind, name, config, secrets_enc, next_poll_at) VALUES ($1, $2, $3, 'n', '{}', 'sealed', now() - interval '1 minute') RETURNING id", [randomUUID(), t, kind]).then((r) => r.rows[0].id as string));
+
+  it("an unscoped read or write of either table sees only the declared workspace; inserting for another is refused", async () => {
+    await outboxRow(A, "oa1"); await outboxRow(B, "ob1");
+    await connRow(A, "m365"); await connRow(B, "m365");
+    for (const table of ["notification_outbox", "integration_connections"]) {
+      expect(await asApp(A, (c) => n(c, `SELECT count(*)::int AS n FROM ${table}`)), table).toBe(1);
+      expect(await asApp(A, (c) => n(c, `SELECT count(*)::int AS n FROM ${table} WHERE tenant_id = $1`, [B])), table).toBe(0);
+      expect(await asApp(null, (c) => n(c, `SELECT count(*)::int AS n FROM ${table}`)), table).toBe(0); // no workspace: nothing
+      expect((await asApp(A, (c) => c.query(`UPDATE ${table} SET created_at = created_at`))).rowCount, table).toBe(1);
+    }
+    await asApp(A, async (c) => {
+      await expect(c.query("INSERT INTO notification_outbox (id, tenant_id, kind, dedupe_key, recipient, payload, max_attempts) VALUES ($1, $2, 'alert_email', 'x', 'r', '{}', 3)", [randomUUID(), B])).rejects.toThrow(/row-level security/);
+      await expect(c.query("INSERT INTO integration_connections (id, tenant_id, kind, name) VALUES ($1, $2, 'slack', 'n')", [randomUUID(), B])).rejects.toThrow(/row-level security/);
+    });
+  });
+
+  it("the workers' bounded functions see every workspace's due work, and only what they are for", async () => {
+    // claim: due rows of both workspaces, from a session that declares no workspace
+    const claimed = await asApp(null, (c) => c.query("SELECT tenant_id FROM legion_outbox_claim(50, 120, NULL)"));
+    expect(new Set(claimed.rows.map((r) => r.tenant_id))).toEqual(new Set([A, B]));
+    const conns = await asApp(null, (c) => c.query("SELECT tenant_id FROM legion_connections_claim(10, 60, 'test', 'eu', ARRAY['m365'])"));
+    expect(new Set(conns.rows.map((r) => r.tenant_id))).toEqual(new Set([A, B]));
+    // GitHub lookup returns only an active github connection with that exact id
+    const gh = await connRow(B, "github");
+    expect((await asApp(null, (c) => c.query("SELECT tenant_id FROM legion_github_connection($1)", [gh]))).rows).toEqual([{ tenant_id: B }]);
+    expect((await asApp(null, (c) => c.query("SELECT * FROM legion_github_connection($1)", [randomUUID()]))).rows).toEqual([]);
+    // metrics: counts only
+    const m = await asApp(null, (c) => c.query("SELECT * FROM legion_outbox_metrics()"));
+    expect(Object.keys(m.rows[0] ?? {}).sort()).toEqual(["dead", "in_flight", "kind", "oldest", "pending", "retrying"]);
+  });
+});
+
 describe("a query that forgets tenant_id is still confined to the declared workspace", () => {
   it("reads: only the declared workspace's rows, whatever the WHERE clause says", async () => {
     expect(await asApp(A, (c) => n(c, "SELECT count(*)::int AS n FROM alerts"))).toBe(2);
@@ -143,7 +180,7 @@ describe("fail closed, and nothing changes when it is off", () => {
          FROM pg_class c JOIN pg_namespace s ON s.oid = c.relnamespace WHERE s.nspname = 'public' AND c.relrowsecurity ORDER BY c.relname`))).rows;
     expect(rows.map((r) => r.relname).sort()).toEqual([...RLS_TABLES].sort());
     expect(rows.every((r) => r.has_policy)).toBe(true);
-    const migration = readFileSync(join(__dirname, "..", "src", "db", "migrations", "0009_row_level_security.sql"), "utf8");
+    const migration = ["0009_row_level_security.sql", "0014_rls_outbox_connections.sql"].map((f) => readFileSync(join(__dirname, "..", "src", "db", "migrations", f), "utf8")).join("\n");
     for (const t of RLS_TABLES) expect(migration).toContain(`'${t}'`);
   });
 

@@ -16,6 +16,7 @@ import { query, queryAll, queryOne } from "../db/pool.js";
 import * as box from "../secret-box.js";
 import type { Alert } from "../types.js";
 import { ingestFindings } from "./ingest.js";
+import { withTenant } from "../db/rls.js";
 import { connectedPushAdapter, outboundAdapter, pullAdapter, pullKinds } from "./registry.js";
 
 export interface ConnectionView {
@@ -94,8 +95,8 @@ export async function setStatus(tenantId: string, id: string, status: "active" |
 
 /** The webhook secret and workspace of an active GitHub connection, or null. */
 export async function githubSecret(id: string): Promise<{ id: string; tenantId: string; secret: string } | null> {
-  const row = await queryOne<{ id: string; tenant_id: string; secrets_enc: string | null }>(
-    "SELECT id, tenant_id, secrets_enc FROM integration_connections WHERE id = $1 AND kind = 'github' AND status = 'active'", [id]);
+  // Before the signature is checked the workspace is unknown: the bounded owner function (migration 0014) returns this one row.
+  const row = await queryOne<{ id: string; tenant_id: string; secrets_enc: string | null }>("SELECT * FROM legion_github_connection($1)", [id]);
   if (!row?.secrets_enc) return null;
   const opened = box.open(row.secrets_enc, "integration-secret", sealContext(row.id, row.tenant_id));
   if (opened === null) return null;
@@ -118,21 +119,14 @@ export interface PollReport { claimed: number; succeeded: number; failed: number
 export async function runDuePolls(opts: { limit?: number; leaseSeconds?: number; timeoutMs?: number; realtime?: (a: Alert) => unknown; owner?: string } = {}): Promise<PollReport> {
   const owner = opts.owner ?? INSTANCE;
   const report: PollReport = { claimed: 0, succeeded: 0, failed: 0, ingested: 0, duplicates: 0 };
+  // Due connections of every workspace, through the bounded owner function (migration 0014).
   const claimed = await queryAll(
-    `UPDATE integration_connections SET lease_until = now() + make_interval(secs => $2), lease_owner = $3
-      WHERE id IN (
-        SELECT c.id FROM integration_connections c JOIN tenants t ON t.id = c.tenant_id
-         WHERE c.status = 'active' AND c.next_poll_at <= now() AND (c.lease_until IS NULL OR c.lease_until < now())
-           -- Data residency: only workspaces this deployment serves.
-           AND COALESCE(t.region, $4) = $4
-           -- Only pull connections are polled (outbound ones receive alerts through the outbox).
-           AND c.kind = ANY($5::text[])
-         ORDER BY c.next_poll_at LIMIT $1 FOR UPDATE OF c SKIP LOCKED)
-      RETURNING *`,
+    "SELECT * FROM legion_connections_claim($1, $2, $3, $4, $5::text[])",
     [opts.limit ?? 10, opts.leaseSeconds ?? 300, owner, config.region, pullKinds()],
   );
+
   report.claimed = claimed.length;
-  for (const c of claimed) {
+  for (const c of claimed) await withTenant(c.tenant_id, async () => {
     const adapter = pullAdapter(c.kind);
     try {
       if (!adapter) throw new Error("integration no longer available");
@@ -171,7 +165,7 @@ export async function runDuePolls(opts: { limit?: number; leaseSeconds?: number;
         [c.id, owner, message, FAILURES_BEFORE_ERROR],
       ).catch(() => { /* the lease lapses; the next claim retries */ });
     }
-  }
+  });
   return report;
 }
 
