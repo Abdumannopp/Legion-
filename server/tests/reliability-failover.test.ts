@@ -232,7 +232,9 @@ describe.skipIf(!HAS_PYTHON)("application crash (SIGKILL) and restart", () => {
 
     smtp.mode = "up";
     const b = await api();                                 // a new process picks up where the old one died
-    await until(async () => (await jobs("alert_email")).sent === 5, 30_000, "emails delivered after restart");
+    // A shared CI runner can be slow to start the second process and to run its first delivery passes (one run
+    // timed out at 30 s while the same commit passed in another run); the requirements below are unchanged.
+    await until(async () => (await jobs("alert_email")).sent === 5, 60_000, "emails delivered after restart");
     expect(smtp.accepted).toHaveLength(5);
     expect(dupes(smtp.accepted)).toEqual([]);
     expect(await alertIds()).toHaveLength(5);
