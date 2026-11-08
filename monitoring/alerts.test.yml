@@ -20,8 +20,12 @@ tests:
       - { series: 'legion_soc_actions_stuck_running', values: '0x40' }
       - { series: 'legion_soc_jobs_expired_leases', values: '0x40' }
       - { series: 'legion_outbox_dead', values: '0x40' }
+      - { series: 'legion_integration_poll_lag_seconds', values: '0x40' }
+      - { series: 'legion_integration_connections_error', values: '0x40' }
       - { series: 'legion_database_size_bytes', values: '1000000000x40' }
     alert_rule_test:
+      - { eval_time: 8m, alertname: LegionIntegrationPollsBehind, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionIntegrationStopped, exp_alerts: [] }
       - { eval_time: 8m, alertname: LegionApiDown, exp_alerts: [] }
       - { eval_time: 8m, alertname: LegionRestarted, exp_alerts: [] }
       - { eval_time: 8m, alertname: LegionLiveActionDetected, exp_alerts: [] }
@@ -170,3 +174,21 @@ tests:
       - { series: 'legion_http_requests_total{class="5xx"}', values: '0+1x30' }
     alert_rule_test:
       - { eval_time: 25m, alertname: LegionHighErrorRate, exp_alerts: [] }
+
+  - name: polls falling behind, and a stopped connection, are reported
+    interval: 1m
+    input_series:
+      - { series: 'legion_integration_poll_lag_seconds', values: '0 0 2000x30' }
+      - { series: 'legion_integration_connections_error', values: '0 0 1x60' }
+    alert_rule_test:
+      - { eval_time: 5m, alertname: LegionIntegrationPollsBehind, exp_alerts: [] }   # not yet 10 minutes over the line
+      - eval_time: 20m
+        alertname: LegionIntegrationPollsBehind
+        exp_alerts:
+          - exp_labels: { severity: ticket }
+            exp_annotations: { summary: "A pull integration (Defender XDR, Azure, GCP, GuardDuty, Okta) has waited over 15 minutes to be polled. Raise INTEGRATION_POLL_CONCURRENCY or add an instance." }
+      - eval_time: 40m
+        alertname: LegionIntegrationStopped
+        exp_alerts:
+          - exp_labels: { severity: ticket }
+            exp_annotations: { summary: "An integration connection stopped after repeated errors; an administrator must check its credentials and resume it." }

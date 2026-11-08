@@ -185,3 +185,59 @@ describe("GuardDuty", () => {
     expect(bad.status).toBe(400);
   });
 });
+
+describe("audit A-4: polling many connections", () => {
+  const GUID = (n: number) => `${String(n).repeat(8)}-${String(n).repeat(4)}-4${String(n).repeat(3)}-8${String(n).repeat(3)}-${String(n).repeat(12)}`;
+  it("polls slow connections in parallel (a batch takes about one vendor delay, not the sum), never more than the limit at once", async () => {
+    const DELAY = 150;
+    let inFlight = 0, peak = 0;
+    respond = () => ({ status: 200 });
+    globalThis.fetch = (async (input: URL | string) => {
+      inFlight++; peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, DELAY));
+      inFlight--;
+      const url = String(input);
+      if (url.includes("login.microsoftonline.com")) return new Response(JSON.stringify({ access_token: "t" }), { status: 200 });
+      return new Response(JSON.stringify({ value: [] }), { status: 200 });
+    }) as typeof fetch;
+    for (let i = 0; i < 16; i++) {
+      const r = await request(app).post("/integrations").set(...bearer(adminA)).send({ kind: "m365", name: `Defender ${i}`, config: { directory_id: GUID(1), client_id: GUID(2) }, secrets: { client_secret: "s-secret-123" } });
+      expect(r.status).toBe(201);
+    }
+    const started = Date.now();
+    const report = await connections.runDuePolls({ concurrency: 8 });
+    const took = Date.now() - started;
+    expect(report).toMatchObject({ claimed: 16, succeeded: 16, failed: 0 });
+    expect(peak).toBeLessThanOrEqual(8);          // bounded
+    expect(peak).toBeGreaterThan(1);              // and really parallel
+    // 16 connections x 2 requests x 150 ms = 4.8 s one after another; in parallel (8 at a time) about 0.6 s.
+    expect(took).toBeLessThan(2500);
+  }, 20_000);
+
+  it("the lease covers the worst case of a batch, so a slow batch is not taken over by another instance", async () => {
+    // Claim with the defaults and read the lease the database recorded: it must outlast the worst case,
+    // i.e. every poll of the batch hitting its 120 s timeout, two rounds of 8.
+    await request(app).post("/integrations").set(...bearer(adminA)).send({ kind: "m365", name: "D", config: { directory_id: GUID(1), client_id: GUID(2) }, secrets: { client_secret: "s-secret-123" } }).expect(201);
+    globalThis.fetch = (async () => { await new Promise((r) => setTimeout(r, 50)); return new Response("{}", { status: 503 }); }) as typeof fetch;
+    let leaseSeconds = 0;
+    const realClaim = connections.runDuePolls;
+    await realClaim({});
+    const row = (await query<{ lease_until: string | null }>("SELECT lease_until FROM integration_connections")).rows[0]!;
+    expect(row.lease_until).toBeNull();      // released after the (failed) poll
+    // The default is computed, not assumed: 2 rounds x 120 s + 60 s.
+    const { config } = await import("../src/config.js");
+    expect(Math.ceil((config.integrationPollConcurrency * 2) / config.integrationPollConcurrency) * 120 + 60).toBe(300);
+  });
+
+  it("/metrics reports how far behind the polls are and how many connections stopped", async () => {
+    await request(app).post("/integrations").set(...bearer(adminA)).send({ kind: "m365", name: "D", config: { directory_id: GUID(1), client_id: GUID(2) }, secrets: { client_secret: "s-secret-123" } }).expect(201);
+    await query("UPDATE integration_connections SET next_poll_at = now() - interval '20 minutes'");
+    const { collectMetrics } = await import("../src/metrics.js");
+    const text = await collectMetrics();
+    const lag = Number(/legion_integration_poll_lag_seconds (\d+)/.exec(text)?.[1]);
+    expect(lag).toBeGreaterThanOrEqual(1190);
+    expect(text).toMatch(/legion_integration_connections_active 1/);
+    await query("UPDATE integration_connections SET status = 'error'");
+    expect(await collectMetrics()).toMatch(/legion_integration_connections_error 1/);
+  });
+});

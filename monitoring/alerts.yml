@@ -177,6 +177,20 @@ groups:
         annotations:
           summary: The oldest undelivered notification is over 15 minutes old.
 
+      - alert: LegionIntegrationPollsBehind
+        expr: legion_integration_poll_lag_seconds > 900
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: A pull integration (Defender XDR, Azure, GCP, GuardDuty, Okta) has waited over 15 minutes to be polled. Raise INTEGRATION_POLL_CONCURRENCY or add an instance.
+
+      - alert: LegionIntegrationStopped
+        expr: legion_integration_connections_error > 0
+        for: 30m
+        labels: { severity: ticket }
+        annotations:
+          summary: An integration connection stopped after repeated errors; an administrator must check its credentials and resume it.
+
       - alert: LegionAiCircuitOpen
         expr: legion_ai_circuit_open == 1
         for: 15m

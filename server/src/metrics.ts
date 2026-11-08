@@ -13,6 +13,7 @@
 import { pool, query } from "./db/pool.js";
 import { aiCircuit } from "./ai.js";
 import { queueMetrics, workerStatus } from "./outbox.js";
+import { pullKinds } from "./integrations/registry.js";
 import { RUNNING_STALE_SECONDS } from "./actions/engine.js";
 import { runtimeHealth } from "./runtime/worker.js";
 import { auditKeyring, currentAuditKeyId } from "./audit/events.js";
@@ -79,6 +80,10 @@ export async function collectMetrics(): Promise<string> {
   // Counted from the tenants table itself (no workspace data, no RLS on it): how many opted in, with the notice accepted.
   const protectionActive = Number((await query<{ n: number }>("SELECT count(*) FILTER (WHERE protection_mode <> 'manual' AND protection_ack_at IS NOT NULL)::int AS n FROM tenants")).rows[0]?.n ?? 0);
   const outbox = await queueMetrics();
+  // Audit A-4: integration polling health (counts and one age; the owner function, because the table is under RLS).
+  const lagRows = (await query<{ status: string; n: string; overdue_seconds: string }>("SELECT * FROM legion_integration_lag($1::text[])", [pullKinds()])).rows;
+  const connCount = (s: string) => Number(lagRows.find((r) => r.status === s)?.n ?? 0);
+  const pollLag = Number(lagRows.find((r) => r.status === "active")?.overdue_seconds ?? 0);
   const rt = runtimeHealth();
   const ob = workerStatus();
 
@@ -111,6 +116,10 @@ export async function collectMetrics(): Promise<string> {
     g("legion_soc_audit_key_mismatch_workspaces", "Workspaces whose audit chain was signed with a different key than this process has (SOC_AUDIT_KEY wrong or changed). Appending is refused for them.", keyMismatch),
     g("legion_soc_workflow_runs_1h", "Workflow runs in the last hour.", sum(wf, "total")),
     g("legion_soc_workflow_runs_failed_1h", "Failed workflow runs in the last hour.", sum(wf, "failed")),
+    // --- integrations
+    g("legion_integration_poll_lag_seconds", "How long the most overdue pull connection has been waiting to be polled (0 = none overdue).", pollLag),
+    g("legion_integration_connections_active", "Integration connections that are working.", connCount("active")),
+    g("legion_integration_connections_error", "Integration connections stopped after repeated errors (need an administrator).", connCount("error")),
     // --- notifications
     g("legion_outbox_pending", "Notifications waiting.", outbox.pending),
     g("legion_outbox_dead", "Notifications that failed permanently.", outbox.dead),

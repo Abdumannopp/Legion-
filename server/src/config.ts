@@ -346,6 +346,8 @@ export const config = {
   orchestratorAutoMode: (process.env.ORCHESTRATOR_AUTO_MODE || "off") as "off" | "shadow",
   retentionAuditMonths: Math.max(0, Math.floor(Number(process.env.RETENTION_AUDIT_MONTHS ?? 24)) || 0),
   /** Audit P2-16: delivered alert emails (recipient + alert text) are kept this many days, then deleted. 0 = keep. */
+  /** Audit A-4: pull connections polled at the same time by one instance (1–50). */
+  integrationPollConcurrency: Math.max(1, Math.min(50, Math.floor(Number(process.env.INTEGRATION_POLL_CONCURRENCY ?? 8)) || 8)),
   notifyRetentionDays: Math.max(0, Math.floor(Number(process.env.NOTIFY_RETENTION_DAYS ?? 30)) || 0),
   notifyPollSeconds: Math.max(1, Number(process.env.NOTIFY_POLL_SECONDS || 15)),
   // The realtime "new alert" frame goes through the same outbox, so a Redis

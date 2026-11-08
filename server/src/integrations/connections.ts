@@ -116,24 +116,32 @@ const FAILURES_BEFORE_ERROR = 10;
 export interface PollReport { claimed: number; succeeded: number; failed: number; ingested: number; duplicates: number }
 
 /** Claims due connections and polls them. Safe on any number of instances. */
-export async function runDuePolls(opts: { limit?: number; leaseSeconds?: number; timeoutMs?: number; realtime?: (a: Alert) => unknown; owner?: string } = {}): Promise<PollReport> {
+export async function runDuePolls(opts: { limit?: number; concurrency?: number; leaseSeconds?: number; timeoutMs?: number; realtime?: (a: Alert) => unknown; owner?: string } = {}): Promise<PollReport> {
   const owner = opts.owner ?? INSTANCE;
+  // Audit A-4: connections are polled in parallel (they are mostly waiting for the vendor), a few at a time per
+  // instance. The batch is two rounds of the concurrency, and the lease covers those rounds at the worst case
+  // (every poll hitting its timeout), so a connection is never taken over while its own instance still works on it.
+  const concurrency = Math.max(1, Math.min(opts.concurrency ?? config.integrationPollConcurrency, 50));
+  const limit = Math.max(1, Math.min(opts.limit ?? concurrency * 2, 100));
+  const timeoutMs = opts.timeoutMs ?? 120_000;
+  const leaseSeconds = opts.leaseSeconds ?? Math.ceil(limit / concurrency) * Math.ceil(timeoutMs / 1000) + 60;
   const report: PollReport = { claimed: 0, succeeded: 0, failed: 0, ingested: 0, duplicates: 0 };
   // Due connections of every workspace, through the bounded owner function (migration 0014).
   const claimed = await queryAll(
     "SELECT * FROM legion_connections_claim($1, $2, $3, $4, $5::text[])",
-    [opts.limit ?? 10, opts.leaseSeconds ?? 300, owner, config.region, pullKinds()],
+    [limit, leaseSeconds, owner, config.region, pullKinds()],
   );
 
   report.claimed = claimed.length;
-  for (const c of claimed) await withTenant(c.tenant_id, async () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const pollOne = (c: any) => withTenant(c.tenant_id, async () => {
     const adapter = pullAdapter(c.kind);
     try {
       if (!adapter) throw new Error("integration no longer available");
       const secrets = c.secrets_enc ? JSON.parse(box.open(c.secrets_enc, "integration-secret", sealContext(c.id, c.tenant_id)) ?? "null") : {};
       if (secrets === null) throw new Error("stored credentials cannot be decrypted with the current keyring");
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 120_000);
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
       let result: Awaited<ReturnType<typeof adapter.poll>>;
       try {
         result = await adapter.poll({ id: c.id, tenantId: c.tenant_id, config: c.config ?? {}, secrets }, c.cursor ?? null, controller.signal);
@@ -166,6 +174,11 @@ export async function runDuePolls(opts: { limit?: number; leaseSeconds?: number;
       ).catch(() => { /* the lease lapses; the next claim retries */ });
     }
   });
+  // A small pool: `concurrency` polls in flight at once; each worker takes the next claimed connection.
+  const queue = [...claimed];
+  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+    for (let c = queue.shift(); c; c = queue.shift()) await pollOne(c).catch(() => { /* pollOne records its own failures */ });
+  }));
   return report;
 }
 
@@ -176,7 +189,14 @@ export function startIntegrationWorker(intervalMs: number, realtime?: (a: Alert)
   timer = setInterval(() => {
     if (busy) return;
     busy = true;
-    runDuePolls({ realtime })
+    // A full batch means more may be due: keep going (at most 20 rounds per tick) instead of waiting for the next tick.
+    (async () => {
+      const batch = Math.min(config.integrationPollConcurrency * 2, 100);
+      for (let round = 0; round < 20; round++) {
+        const report = await runDuePolls({ realtime });
+        if (report.claimed < batch) break;
+      }
+    })()
       .catch((error) => console.error("Legion: integration poll failed:", error instanceof Error ? error.message : "unknown error"))
       .finally(() => { busy = false; });
   }, intervalMs);
