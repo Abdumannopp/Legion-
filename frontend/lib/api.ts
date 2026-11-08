@@ -917,6 +917,10 @@ export interface AlertDelivery { connection: string; kind: string; status: "pend
 export function getAlertDeliveries(id: string): Promise<{ deliveries: AlertDelivery[] }> {
   return request(`/alerts/${encodeURIComponent(id)}/deliveries`);
 }
+/** Where GitHub sends alerts for one connection: this API's GitHub webhook, as an absolute URL. */
+export function githubWebhookUrl(connectionId: string): string {
+  return `${absoluteApi("/security-events/webhook/github")}?connection=${encodeURIComponent(connectionId)}`;
+}
 export function listConnections(): Promise<{ connections: ConnectionInfo[] }> {
   return request("/integrations");
 }

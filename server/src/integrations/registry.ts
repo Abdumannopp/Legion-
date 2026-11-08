@@ -8,6 +8,12 @@
  * storage, the worker, notifications or tenant isolation.
  */
 import type { Adapter, IntegrationManifest, OutboundAdapter, PullAdapter, PushAdapter } from "./types.js";
+import { azureAdapter } from "./azure.js";
+import { gcpAdapter } from "./gcp.js";
+import { oktaAdapter } from "./okta.js";
+import { pagerdutyAdapter } from "./pagerduty.js";
+import { teamsAdapter } from "./teams.js";
+import { githubAdapter } from "./github.js";
 import { guarddutyAdapter } from "./guardduty.js";
 import { jiraAdapter } from "./jira.js";
 import { m365Adapter } from "./m365.js";
@@ -17,7 +23,7 @@ import { genericWebhookAdapter } from "./generic.js";
 import { wazuhAdapter } from "./wazuh.js";
 
 const adapters = new Map<string, Adapter>();
-const BUILT_IN = new Set(["wazuh", "generic_webhook", "cef", "slack", "jira", "m365", "guardduty"]);
+const BUILT_IN = new Set(["wazuh", "generic_webhook", "cef", "slack", "jira", "m365", "guardduty", "azure", "gcp", "okta", "pagerduty", "teams", "github"]);
 
 export function register(adapter: Adapter): void {
   if (!/^[a-z][a-z0-9_]{1,40}$/.test(adapter.manifest.kind)) throw new Error(`invalid integration kind: ${adapter.manifest.kind}`);
@@ -41,6 +47,11 @@ export function outboundAdapter(kind: string): OutboundAdapter | null {
   const a = adapters.get(kind);
   return a && a.manifest.inbound === null && "deliver" in a ? (a as OutboundAdapter) : null;
 }
+/** A push adapter that is configured as a connection with its own secret (GitHub: the webhook secret). */
+export function connectedPushAdapter(kind: string): (PushAdapter & { configSchema: import("zod").ZodType<Record<string, unknown>>; secretFields: string[] }) | null {
+  const a = adapters.get(kind) as (PushAdapter & { configSchema?: unknown; secretFields?: unknown }) | undefined;
+  return a && a.manifest.inbound === "push" && a.configSchema && Array.isArray(a.secretFields) ? (a as never) : null;
+}
 /** Kinds the poll worker may claim: only real pull adapters. */
 export function pullKinds(): string[] { return [...adapters.values()].filter((a) => a.manifest.inbound === "pull").map((a) => a.manifest.kind); }
 /** Kinds that receive alerts (notify/ticket). */
@@ -53,6 +64,12 @@ register(slackAdapter);
 register(jiraAdapter);
 register(m365Adapter);
 register(guarddutyAdapter);
+register(githubAdapter);
+register(teamsAdapter);
+register(pagerdutyAdapter);
+register(oktaAdapter);
+register(gcpAdapter);
+register(azureAdapter);
 
 /**
  * The roadmap, as contracts. Each is the adapter type it will be, the data it

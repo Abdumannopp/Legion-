@@ -24,6 +24,7 @@ import { ingestFindings } from "./integrations/ingest.js";
 import { wazuhAdapter } from "./integrations/wazuh.js";
 import { genericWebhookAdapter } from "./integrations/generic.js";
 import { cefAdapter } from "./integrations/cef.js";
+import { githubAdapter } from "./integrations/github.js";
 import { deliveriesForAlert } from "./integration-notify.js";
 import type { PushAdapter } from "./integrations/types.js";
 import { closePool, currentRoleAttributes, inTenant, migrate, query, transaction, withTenant } from "./db/pool.js";
@@ -81,7 +82,7 @@ app.use(accessLog(() => config.accessLog));
 app.use(securityHeaders());
 app.use(corsMiddleware());
 // Machine endpoints authenticated by signature; they are not browsers.
-app.use(originGuard(/^\/(security-events\/webhook(\/(generic|cef))?|billing\/webhook)$/));
+app.use(originGuard(/^\/(security-events\/webhook(\/(generic|cef|github))?|billing\/webhook)$/));
 // Paddle signs the RAW bytes, so keep a copy before JSON.parse rewrites them.
 // The sensor webhook is parsed by its own route instead (below): its body is
 // kept as raw bytes and only parsed AFTER the signature over those bytes checks
@@ -90,13 +91,15 @@ export const WEBHOOK_PATH = "/security-events/webhook";
 // The same signed webhook for other formats: free-form JSON (Elastic, Splunk, custom) and Syslog/CEF text.
 export const WEBHOOK_GENERIC_PATH = "/security-events/webhook/generic";
 export const WEBHOOK_CEF_PATH = "/security-events/webhook/cef";
+// GitHub signs with its own scheme (X-Hub-Signature-256) and a secret that belongs to one connection (?connection=<id>).
+export const WEBHOOK_GITHUB_PATH = "/security-events/webhook/github";
 // The Wazuh manager's pull of its blocklist: signed like the webhook, so raw too.
 export const BLOCKLIST_PATH = "/security-events/blocklist";
 const jsonBody = express.json({
   limit: "256kb",
   verify: (req, _res, buf) => { (req as Request & { rawBody?: Buffer }).rawBody = buf; },
 });
-app.use((req, res, next) => (req.path === WEBHOOK_PATH || req.path === WEBHOOK_GENERIC_PATH || req.path === WEBHOOK_CEF_PATH || req.path === BLOCKLIST_PATH || req.path === payments.PAYMENT_CHECK_PATH ? next() : jsonBody(req, res, next)));
+app.use((req, res, next) => (req.path === WEBHOOK_PATH || req.path === WEBHOOK_GENERIC_PATH || req.path === WEBHOOK_CEF_PATH || req.path === WEBHOOK_GITHUB_PATH || req.path === BLOCKLIST_PATH || req.path === payments.PAYMENT_CHECK_PATH ? next() : jsonBody(req, res, next)));
 app.use(express.urlencoded({ extended: false, limit: "32kb" }));
 app.use(cookieParser());
 // Error messages and confirmations in the reader's language (Accept-Language).
@@ -115,7 +118,7 @@ app.use(rejectNul);
  * reason — their callers are authenticated or trivial, and rate limiting them
  * breaks the integration rather than protecting it.
  */
-const RATE_LIMIT_EXEMPT = /^\/(health|security-events\/webhook(\/(generic|cef))?|billing\/webhook)$/;
+const RATE_LIMIT_EXEMPT = /^\/(health|security-events\/webhook(\/(generic|cef|github))?|billing\/webhook)$/;
 app.use((req, res, next) => {
   if (RATE_LIMIT_EXEMPT.test(req.path)) return next();
   return apiLimiter(req, res, next);
@@ -2301,6 +2304,37 @@ function sensorIngest(adapter: PushAdapter, contentType: "application/json" | "t
   },
   ];
 }
+/**
+ * GitHub deliveries: the connection (and so the workspace and the secret) is named in the URL, and only
+ * GitHub's HMAC over the raw bytes proves the sender holds that connection's secret. Unknown connection,
+ * wrong signature and a missing signature all look the same (401) and count as failures for the address.
+ */
+app.post(WEBHOOK_GITHUB_PATH, webhookFailureGate, express.raw({ type: "application/json", limit: config.webhookMaxBodyBytes }), async (req: Request, res: Response) => {
+  const reject = () => res.status(401).json({ detail: "Invalid request" });
+  const id = String(req.query.connection ?? "");
+  const raw = Buffer.isBuffer(req.body) ? req.body : null;
+  const signature = req.header("x-hub-signature-256") ?? "";
+  if (!UUID_RE.test(id) || !raw || !/^sha256=[0-9a-f]{64}$/.test(signature)) return reject();
+  const conn = await connections.githubSecret(id);
+  // Always compute one HMAC, whether or not the connection exists, so the answer does not reveal which ids are real.
+  const expected = createHmac("sha256", conn?.secret ?? "unknown-connection").update(raw).digest();
+  const given = Buffer.from(signature.slice(7), "hex");
+  if (!conn || given.length !== expected.length || !timingSafeEqual(given, expected)) return reject();
+  return withTenant(conn.tenantId, async () => {
+    const workspace = await store.getTenant(conn.tenantId);
+    if (workspace && !servesRegion(workspace)) return misdirected(res, workspace);
+    let body: unknown;
+    try { body = JSON.parse(raw.toString("utf8")); } catch { return res.status(400).json({ detail: "Invalid request" }); }
+    const event = String(req.header("x-github-event") ?? "");
+    if (event === "ping") return res.status(202).json({ status: "pong" });
+    const normalized = githubAdapter.normalize({ event, body });
+    if (normalized.skipped) return res.status(202).json({ status: "skipped" });
+    const report = await ingestFindings(conn.tenantId, normalized.source, normalized.findings, { realtime: newAlertFrame });
+    await connections.touchSuccess(conn.id, conn.tenantId);
+    return res.status(202).json({ status: report.ingested.length ? "ingested" : "skipped", ...(report.ingested.length ? {} : { reason: "duplicate" }) });
+  });
+});
+
 app.post(WEBHOOK_PATH, ...sensorIngest(wazuhAdapter, "application/json"));
 app.post(WEBHOOK_GENERIC_PATH, ...sensorIngest(genericWebhookAdapter, "application/json"));
 app.post(WEBHOOK_CEF_PATH, ...sensorIngest(cefAdapter, "text/plain"));

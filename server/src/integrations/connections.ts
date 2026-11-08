@@ -16,7 +16,7 @@ import { query, queryAll, queryOne } from "../db/pool.js";
 import * as box from "../secret-box.js";
 import type { Alert } from "../types.js";
 import { ingestFindings } from "./ingest.js";
-import { outboundAdapter, pullAdapter, pullKinds } from "./registry.js";
+import { connectedPushAdapter, outboundAdapter, pullAdapter, pullKinds } from "./registry.js";
 
 export interface ConnectionView {
   id: string;
@@ -51,8 +51,9 @@ export async function create(
   input: { kind: string; name: string; config: unknown; secrets: Record<string, string>; pollSeconds?: number },
   createdBy: string,
 ): Promise<ConnectionView> {
-  const adapter = pullAdapter(input.kind) ?? outboundAdapter(input.kind);
-  const outbound = Boolean(outboundAdapter(input.kind));
+  const adapter = pullAdapter(input.kind) ?? outboundAdapter(input.kind) ?? connectedPushAdapter(input.kind);
+  // Outbound and push connections are never polled.
+  const outbound = !pullAdapter(input.kind);
   if (!adapter || adapter.manifest.status !== "available") throw new ConnectionError("unknown_kind", "That integration is not available.");
   const parsed = adapter.configSchema.safeParse(input.config ?? {});
   if (!parsed.success) throw new ConnectionError("invalid_config", `${parsed.error.issues[0]?.path.join(".") || "config"}: ${parsed.error.issues[0]?.message}`);
@@ -89,6 +90,21 @@ export async function setStatus(tenantId: string, id: string, status: "active" |
   );
   if (!row) throw new ConnectionError("not_found", "Integration not found.");
   return view(row);
+}
+
+/** The webhook secret and workspace of an active GitHub connection, or null. */
+export async function githubSecret(id: string): Promise<{ id: string; tenantId: string; secret: string } | null> {
+  const row = await queryOne<{ id: string; tenant_id: string; secrets_enc: string | null }>(
+    "SELECT id, tenant_id, secrets_enc FROM integration_connections WHERE id = $1 AND kind = 'github' AND status = 'active'", [id]);
+  if (!row?.secrets_enc) return null;
+  const opened = box.open(row.secrets_enc, "integration-secret", sealContext(row.id, row.tenant_id));
+  if (opened === null) return null;
+  try { const secret = (JSON.parse(opened) as { webhook_secret?: unknown }).webhook_secret; return typeof secret === "string" && secret ? { id: row.id, tenantId: row.tenant_id, secret } : null; } catch { return null; }
+}
+
+/** Health for push connections: the last time a verified delivery arrived. */
+export async function touchSuccess(id: string, tenantId: string): Promise<void> {
+  await query("UPDATE integration_connections SET last_success_at = now(), last_error = NULL, failures = 0, updated_at = now() WHERE id = $1 AND tenant_id = $2", [id, tenantId]).catch(() => { /* health is best effort */ });
 }
 
 // --- The poll worker ---------------------------------------------------------

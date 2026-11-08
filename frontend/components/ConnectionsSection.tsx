@@ -3,18 +3,24 @@
 import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, Loader2, Pause, Play, Plus, Trash2 } from "lucide-react";
 import ErrorNotice from "@/components/ErrorNotice";
-import { ConnectionInfo, createConnection, listConnections, removeConnection, setConnectionStatus } from "@/lib/api";
+import { ConnectionInfo, createConnection, listConnections, removeConnection, setConnectionStatus, githubWebhookUrl } from "@/lib/api";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 import { timeAgo } from "@/lib/i18n/format";
 
-type Kind = "m365" | "guardduty" | "slack" | "jira";
+type Kind = "m365" | "azure" | "gcp" | "guardduty" | "okta" | "github" | "slack" | "teams" | "pagerduty" | "jira";
 type FieldType = "text" | "password" | "regions" | "severity";
 interface Field { key: string; where: "config" | "secrets"; type: FieldType }
-const KINDS: Kind[] = ["m365", "guardduty", "slack", "jira"];
+const KINDS: Kind[] = ["m365", "azure", "guardduty", "gcp", "okta", "github", "slack", "teams", "pagerduty", "jira"];
 // Technical identifiers: they must match the server's schema for each connector.
 const FIELDS: Record<Kind, Field[]> = {
   m365: [{ key: "directory_id", where: "config", type: "text" }, { key: "client_id", where: "config", type: "text" }, { key: "client_secret", where: "secrets", type: "password" }],
   guardduty: [{ key: "regions", where: "config", type: "regions" }, { key: "access_key_id", where: "secrets", type: "text" }, { key: "secret_access_key", where: "secrets", type: "password" }, { key: "role_arn", where: "config", type: "text" }, { key: "external_id", where: "config", type: "text" }],
+  azure: [{ key: "directory_id", where: "config", type: "text" }, { key: "client_id", where: "config", type: "text" }, { key: "subscription_id", where: "config", type: "text" }, { key: "client_secret", where: "secrets", type: "password" }],
+  gcp: [{ key: "organization_id", where: "config", type: "text" }, { key: "service_account_json", where: "secrets", type: "password" }],
+  okta: [{ key: "domain", where: "config", type: "text" }, { key: "api_token", where: "secrets", type: "password" }],
+  github: [{ key: "webhook_secret", where: "secrets", type: "password" }],
+  teams: [{ key: "webhook_url", where: "secrets", type: "password" }, { key: "min_severity", where: "config", type: "severity" }],
+  pagerduty: [{ key: "routing_key", where: "secrets", type: "password" }, { key: "min_severity", where: "config", type: "severity" }],
   slack: [{ key: "webhook_url", where: "secrets", type: "password" }, { key: "min_severity", where: "config", type: "severity" }],
   jira: [{ key: "site", where: "config", type: "text" }, { key: "project_key", where: "config", type: "text" }, { key: "email", where: "secrets", type: "text" }, { key: "api_token", where: "secrets", type: "password" }, { key: "min_severity", where: "config", type: "severity" }],
 };
@@ -52,9 +58,10 @@ export default function ConnectionsSection({ isAdmin }: { isAdmin: boolean }) {
       if (f.where === "secrets") secrets[f.key] = v;
       else config[f.key] = f.type === "regions" ? v.split(",").map((r) => r.trim()).filter(Boolean) : v;
     }
-    if (adding === "slack" || adding === "jira") config.min_severity ??= "high"; // i18n-ignore: API value
-    await createConnection({ kind: adding, name: m.kinds[adding].name, config, secrets });
-    setAdding(null); setValues({}); setNotice(m.saved);
+    if (adding === "slack" || adding === "jira" || adding === "teams") config.min_severity ??= "high";
+    if (adding === "pagerduty") config.min_severity ??= "critical"; // i18n-ignore: API value
+    const made = await createConnection({ kind: adding, name: m.kinds[adding].name, config, secrets });
+    setAdding(null); setValues({}); setNotice(adding === "github" ? m.githubUrl(githubWebhookUrl(made.id)) : m.saved);
     await load();
   });
   const act = (c: ConnectionInfo, action: "pause" | "resume") => run(async () => { await setConnectionStatus(c.id, action); await load(); });

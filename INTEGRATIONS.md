@@ -11,6 +11,12 @@ Legion takes security data in through **adapters** (`server/src/integrations/`):
 | 3b | **Jira Cloud** (ticket) | **built, tested with a simulated provider** | outbound, e-mail + API token |
 | 3 | **Microsoft Defender XDR** | **built, tested with a simulated Graph** | pull, Entra app, `SecurityAlert.Read.All` |
 | 4 | **AWS GuardDuty** | **built, tested with a simulated API; SigV4 checked against AWS's published test vector** | pull, IAM access key (read only) |
+| 6 | **Microsoft Azure** (Defender for Cloud) | **built, simulated provider** | pull, Entra app, Reader role |
+| 7 | **Google Cloud** (Security Command Center) | **built, simulated provider** | pull, service account (JWT, RS256) |
+| 8 | **Okta** (identity: System Log) | **built, simulated provider** | pull, read-only admin API token |
+| 9 | **GitHub** (secret / code scanning, Dependabot) | **built, simulated deliveries** | push, X-Hub-Signature-256 per connection |
+| 10 | **PagerDuty** (page on-call) | **built, simulated provider** | outbound, Events API v2 (dedup by alert id) |
+| 11 | **Microsoft Teams** (channel) | **built, simulated provider** | outbound, Workflows webhook URL |
 | 5 | Elastic / Splunk dedicated pull adapters | optional later; the generic webhook already receives their alerts | |
 
 ## Authentication (all push routes)
@@ -133,3 +139,28 @@ Firewall for self-hosted installs: allow outbound 443 to the hosts above, plus `
 
 
 **On the alert page** (`/incident/<id>`) a *Sent to* block shows where the alert went and links the Jira ticket (`GET /alerts/:id/deliveries`, tenant-scoped; ticket URLs are only shown when they point to `*.atlassian.net/browse/`).
+
+
+## More platforms: Azure, Google Cloud, Okta, GitHub, PagerDuty, Teams
+
+All added in **Connect → Connections** (or `POST /integrations`). Same rules as the others: secrets sealed per connection and never returned, egress pinned to the vendor's hosts (a paging link to another host is refused), errors scrubbed of secrets, an outage backs off and recovers, one alert per finding, alerts only in the owning workspace.
+
+| Kind | Vendor side | `config` | `secrets` | Hosts Legion calls |
+|---|---|---|---|---|
+| `azure` | Entra app registration; **Reader** role on the subscription | `directory_id`, `client_id`, `subscription_id` | `client_secret` | `login.microsoftonline.com`, `management.azure.com` |
+| `gcp` | Service account with **Security Center Findings Viewer** on the organisation | `organization_id` (digits) | `service_account_json` (its JSON key) | `oauth2.googleapis.com`, `securitycenter.googleapis.com` |
+| `okta` | API token of a **read-only administrator** | `domain` (e.g. `acme.okta.com`) | `api_token` | your `*.okta.com` / `*.oktapreview.com` / `*.okta-emea.com` org only |
+| `github` | Repository or organisation **webhook**, content type `application/json`, events: *Secret scanning alerts*, *Code scanning alerts*, *Dependabot alerts* | none | `webhook_secret` (you choose; the same text in GitHub) | none (it calls Legion) |
+| `pagerduty` | Service → Integrations → *Events API v2* | `min_severity` (default `critical`) | `routing_key` (32 characters) | `events.pagerduty.com` |
+| `teams` | Channel → Workflows → *Post to a channel when a webhook request is received* | `min_severity` (default `high`) | `webhook_url` | the webhook's own Microsoft host (`*.webhook.office.com`, `*.logic.azure.com`, `*.powerplatform.com`) |
+
+**GitHub address:** after saving, the dashboard shows `https://<your-legion>/api/security-events/webhook/github?connection=<id>`. Legion verifies GitHub's `X-Hub-Signature-256` (HMAC-SHA256 of the raw body) in constant time before parsing; an unknown connection, a wrong or missing signature, and a paused connection all answer the same 401 and count as failures for the sender's address. The connection (not the request) decides the workspace. Only *new or reopened* alerts become Legion alerts; closing and fixing do not. A secret-scanning alert records the kind of secret and the repository, **never the secret value**.
+
+**PagerDuty** uses the alert id as `dedup_key`, so PagerDuty itself collapses repeats. **Teams** and **Slack** send alert text as plain text (no mentions, links or markup from an alert).
+
+**Verified (simulated providers/deliveries):** field mapping and severity, paging and cursors, the Google JWT is a valid RS256 signature, SSWS/Bearer auth on the right hosts only, foreign paging links not followed, refused credentials give clear errors without the secret, GitHub signature cases (valid, tampered, missing, wrong secret, unknown/other-workspace/paused connection), PagerDuty dedup and severity, Teams host validation, plain-text cards (`tests/integrations-platforms.test.ts`, 20 tests).
+**Not verified:** a real Azure subscription, Google Cloud organisation, Okta org, GitHub repository, PagerDuty service or Teams channel. The Azure, SCC and Okta request shapes follow the vendors' documentation; confirm each against a sandbox account before relying on it. Limits: an Azure alert, SCC finding or Okta event is stored once by its id; Azure lists current alerts and Legion filters by time itself; Okta ingests warnings and errors only; GitHub delivers at least once and failed deliveries are redelivered by GitHub, not queued by Legion.
+
+## What Legion can DO in these systems today
+
+Everything above **reads, notifies or opens tickets**. The only real response actions remain (a) blocking a public address (enforced by the Wazuh manager's active response) and (b) e-mailing administrators, both opt-in per workspace ([PROTECTION.md](PROTECTION.md)). Disabling an Entra, Okta or Google account, isolating a host (Defender for Endpoint, CrowdStrike) and similar actions are **simulation only**: they need a connector with write permission in the customer's tenant, a security review of that executor, and a person's approval every time. They are not built.
