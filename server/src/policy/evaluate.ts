@@ -16,7 +16,7 @@ import type { Agent } from "../types.js";
 import { CATALOG_VERSION, LIVE_ACTION_IDS, catalogEntry } from "./catalog.js";
 import { DEFAULT_POLICY, type PolicyDocument, type PolicyRule } from "./document.js";
 import { explain } from "./explain.js";
-import { AGENTS, type ActorRef, type Autonomy, type Decision, type ExecutionMode, type Origin, type ProtectionView, type RiskClass, riskRank, strictest } from "./types.js";
+import { AGENTS, canonicalAgent, type ActorRef, type Autonomy, type Decision, type ExecutionMode, type Origin, type ProtectionView, type RiskClass, riskRank, strictest } from "./types.js";
 
 export const ENGINE_VERSION = "policy-v0.1";
 
@@ -77,8 +77,10 @@ export function evaluatePolicy(req: PolicyRequest, policy: PolicyDocument | null
 
   let agent: Agent | null = null;
   if (req.actor.kind === "agent") {
-    if (!(AGENTS as readonly string[]).includes(req.actor.agent)) return outcome(req, "DENY", ["UNKNOWN_AGENT"], base);
-    agent = req.actor.agent;
+    // Work queued before the rename may still name the agent "Executor": it is the same agent.
+    const named = canonicalAgent(req.actor.agent) as string;
+    if (!(AGENTS as readonly string[]).includes(named)) return outcome(req, "DENY", ["UNKNOWN_AGENT"], base);
+    agent = named as Agent;
     if (!entry.agents.includes(agent)) return outcome(req, "DENY", ["AGENT_NOT_ALLOWED"], base);
   }
   // Live: only what Legion can really do, and only where an administrator opted in. A policy document

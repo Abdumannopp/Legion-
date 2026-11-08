@@ -17,6 +17,15 @@ export const strictest = (a: Decision, b: Decision): Decision => (DECISIONS.inde
 export const AUTONOMY = ["OBSERVE", "ASSIST", "AUTONOMOUS"] as const;
 export type Autonomy = (typeof AUTONOMY)[number];
 
+/** The response agent was called "Executor" until 2026-11. Old names still arrive from saved policies, queued work and older scripts. */
+export const canonicalAgent = (name: unknown): unknown => (name === "Executor" ? "Vanguard" : name);
+
+/** The same actor with a pre-rename agent name shown under the current one. The stored row is not changed (digests and the audit chain cover it). */
+export function shownActor<T>(actor: T): T {
+  const a = actor as { kind?: string; agent?: unknown } | null;
+  return a && a.kind === "agent" && a.agent === "Executor" ? ({ ...a, agent: "Vanguard" } as T) : actor;
+}
+
 export const AGENTS = ["Sentinel", "Hunter", "Guardian", "Oracle", "Vanguard"] as const satisfies readonly Agent[];
 
 /**

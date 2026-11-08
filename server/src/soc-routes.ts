@@ -14,7 +14,7 @@ import { getProtection, PROTECTION_MODES, PROTECTION_NOTICE, PROTECTION_NOTICE_V
 import { DEFAULT_POLICY, parsePolicyDocument } from "./policy/document.js";
 import { ENGINE_VERSION, evaluatePolicy } from "./policy/evaluate.js";
 import { getActivePolicy, listDecisions, listPolicyVersions, PolicyConflict, PolicyInvalid, putPolicy, rollbackPolicy } from "./policy/store.js";
-import { AGENTS, ORIGINS } from "./policy/types.js";
+import { AGENTS, ORIGINS, canonicalAgent } from "./policy/types.js";
 import { ApprovalError, decide, getApproval, listApprovals, type ApprovalStatus } from "./approvals/engine.js";
 import {
   ActionError, actionEvents, approvalOf, cancelAction, getAction, isPaused, listActions, proposeAction, runQueued, setPaused, syncWithApproval,
@@ -113,7 +113,7 @@ export function registerSocRoutes(app: Express, { requirePermission, parse, log,
     const body = parse(z.strictObject({
       action_id: z.string().max(64),
       actor: z.discriminatedUnion("kind", [
-        z.strictObject({ kind: z.literal("agent"), agent: z.enum(AGENTS) }),
+        z.strictObject({ kind: z.literal("agent"), agent: z.preprocess(canonicalAgent, z.enum(AGENTS)) }),
         z.strictObject({ kind: z.literal("human") }),
         z.strictObject({ kind: z.literal("system") }),
       ]),

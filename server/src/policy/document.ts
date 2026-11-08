@@ -5,7 +5,7 @@
  */
 import { z } from "zod";
 import { ACTION_IDS } from "./catalog.js";
-import { AGENTS, AUTONOMY, ORIGINS, RISK_CLASSES } from "./types.js";
+import { AGENTS, AUTONOMY, ORIGINS, RISK_CLASSES, canonicalAgent } from "./types.js";
 
 export const MAX_POLICY_BYTES = 65_536;
 export const MAX_RULES = 100;
@@ -39,13 +39,33 @@ export const policyDocumentSchema = z.strictObject({
 });
 export type PolicyDocument = z.infer<typeof policyDocumentSchema>;
 
+/**
+ * A policy saved before the rename may name "Executor" (in a rule's agents or in the per-agent autonomy map).
+ * It is read as Vanguard, so that policy keeps meaning what its author wrote; what is stored is not rewritten
+ * (its version and digest stay as they were), and a new version saved from it carries the new name.
+ */
+function withCurrentAgentNames(raw: unknown): unknown {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  const doc = { ...(raw as Record<string, unknown>) };
+  if (Array.isArray(doc.rules)) {
+    doc.rules = doc.rules.map((r) => (r && typeof r === "object" && Array.isArray((r as { agents?: unknown }).agents)
+      ? { ...(r as object), agents: [...new Set((r as { agents: unknown[] }).agents.map(canonicalAgent))] } : r));
+  }
+  if (doc.agents && typeof doc.agents === "object" && !Array.isArray(doc.agents)) {
+    const map: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(doc.agents as Record<string, unknown>)) map[String(canonicalAgent(k))] = v;
+    doc.agents = map;
+  }
+  return doc;
+}
+
 export type ParseResult = { ok: true; document: PolicyDocument } | { ok: false; error: string };
 
 export function parsePolicyDocument(raw: unknown): ParseResult {
   let size: number;
   try { size = Buffer.byteLength(JSON.stringify(raw ?? null), "utf8"); } catch { return { ok: false, error: "Not JSON" }; }
   if (size > MAX_POLICY_BYTES) return { ok: false, error: `A policy is at most ${MAX_POLICY_BYTES} bytes` };
-  const r = policyDocumentSchema.safeParse(raw);
+  const r = policyDocumentSchema.safeParse(withCurrentAgentNames(raw));
   if (!r.success) {
     const issue = r.error.issues[0]!;
     return { ok: false, error: `${issue.path.join(".") || "policy"}: ${issue.message}` };

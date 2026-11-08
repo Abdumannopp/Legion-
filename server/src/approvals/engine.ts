@@ -17,7 +17,7 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { queryAll, queryOne, transaction } from "../db/pool.js";
-import type { ActorRef, RiskClass } from "../policy/types.js";
+import { shownActor, type ActorRef, type RiskClass } from "../policy/types.js";
 import { appendAuditEvent } from "../audit/events.js";
 
 export const APPROVAL_TTL_MINUTES = { R1: 24 * 60, R2: 24 * 60, R3: 4 * 60, R4: 60 } as const satisfies Record<Exclude<RiskClass, "R0">, number>;
@@ -50,7 +50,7 @@ const COLUMNS = `tenant_id, id, subject_type, subject_id, action_id, risk_class,
 
 type Row = Omit<Approval, "expires_at" | "decided_at" | "consumed_at" | "created_at"> & { expires_at: Date; decided_at: Date | null; consumed_at: Date | null; created_at: Date };
 const toApproval = (r: Row): Approval => ({
-  ...r, expires_at: r.expires_at.toISOString(), decided_at: r.decided_at?.toISOString() ?? null,
+  ...r, requested_by: shownActor(r.requested_by), expires_at: r.expires_at.toISOString(), decided_at: r.decided_at?.toISOString() ?? null,
   consumed_at: r.consumed_at?.toISOString() ?? null, created_at: r.created_at.toISOString(),
 });
 

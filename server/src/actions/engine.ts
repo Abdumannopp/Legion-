@@ -28,7 +28,7 @@ import { canonicalJson, digestOf } from "../policy/canonical.js";
 import { catalogEntry } from "../policy/catalog.js";
 import { evaluatePolicy, type PolicyOutcome } from "../policy/evaluate.js";
 import { getActivePolicy, recordDecision } from "../policy/store.js";
-import type { ActorRef, Origin } from "../policy/types.js";
+import { shownActor, type ActorRef, type Origin } from "../policy/types.js";
 import { simulate } from "./simulate.js";
 import { executeLive, LiveRefused } from "./live.js";
 import { getProtection, policyView } from "../protection.js";
@@ -51,7 +51,7 @@ export interface ActionRequest {
 const COLUMNS = `tenant_id, id, idempotency_key, action_id, risk_class, input, action_digest, target, reason, actor, origin, execution_mode,
   status, policy_decision, policy_decision_id, approval_id, result, error, attempts, created_at, updated_at`;
 type Row = Omit<ActionRequest, "created_at" | "updated_at"> & { created_at: Date; updated_at: Date };
-const toAction = (r: Row): ActionRequest => ({ ...r, created_at: r.created_at.toISOString(), updated_at: r.updated_at.toISOString() });
+const toAction = (r: Row): ActionRequest => ({ ...r, actor: shownActor(r.actor), created_at: r.created_at.toISOString(), updated_at: r.updated_at.toISOString() });
 
 export class ActionError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); }

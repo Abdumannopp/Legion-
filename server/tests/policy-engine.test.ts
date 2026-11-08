@@ -40,8 +40,17 @@ describe("evaluator: hard refusals", () => {
       .toMatchObject({ decision: "DENY", reason_codes: ["AGENT_NOT_ALLOWED"] });
   });
   it("an unknown agent name is denied", () => {
-    expect(evaluatePolicy(agentReq("alert.triage", "Executor"), null).decision).toBe("DENY");
+    expect(evaluatePolicy(agentReq("alert.triage", "Overlord"), null).decision).toBe("DENY");
     expect(evaluatePolicy(agentReq("alert.triage", "root"), null).reason_codes).toEqual(["UNKNOWN_AGENT"]);
+  });
+  it("the old name Executor is the same agent as Vanguard (work queued before the rename keeps meaning what it meant)", () => {
+    const old = evaluatePolicy(agentReq("notify.admins", "Executor"), null);
+    const now = evaluatePolicy(agentReq("notify.admins", "Vanguard"), null);
+    expect(old.reason_codes).not.toContain("UNKNOWN_AGENT");
+    expect(old.decision).toBe(now.decision);
+    expect(old.reason_codes).toEqual(now.reason_codes);
+    // the old name does not gain anything: an action Vanguard may not do is refused under either name
+    expect(evaluatePolicy(agentReq("alert.triage", "Executor"), null).decision).toBe(evaluatePolicy(agentReq("alert.triage", "Vanguard"), null).decision);
   });
   it("live mode is denied unless an administrator opted in AND Legion can really do the action — whatever the policy says", () => {
     const allowAll = doc({ default_autonomy: "AUTONOMOUS", rules: [{ id: "all", effect: "ALLOW", actions: ["*"] }] });
@@ -139,7 +148,7 @@ describe("policy documents are strict", () => {
   const bad: Array<[string, unknown]> = [
     ["unknown top-level field", { schema: 1, default_autonomy: "OBSERVE", rules: [], admin: true }],
     ["unknown action", { schema: 1, default_autonomy: "OBSERVE", rules: [{ id: "a", effect: "ALLOW", actions: ["shell.exec"] }] }],
-    ["unknown agent", { schema: 1, default_autonomy: "OBSERVE", rules: [{ id: "a", effect: "ALLOW", actions: ["*"], agents: ["Executor"] }] }],
+    ["unknown agent", { schema: 1, default_autonomy: "OBSERVE", rules: [{ id: "a", effect: "ALLOW", actions: ["*"], agents: ["Overlord"] }] }],
     ["unknown effect", { schema: 1, default_autonomy: "OBSERVE", rules: [{ id: "a", effect: "GRANT", actions: ["*"] }] }],
     ["unknown rule field (no expressions)", { schema: 1, default_autonomy: "OBSERVE", rules: [{ id: "a", effect: "ALLOW", actions: ["*"], when: "ip ~ '.*'" }] }],
     ["duplicate rule ids", { schema: 1, default_autonomy: "OBSERVE", rules: [{ id: "a", effect: "ALLOW", actions: ["*"] }, { id: "a", effect: "DENY", actions: ["*"] }] }],
@@ -150,6 +159,15 @@ describe("policy documents are strict", () => {
     ["unknown autonomy", { schema: 1, default_autonomy: "GOD_MODE", rules: [] }],
   ];
   for (const [name, raw] of bad) it(`refuses: ${name}`, () => expect(parsePolicyDocument(raw).ok).toBe(false));
+  it("a policy saved before the rename (naming Executor) is read as naming Vanguard, in rules and in the per-agent map", () => {
+    const r = parsePolicyDocument({ schema: 1, default_autonomy: "ASSIST", agents: { Executor: { autonomy: "OBSERVE" } }, rules: [{ id: "old", effect: "DENY", actions: ["ip.block"], agents: ["Executor", "Vanguard"] }] });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.document.agents).toEqual({ Vanguard: { autonomy: "OBSERVE" } });
+    expect(r.document.rules[0]!.agents).toEqual(["Vanguard"]);
+    const decision = evaluatePolicy({ action_id: "ip.block", actor: { kind: "agent", agent: "Executor" } as never, origin: "agent", mode: "simulation" }, r.document);
+    expect(decision.decision).toBe("DENY");   // the old rule still binds the same agent
+  });
   it("accepts a valid document", () => {
     expect(parsePolicyDocument({ schema: 1, default_autonomy: "ASSIST", agents: { Vanguard: { autonomy: "OBSERVE" } }, rules: [{ id: "no-pay", effect: "DENY", actions: ["payment.release"], reason: "finance only" }] }).ok).toBe(true);
   });

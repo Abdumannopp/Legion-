@@ -115,6 +115,22 @@ describe("the door: policy decides, enforced on this path", () => {
   });
 });
 
+describe("the response agent was renamed from Executor to Vanguard", () => {
+  it("an action and an approval stored under the old name are shown (and decided) under the new one", async () => {
+    await assist();
+    const { action } = await proposeAction(tenantA, vanguard("ip.block", { ip: "185.220.101.9", minutes: 30 }));
+    // Simulate rows written before the rename. The digest covers the action, not this label, so approving still works.
+    await query("UPDATE action_requests SET actor = jsonb_set(actor, '{agent}', '\"Executor\"') WHERE id = $1", [action.id]);
+    await query("UPDATE approval_requests SET requested_by = jsonb_set(requested_by, '{agent}', '\"Executor\"') WHERE id = $1", [action.approval_id]);
+    const shown = (await request(app).get(`/approvals/${action.approval_id}`).set(...as(analyst)).expect(200)).body;
+    expect(shown.requested_by).toMatchObject({ kind: "agent", agent: "Vanguard" });
+    const list = (await request(app).get("/actions").set(...as(analyst)).expect(200)).body.actions as Array<{ id: string; actor: { agent?: string } }>;
+    expect(list.find((a) => a.id === action.id)!.actor.agent).toBe("Vanguard");
+    const res = await request(app).post(`/approvals/${action.approval_id}/decision`).set(...as(admin1)).send({ decision: "approve", action_digest: action.action_digest }).expect(200);
+    expect(res.body.action.status).toBe("simulated");
+  });
+});
+
 describe("approval → simulation, end to end", () => {
   it("ASSIST: an agent's block waits for a person; once approved it is simulated, and nothing is blocked", async () => {
     await assist();
