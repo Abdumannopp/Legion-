@@ -99,7 +99,14 @@ export interface OutboundMessage {
   target: string | null;
   /** Link back to the alert in the dashboard. */
   link: string;
+  /** Set by the delivery layer on a retry: a ticket an earlier attempt already created (audit A-6). */
+  ticket?: { key?: string; url?: string };
+  /** Set by the delivery layer: when an earlier attempt started creating a ticket whose outcome is unknown (ISO time). */
+  createAttemptedAt?: string;
 }
+
+/** Lets an adapter record, durably and at once, what it has done so far, so a retry can pick up from there. */
+export type RememberFn = (patch: Record<string, unknown>) => Promise<void>;
 
 export interface DeliveryResult {
   /** The external object that was created (a ticket), if any. */
@@ -121,7 +128,7 @@ export interface OutboundAdapter {
   /** Rejects secrets that cannot be right (a Slack URL on another host) when the connection is saved. */
   validateSecrets?(secrets: Record<string, string>): string | null;
   /** At-least-once: must be idempotent per message.alertId where the vendor allows it (tickets look the alert up first). */
-  deliver(conn: ConnectionContext, message: OutboundMessage, signal: AbortSignal): Promise<DeliveryResult>;
+  deliver(conn: ConnectionContext, message: OutboundMessage, signal: AbortSignal, remember?: RememberFn): Promise<DeliveryResult>;
 }
 
 export type Adapter = PushAdapter | PullAdapter | OutboundAdapter;

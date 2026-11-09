@@ -103,7 +103,9 @@ export async function deliverIntegrationMessage(row: { id: string; tenant_id: st
     const opened = conn.secrets_enc ? box.open(conn.secrets_enc, "integration-secret", sealContext(conn.id, conn.tenant_id)) : "{}";
     if (opened === null) throw new Error("stored credentials cannot be decrypted with the current keyring");
     secrets = JSON.parse(opened) as Record<string, string>;
-    const result = await adapter.deliver({ id: conn.id, tenantId: conn.tenant_id, config: conn.config ?? {}, secrets }, row.payload as OutboundMessage, signal);
+    // Audit A-6: what an attempt has done is written to the message at once, not only when it ends.
+    const remember = async (patch: Record<string, unknown>) => { await query(`UPDATE notification_outbox SET payload = payload || $3::jsonb WHERE id = $1 AND tenant_id = $2`, [row.id, row.tenant_id, JSON.stringify(patch)]); };
+    const result = await adapter.deliver({ id: conn.id, tenantId: conn.tenant_id, config: conn.config ?? {}, secrets }, row.payload as OutboundMessage, signal, remember);
     await query(
       `UPDATE integration_connections SET failures = 0, last_success_at = now(), last_error = NULL, updated_at = now() WHERE id = $1 AND tenant_id = $2`, [conn.id, conn.tenant_id],
     );

@@ -248,6 +248,49 @@ describe("Jira tickets", () => {
     expect(state.created).toBe(0);
     expect((await outbox())[0]!.payload).toMatchObject({ ticket: { key: "SEC-7" } });
   });
+  it("A-6: a create whose answer was lost is not repeated while Jira's index may not show it yet", async () => {
+    await create(adminA, jiraBody);
+    let created = 0, indexed = false;
+    respond = (c) => {
+      if (c.url.includes("/search/jql")) return { status: 200, body: JSON.stringify({ issues: indexed ? [{ key: "SEC-9" }] : [] }) };
+      if (c.url.endsWith("/rest/api/3/issue")) { created++; return { status: 504 }; }   // Jira made the ticket, the answer was lost
+      return { status: 404 };
+    };
+    await ingestFindings(tA, "wazuh", [finding("j6")]);
+    await deliverDue({ kind: "integration_message" });
+    expect(created).toBe(1);
+    // an immediate retry: the search is still empty (index lag), but Legion must not create again
+    await due(); await deliverDue({ kind: "integration_message" });
+    await due(); await deliverDue({ kind: "integration_message" });
+    expect(created).toBe(1);
+    expect((await outbox())[0]!.last_error).toMatch(/waiting for Jira to index/);
+    // the index catches up: the retry finds the ticket and stops
+    indexed = true;
+    await query("UPDATE notification_outbox SET payload = jsonb_set(payload, '{createAttemptedAt}', to_jsonb((now() - interval '3 minutes')::text)) WHERE kind = 'integration_message'");
+    await due(); await deliverDue({ kind: "integration_message" });
+    expect(created).toBe(1);
+    expect((await outbox())[0]).toMatchObject({ status: "sent", payload: { ticket: { key: "SEC-9" } } });
+  });
+  it("A-6: the new ticket key is stored at once; a retry after a crash reads that issue instead of searching", async () => {
+    await create(adminA, jiraBody);
+    let created = 0; const searches: string[] = [];
+    respond = (c) => {
+      if (c.url.includes("/search/jql")) { searches.push(c.url); return { status: 200, body: JSON.stringify({ issues: [] }) }; }   // index lag
+      if (c.url.endsWith("/rest/api/3/issue")) { created++; return { status: 201, body: JSON.stringify({ key: "SEC-8" }) }; }
+      if (c.url.includes("/rest/api/3/issue/SEC-8")) return { status: 200, body: "{}" };
+      return { status: 404 };
+    };
+    await ingestFindings(tA, "wazuh", [finding("j7")]);
+    await deliverDue({ kind: "integration_message" });
+    expect(created).toBe(1);
+    // simulate the worker dying before the row was marked sent
+    await query("UPDATE notification_outbox SET status = 'pending', sent_at = NULL, next_attempt_at = now() WHERE kind = 'integration_message'");
+    searches.length = 0;
+    await deliverDue({ kind: "integration_message" });
+    expect(created).toBe(1);
+    expect(searches).toHaveLength(0);
+    expect((await outbox())[0]).toMatchObject({ status: "sent", payload: { ticket: { key: "SEC-8" } } });
+  });
   it("bad credentials (401) are not retried; a Jira outage is", async () => {
     await create(adminA, jiraBody);
     respond = () => ({ status: 401 });
