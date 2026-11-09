@@ -16,6 +16,7 @@ import { query, queryAll, queryOne } from "../db/pool.js";
 import * as box from "../secret-box.js";
 import type { Alert } from "../types.js";
 import { ingestFindings } from "./ingest.js";
+import { scrubError } from "./scrub.js";
 import { withTenant } from "../db/rls.js";
 import { connectedPushAdapter, outboundAdapter, pullAdapter, pullKinds } from "./registry.js";
 
@@ -136,9 +137,10 @@ export async function runDuePolls(opts: { limit?: number; concurrency?: number; 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const pollOne = (c: any) => withTenant(c.tenant_id, async () => {
     const adapter = pullAdapter(c.kind);
+    let secrets: Record<string, string> | null = null;
     try {
       if (!adapter) throw new Error("integration no longer available");
-      const secrets = c.secrets_enc ? JSON.parse(box.open(c.secrets_enc, "integration-secret", sealContext(c.id, c.tenant_id)) ?? "null") : {};
+      secrets = c.secrets_enc ? JSON.parse(box.open(c.secrets_enc, "integration-secret", sealContext(c.id, c.tenant_id)) ?? "null") : {};
       if (secrets === null) throw new Error("stored credentials cannot be decrypted with the current keyring");
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -161,9 +163,8 @@ export async function runDuePolls(opts: { limit?: number; concurrency?: number; 
       report.succeeded++;
     } catch (error) {
       report.failed++;
-      // Fixed prefix + the adapter's message, bounded: never a secret (adapters
-      // do not put credentials in errors; the length cap limits what could slip).
-      const message = (error instanceof Error ? error.message : "poll failed").replace(/\s+/g, " ").slice(0, 300);
+      // The adapter's message, scrubbed of every form of the stored credentials (audit A-8) and bounded.
+      const message = scrubError(error instanceof Error ? error.message : "poll failed", secrets ?? {});
       await query(
         `UPDATE integration_connections
             SET failures = failures + 1, last_error = $3, lease_until = NULL, lease_owner = NULL, updated_at = now(),

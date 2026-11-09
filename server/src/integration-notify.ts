@@ -13,6 +13,7 @@ import type { PoolClient } from "pg";
 import { config } from "./config.js";
 import { query, queryOne } from "./db/pool.js";
 import * as box from "./secret-box.js";
+import { scrubError } from "./integrations/scrub.js";
 import { outboundAdapter, outboundKinds } from "./integrations/registry.js";
 import { PermanentDeliveryError, type OutboundMessage } from "./integrations/types.js";
 import type { Alert } from "./types.js";
@@ -94,12 +95,8 @@ export async function deliveriesForAlert(tenantId: string, alertId: string): Pro
 
 export type DeliveryOutcome = { ok: true } | { ok: false; detail: string; permanent?: boolean };
 
-/** What an error may say about a credential: nothing. Any stored secret value found in it is removed. */
-function scrub(text: string, secrets: Record<string, string>): string {
-  let s = text;
-  for (const v of Object.values(secrets)) if (v && v.length >= 6) s = s.split(v).join("[redacted]");
-  return s.replace(/https:\/\/hooks\.slack\.com\/\S+/g, "[redacted-url]").replace(/\b(?:Bearer|Basic)\s+\S+/gi, "[redacted]").replace(/\s+/g, " ").slice(0, 300);
-}
+/** What an error may say about a credential: nothing (audit A-8; see integrations/scrub.ts). */
+const scrub = scrubError;
 
 export async function deliverIntegrationMessage(row: { id: string; tenant_id: string; recipient: string; payload: unknown }, signal: AbortSignal): Promise<DeliveryOutcome> {
   const conn = await queryOne<{ id: string; tenant_id: string; kind: string; status: string; config: Record<string, unknown> | null; secrets_enc: string | null }>(
