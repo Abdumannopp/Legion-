@@ -299,6 +299,19 @@ describe("Google Workspace", () => {
   });
 });
 
+describe("Google Workspace backlog", () => {
+  it("a long gap is read in six-hour windows, oldest first, so nothing older is dropped", async () => {
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048, privateKeyEncoding: { type: "pkcs8", format: "pem" }, publicKeyEncoding: { type: "spki", format: "pem" } });
+    const conn = { id: "c", tenantId: tA, config: { admin_email: "admin@acme.io" }, secrets: { service_account_json: JSON.stringify({ client_email: "l@a.iam.gserviceaccount.com", private_key: privateKey }) } };
+    respond = (c) => c.url.startsWith("https://oauth2.googleapis.com/") ? { status: 200, body: { access_token: "tok" } } : { status: 200, body: { items: [] } };
+    const since = new Date(Date.now() - 20 * HOUR).toISOString();
+    const r = await gworkspaceAdapter.poll(conn, { since }, sig);
+    const end = new Date(Date.parse(since) + 6 * HOUR).toISOString();
+    expect(new URL(calls[1]!.url).searchParams.get("endTime")).toBe(end);
+    expect(r.cursor).toEqual({ since: end });
+  });
+});
+
 describe("end to end through the worker", () => {
   it("a CrowdStrike connection: sealed secret, alerts in the right workspace, duplicates on re-poll", async () => {
     const created = await create(adminA, { kind: "crowdstrike", name: "Falcon", config: { cloud: "us-1", client_id: "b".repeat(32) }, secrets: { client_secret: "e2e-secret-VERY-long" } });
@@ -331,6 +344,22 @@ describe("audit A-9: a vendor raising an alert's severity raises the Legion aler
     expect((await ingestFindings(tA, "crowdstrike", [finding("v1", { severity: "low" })])).escalated).toBeUndefined();
     expect((await ingestFindings(tA, "crowdstrike", [finding("v1", { severity: "critical" })])).escalated).toBeUndefined();
     expect((await query("SELECT severity FROM alerts WHERE id = $1", [id])).rows[0].severity).toBe("critical");
+  });
+  it("a raise reaches a connection whose threshold the alert did not meet before (the on-call person is paged), once", async () => {
+    expect((await create(adminA, { kind: "pagerduty", name: "On-call", config: { min_severity: "critical" }, secrets: { routing_key: "a".repeat(32) } })).status).toBe(201);
+    respond = () => ({ status: 202, body: {} });
+    await ingestFindings(tA, "crowdstrike", [finding("v3", { severity: "medium" })]);
+    await deliverDue({ kind: "integration_message" });
+    expect(calls).toHaveLength(0);                       // below the threshold: nobody paged
+    await ingestFindings(tA, "crowdstrike", [finding("v3", { severity: "critical" })]);
+    await deliverDue({ kind: "integration_message" });
+    expect(calls).toHaveLength(1);                       // raised: paged now
+    const sent = JSON.parse(calls[0]!.body);
+    expect(sent).toMatchObject({ dedup_key: findingAlertId(tA, "crowdstrike", "v3"), payload: { severity: "critical" } });
+    expect(sent.payload.summary).toMatch(/^\[Severity raised\] /);
+    await ingestFindings(tA, "crowdstrike", [finding("v3", { severity: "critical" })]);
+    await deliverDue({ kind: "integration_message" });
+    expect(calls).toHaveLength(1);                       // the same severity again: nothing more
   });
   it("only within the same workspace: another workspace's same vendor id is a different alert", async () => {
     await ingestFindings(tA, "crowdstrike", [finding("v2", { severity: "low" })]);

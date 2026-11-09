@@ -12,7 +12,8 @@ import { createHmac } from "node:crypto";
 import { clip } from "../ai-safety.js";
 import { config } from "../config.js";
 import * as outbox from "../outbox.js";
-import { inTenant, queryOne } from "../db/pool.js";
+import { inTenant, queryOne, transaction } from "../db/pool.js";
+import { enqueueIntegrationMessages } from "../integration-notify.js";
 import * as store from "../store.js";
 import { correlate } from "../campaigns.js";
 import { respondToCampaigns } from "../blocklist.js";
@@ -49,7 +50,7 @@ const RANK = { low: 0, medium: 1, high: 2, critical: 3 } as const;
  * Audit A-9: a vendor alert Legion already stored came again with a HIGHER severity (Defender, GuardDuty,
  * CrowdStrike… re-send an item when they update it). The Legion alert is raised to match, a dated note is
  * added to its text, and the change is audited. Severity is never lowered and status is never changed by a
- * source: closing or downgrading stays a person's decision.
+ * source: closing or downgrading stays a person's decision. Outbound connections are told about the raise.
  */
 async function escalateIfHigher(tenantId: string, id: string, f: Finding): Promise<boolean> {
   const row = await inTenant(tenantId, () => queryOne<{ severity: keyof typeof RANK }>(
@@ -61,6 +62,12 @@ async function escalateIfHigher(tenantId: string, id: string, f: Finding): Promi
     [tenantId, id, f.severity, `[${new Date().toISOString()}] The source raised the severity to ${f.severity}.`, RANK[f.severity]],
   ));
   if (!row) return false;
+  // Chat, paging and ticket connections hear of the raise: one whose threshold the alert did not reach before
+  // (PagerDuty at "critical", the alert arrived as "medium") must not stay silent. Best effort, after the raise.
+  await inTenant(tenantId, async () => {
+    const alert = await store.getAlert(tenantId, id);
+    if (alert) await transaction((client) => enqueueIntegrationMessages(client, alert, { raised: true }));
+  }).then(() => outbox.kick()).catch((e) => console.error("Legion: could not queue the severity-raise notifications:", e instanceof Error ? e.message : "unknown error"));
   await store.audit({ tenant_id: tenantId, user_id: null, user_email: null, action: "alert.severity_raised_by_source", resource_type: "alert", resource_id: id, detail: `raised to ${f.severity} by the source`, ip_address: null }).catch(() => { /* the alert change stands; audit is best effort here */ });
   return true;
 }

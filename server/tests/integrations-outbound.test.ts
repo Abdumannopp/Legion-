@@ -264,6 +264,8 @@ describe("Jira tickets", () => {
     await due(); await deliverDue({ kind: "integration_message" });
     expect(created).toBe(1);
     expect((await outbox())[0]!.last_error).toMatch(/waiting for Jira to index/);
+    // waiting is not failing: the connection's health counts the lost answer once, not each wait
+    expect((await query("SELECT failures, status FROM integration_connections WHERE tenant_id = $1", [tA])).rows[0]).toMatchObject({ failures: 1, status: "active" });
     // the index catches up: the retry finds the ticket and stops
     indexed = true;
     await query("UPDATE notification_outbox SET payload = jsonb_set(payload, '{createAttemptedAt}', to_jsonb((now() - interval '3 minutes')::text)) WHERE kind = 'integration_message'");

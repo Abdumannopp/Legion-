@@ -15,7 +15,7 @@
 import { z } from "zod";
 import { adapterFetch } from "./fetch.js";
 import { severityAtLeast } from "./notify-filter.js";
-import { PermanentDeliveryError, type ConnectionContext, type OutboundAdapter, type OutboundMessage } from "./types.js";
+import { DeferredDelivery, PermanentDeliveryError, type ConnectionContext, type OutboundAdapter, type OutboundMessage } from "./types.js";
 
 const INDEX_WAIT_MS = 120_000;
 const label = (alertId: string) => `legion-${alertId.toLowerCase().replace(/[^a-z0-9-]/g, "")}`.slice(0, 60);
@@ -63,7 +63,7 @@ export const jiraAdapter: OutboundAdapter = {
     // A create was sent and its answer never recorded: the search index may not show it yet, so wait before trusting an empty search.
     const pending = msg.createAttemptedAt ? Date.parse(msg.createAttemptedAt) : NaN;
     const waitMs = Number.isFinite(pending) ? INDEX_WAIT_MS - (Date.now() - pending) : 0;
-    if (waitMs > 0) throw new Error(`waiting for Jira to index the ticket created by the previous attempt (${Math.ceil(waitMs / 1000)} s)`);
+    if (waitMs > 0) throw new DeferredDelivery(`waiting for Jira to index the ticket created by the previous attempt (${Math.ceil(waitMs / 1000)} s)`);
     // 1. Already ticketed? (a retry, or a crash after creation)
     const q = new URLSearchParams({ jql: `project = "${key}" AND labels = "${lab}"`, fields: "key", maxResults: "1" });
     const found = await adapterFetch(jiraAdapter.manifest, `${base(conn)}/rest/api/3/search/jql?${q}`, { method: "GET", headers: headers(conn), signal, timeoutMs: 15_000, maxBytes: 256 * 1024 });

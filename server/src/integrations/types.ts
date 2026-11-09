@@ -117,6 +117,12 @@ export interface DeliveryResult {
 export class PermanentDeliveryError extends Error {}
 
 /**
+ * Thrown by an adapter that is deliberately waiting (not failing): the message is retried later, but the wait is
+ * not counted against the connection's health, so a healthy connection is never stopped for being careful.
+ */
+export class DeferredDelivery extends Error {}
+
+/**
  * A connector Legion sends INTO (chat notification, ticket). It can tell a person or open a ticket; it
  * can never change anything in the customer's environment: `outbound` is "notify" or "ticket" only, and a
  * test fails if an outbound adapter claims "respond" or reaches the blocklist/action code.

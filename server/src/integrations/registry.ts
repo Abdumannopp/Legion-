@@ -99,30 +99,6 @@ register(opsgenieAdapter);
  */
 const PLANNED: IntegrationManifest[] = [
   {
-    kind: "azure", displayName: "Microsoft Azure", vendor: "Microsoft", status: "planned", plane: "data", inbound: "pull", outbound: [],
-    egressHosts: ["management.azure.com", "login.microsoftonline.com"],
-    summary: "Microsoft Defender for Cloud alerts per subscription, polled by timeGeneratedUtc.",
-    auth: "Entra ID app registration (client credentials), read-only Security Reader role.",
-  },
-  {
-    kind: "gcp", displayName: "Google Cloud", vendor: "Google", status: "planned", plane: "data", inbound: "pull", outbound: [],
-    egressHosts: ["securitycenter.googleapis.com", "oauth2.googleapis.com"],
-    summary: "Security Command Center findings per organisation, polled by eventTime.",
-    auth: "Service account with Security Center Findings Viewer (workload identity federation preferred).",
-  },
-  {
-    kind: "github", displayName: "GitHub", vendor: "GitHub", status: "planned", plane: "data", inbound: "push", outbound: [],
-    egressHosts: ["api.github.com"],
-    summary: "Secret scanning, code scanning and Dependabot alerts from an organisation webhook.",
-    auth: "GitHub App; webhook deliveries verified with X-Hub-Signature-256 (HMAC-SHA256 of the raw body).",
-  },
-  {
-    kind: "m365", displayName: "Microsoft 365", vendor: "Microsoft", status: "planned", plane: "data", inbound: "pull", outbound: [],
-    egressHosts: ["graph.microsoft.com", "login.microsoftonline.com"],
-    summary: "Microsoft Graph security alerts_v2 (Defender XDR, Entra ID Protection, Purview), polled by lastUpdateDateTime.",
-    auth: "Entra ID app registration with SecurityAlert.Read.All (application permission).",
-  },
-  {
     kind: "mcp", displayName: "MCP servers", vendor: "Model Context Protocol", status: "available", plane: "tool", inbound: null, outbound: ["respond"],
     egressHosts: [],
     summary: "Tools AI agents may call, each pinned by definition hash, scanned for tool poisoning and authorized per call by the agent firewall.",

@@ -18,7 +18,8 @@ import type { Finding, PullAdapter } from "./types.js";
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === "object" && !Array.isArray(v);
-const MAX_PAGES = 5;
+const MAX_PAGES = 10;
+const WINDOW_MS = 6 * 3600_000;
 const SCOPE = "https://www.googleapis.com/auth/admin.reports.audit.readonly";
 
 /** The login events that matter for security, and how serious each is. Everything else (ordinary logins, logouts) is skipped. */
@@ -99,11 +100,15 @@ export const gworkspaceAdapter: PullAdapter = {
     try { token = String((JSON.parse(tokenRes.body) as { access_token?: unknown }).access_token ?? ""); } catch { /* below */ }
     if (!token) throw new Error("Google sign-in returned no token");
     const since = cursorSince(cursor);
+    // Google returns the newest events first. A long gap (first run, an outage) is therefore read in windows of
+    // six hours, oldest window first, so a page limit can never drop the older part of a backlog.
+    const windowEnd = Date.parse(since) + WINDOW_MS;
+    const catchingUp = windowEnd < Date.now() - 60_000;
     const findings: Finding[] = [];
     let newest = since;
     let pageToken = "";
     for (let page = 0; page < MAX_PAGES; page++) {
-      const q = new URLSearchParams({ startTime: since, maxResults: "1000", ...(pageToken ? { pageToken } : {}) });
+      const q = new URLSearchParams({ startTime: since, maxResults: "1000", ...(catchingUp ? { endTime: new Date(windowEnd).toISOString() } : {}), ...(pageToken ? { pageToken } : {}) });
       const res = await adapterFetch(m, `https://admin.googleapis.com/admin/reports/v1/activity/users/all/applications/login?${q}`, {
         method: "GET", signal, timeoutMs: 30_000, maxBytes: 16 * 1024 * 1024, headers: { authorization: `Bearer ${token}`, accept: "application/json" },
       });
@@ -120,6 +125,7 @@ export const gworkspaceAdapter: PullAdapter = {
       pageToken = typeof body.nextPageToken === "string" && body.nextPageToken.length <= 2000 ? body.nextPageToken : "";
       if (!pageToken) break;
     }
+    if (catchingUp) newest = new Date(windowEnd).toISOString();
     return { findings, cursor: { since: newest } };
   },
 };

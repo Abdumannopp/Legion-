@@ -15,7 +15,7 @@ import { query, queryOne } from "./db/pool.js";
 import * as box from "./secret-box.js";
 import { scrubError } from "./integrations/scrub.js";
 import { outboundAdapter, outboundKinds } from "./integrations/registry.js";
-import { PermanentDeliveryError, type OutboundMessage } from "./integrations/types.js";
+import { DeferredDelivery, PermanentDeliveryError, type OutboundMessage } from "./integrations/types.js";
 import type { Alert } from "./types.js";
 
 const FAILURES_BEFORE_ERROR = 10;
@@ -24,7 +24,7 @@ const sealContext = (id: string, tenantId: string) => `integration:${tenantId}:$
 export interface QueuedIntegrationMessage extends OutboundMessage { connectionId: string }
 
 /** In the caller's transaction: queue one message per active outbound connection of the alert's workspace. */
-export async function enqueueIntegrationMessages(client: PoolClient, alert: Alert): Promise<number> {
+export async function enqueueIntegrationMessages(client: Pick<PoolClient, "query">, alert: Alert, opts: { raised?: boolean } = {}): Promise<number> {
   const kinds = outboundKinds();
   if (!kinds.length) return 0;
   const conns = await client.query<{ id: string; kind: string; config: { min_severity?: string } | null }>(
@@ -48,10 +48,12 @@ export async function enqueueIntegrationMessages(client: PoolClient, alert: Aler
     if ((recent.get(c.id) ?? 0) >= config.alertEmailHourlyCap) continue;
     const message: OutboundMessage = {
       type: adapter.manifest.outbound.includes("ticket") ? "ticket" : "notify",
-      alertId: alert.id, title: alert.title.slice(0, 300), severity: alert.severity, summary: (alert.summary ?? "").slice(0, 2000),
+      alertId: alert.id, title: (opts.raised ? `[Severity raised] ${alert.title}` : alert.title).slice(0, 300), severity: alert.severity, summary: (alert.summary ?? "").slice(0, 2000),
       sourceIp: alert.source_ip ?? null, target: alert.target ?? null, link,
     };
-    ids.push(randomUUID()); dedupe.push(`${alert.id}:${c.id}`.slice(0, 200)); recipients.push(c.id); payloads.push(JSON.stringify(message));
+    ids.push(randomUUID()); // A raise by the source is a new message (once per severity): a connection whose threshold the alert did not
+    // reach before must hear of it now. Ticket and paging systems collapse it onto the first one by alert id.
+    dedupe.push(`${alert.id}:${c.id}${opts.raised ? `:raised:${alert.severity}` : ""}`.slice(0, 200)); recipients.push(c.id); payloads.push(JSON.stringify(message));
   }
   if (!ids.length) return 0;
   const r = await client.query(
@@ -137,6 +139,8 @@ export async function deliverIntegrationMessage(row: { id: string; tenant_id: st
     return { ok: true };
   } catch (error) {
     const detail = scrub(error instanceof Error ? error.message : "delivery failed", secrets);
+    // A deliberate wait is retried like a failure but is not one: the connection's health is left alone.
+    if (error instanceof DeferredDelivery) return { ok: false, detail };
     await query(
       `UPDATE integration_connections SET failures = failures + 1, last_error = $3, updated_at = now(),
               status = CASE WHEN failures + 1 >= $4 THEN 'error' ELSE status END
