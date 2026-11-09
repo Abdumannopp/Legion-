@@ -17,9 +17,9 @@ const isObj = (v: unknown): v is Obj => v !== null && typeof v === "object" && !
 const b64 = (b: Buffer | string) => Buffer.from(b).toString("base64url");
 const MAX_PAGES = 10;
 
-export function signJwt(email: string, privateKey: string, now = Math.floor(Date.now() / 1000)): string {
+export function signJwt(email: string, privateKey: string, now = Math.floor(Date.now() / 1000), opts: { scope?: string; sub?: string } = {}): string {
   const head = b64(JSON.stringify({ alg: "RS256", typ: "JWT" }));
-  const claim = b64(JSON.stringify({ iss: email, scope: "https://www.googleapis.com/auth/cloud-platform", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600 }));
+  const claim = b64(JSON.stringify({ iss: email, scope: opts.scope ?? "https://www.googleapis.com/auth/cloud-platform", aud: "https://oauth2.googleapis.com/token", iat: now, exp: now + 3600, ...(opts.sub ? { sub: opts.sub } : {}) }));
   const sig = createSign("RSA-SHA256").update(`${head}.${claim}`).sign(privateKey);
   return `${head}.${claim}.${b64(sig)}`;
 }

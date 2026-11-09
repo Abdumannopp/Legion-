@@ -119,7 +119,10 @@ describe("the catalogue", () => {
     const res = await request(app).get("/integrations/catalogue").set(...bearer(analystA));
     const byKind = Object.fromEntries(res.body.integrations.map((i: { kind: string }) => [i.kind, i]));
     expect(byKind.wazuh).toMatchObject({ status: "available", inbound: "push", plane: "data" });
-    for (const k of ["aws"]) expect(byKind[k]).toMatchObject({ status: "planned" });
+    // Nothing on the old roadmap is left "planned": AWS became Security Hub (and GuardDuty).
+    expect(byKind.aws).toBeUndefined();
+    for (const k of ["securityhub", "guardduty", "crowdstrike", "sentinelone", "msentinel", "elastic", "splunk", "cloudflare", "gworkspace"]) expect(byKind[k]).toMatchObject({ status: "available", inbound: "pull", plane: "data" });
+    for (const k of ["servicenow", "opsgenie"]) expect(byKind[k]).toMatchObject({ status: "available", plane: "tool", inbound: null });
     // Built since: Slack (notify) and Jira (ticket), see tests/integrations-outbound.test.ts.
     for (const k of ["slack", "jira"]) expect(byKind[k]).toMatchObject({ status: "available", plane: "tool" });
     expect(byKind.mcp).toMatchObject({ plane: "tool", status: "available" });
@@ -140,7 +143,8 @@ describe("pull connections", () => {
   });
 
   it("validate the kind, the adapter's config schema and the required secrets", async () => {
-    expect((await create(adminA, { ...validBody, kind: "aws" })).status).toBe(400); // planned, not available
+    expect((await create(adminA, { ...validBody, kind: "aws" })).status).toBe(400); // no such integration
+    expect((await create(adminA, { ...validBody, kind: "mcp" })).status).toBe(400); // a tool, not a connection
     expect((await create(adminA, { ...validBody, kind: "wazuh" })).status).toBe(400); // push, configured elsewhere
     expect((await create(adminA, { ...validBody, config: { account: "12" } })).status).toBe(400);
     expect((await create(adminA, { ...validBody, secrets: {} })).status).toBe(400);

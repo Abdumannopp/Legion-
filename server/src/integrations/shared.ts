@@ -68,3 +68,14 @@ export function mitreIn(...texts: unknown[]): string[] {
   }
   return [...out];
 }
+
+/**
+ * The "since" time a poll resumes from: the cursor's ISO time if it is one (and not in the future), otherwise
+ * `fallbackHours` ago. Adapters put this value into vendor query languages (FQL, OData, SPL…), so only a strict
+ * ISO-8601 UTC timestamp is accepted — never free text.
+ */
+export function cursorSince(cursor: unknown, fallbackHours = 24): string {
+  const c = (cursor as { since?: unknown } | null)?.since;
+  if (typeof c === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(c) && Date.parse(c) <= Date.now() + 300_000) return c;
+  return new Date(Date.now() - fallbackHours * 3600_000).toISOString();
+}

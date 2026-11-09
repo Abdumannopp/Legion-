@@ -73,7 +73,9 @@ export async function deliveriesForAlert(tenantId: string, alertId: string): Pro
       WHERE o.tenant_id = $1 AND o.kind = 'integration_message' AND o.payload->>'alertId' = $2
       ORDER BY o.created_at`, [tenantId, alertId],
   );
-  const okUrl = (u: unknown): u is string => typeof u === "string" && /^https:\/\/[a-z0-9-]+\.atlassian\.net\/browse\//.test(u);
+  // Only links to the ticket systems Legion opens tickets in (Jira, ServiceNow): a stored link is never shown blindly.
+  const okUrl = (u: unknown): u is string => typeof u === "string" && u.length <= 500 &&
+    (/^https:\/\/[a-z0-9-]+\.atlassian\.net\/browse\/[A-Z][A-Z0-9_]+-\d+$/.test(u) || /^https:\/\/[a-z0-9-]+\.service-now\.com\/nav_to\.do\?uri=incident\.do%3Fsys_id%3D[a-f0-9]{32}$/.test(u));
   const out: AlertDelivery[] = [];
   const seen = new Set<string>();
   for (const r of rows.rows) {

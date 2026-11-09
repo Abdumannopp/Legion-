@@ -7,10 +7,13 @@ import { ConnectionInfo, createConnection, listConnections, removeConnection, se
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 import { timeAgo } from "@/lib/i18n/format";
 
-type Kind = "m365" | "azure" | "gcp" | "guardduty" | "okta" | "github" | "slack" | "teams" | "pagerduty" | "jira";
-type FieldType = "text" | "password" | "regions" | "severity";
-interface Field { key: string; where: "config" | "secrets"; type: FieldType }
-const KINDS: Kind[] = ["m365", "azure", "guardduty", "gcp", "okta", "github", "slack", "teams", "pagerduty", "jira"];
+type Kind = "m365" | "azure" | "gcp" | "guardduty" | "okta" | "github" | "slack" | "teams" | "pagerduty" | "jira"
+  | "crowdstrike" | "sentinelone" | "msentinel" | "securityhub" | "elastic" | "splunk" | "cloudflare" | "gworkspace" | "servicenow" | "opsgenie";
+type FieldType = "text" | "password" | "regions" | "severity" | "choice" | "number";
+interface Field { key: string; where: "config" | "secrets"; type: FieldType; options?: string[] }
+// Grouped as the card shows them: endpoint and SIEM, cloud, identity and edge, then where alerts are sent.
+const KINDS: Kind[] = ["crowdstrike", "sentinelone", "m365", "msentinel", "elastic", "splunk", "azure", "guardduty", "securityhub", "gcp", "okta", "gworkspace", "cloudflare", "github", "slack", "teams", "pagerduty", "opsgenie", "jira", "servicenow"];
+const OUTBOUND: Kind[] = ["slack", "teams", "pagerduty", "opsgenie", "jira", "servicenow"];
 // Technical identifiers: they must match the server's schema for each connector.
 const FIELDS: Record<Kind, Field[]> = {
   m365: [{ key: "directory_id", where: "config", type: "text" }, { key: "client_id", where: "config", type: "text" }, { key: "client_secret", where: "secrets", type: "password" }],
@@ -23,11 +26,21 @@ const FIELDS: Record<Kind, Field[]> = {
   pagerduty: [{ key: "routing_key", where: "secrets", type: "password" }, { key: "min_severity", where: "config", type: "severity" }],
   slack: [{ key: "webhook_url", where: "secrets", type: "password" }, { key: "min_severity", where: "config", type: "severity" }],
   jira: [{ key: "site", where: "config", type: "text" }, { key: "project_key", where: "config", type: "text" }, { key: "email", where: "secrets", type: "text" }, { key: "api_token", where: "secrets", type: "password" }, { key: "min_severity", where: "config", type: "severity" }],
+  crowdstrike: [{ key: "cloud", where: "config", type: "choice", options: ["us-1", "us-2", "eu-1", "us-gov-1"] }, { key: "client_id", where: "config", type: "text" }, { key: "client_secret", where: "secrets", type: "password" }],
+  sentinelone: [{ key: "console", where: "config", type: "text" }, { key: "api_token", where: "secrets", type: "password" }],
+  msentinel: [{ key: "directory_id", where: "config", type: "text" }, { key: "client_id", where: "config", type: "text" }, { key: "subscription_id", where: "config", type: "text" }, { key: "resource_group", where: "config", type: "text" }, { key: "workspace", where: "config", type: "text" }, { key: "client_secret", where: "secrets", type: "password" }],
+  securityhub: [{ key: "regions", where: "config", type: "regions" }, { key: "access_key_id", where: "secrets", type: "text" }, { key: "secret_access_key", where: "secrets", type: "password" }, { key: "role_arn", where: "config", type: "text" }, { key: "external_id", where: "config", type: "text" }],
+  elastic: [{ key: "kibana_host", where: "config", type: "text" }, { key: "api_key", where: "secrets", type: "password" }],
+  splunk: [{ key: "stack", where: "config", type: "text" }, { key: "index", where: "config", type: "text" }, { key: "token", where: "secrets", type: "password" }],
+  cloudflare: [{ key: "zone_id", where: "config", type: "text" }, { key: "min_events", where: "config", type: "number" }, { key: "api_token", where: "secrets", type: "password" }],
+  gworkspace: [{ key: "admin_email", where: "config", type: "text" }, { key: "service_account_json", where: "secrets", type: "password" }],
+  servicenow: [{ key: "instance", where: "config", type: "text" }, { key: "username", where: "secrets", type: "text" }, { key: "password", where: "secrets", type: "password" }, { key: "min_severity", where: "config", type: "severity" }],
+  opsgenie: [{ key: "region", where: "config", type: "choice", options: ["us", "eu"] }, { key: "api_key", where: "secrets", type: "password" }, { key: "min_severity", where: "config", type: "severity" }],
 };
 const card = "rounded-xl border border-line bg-surface p-4";
 const input = "w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm text-ink";
 
-/** Pull (Defender XDR, GuardDuty) and outbound (Slack, Jira) connections: list, add, pause, remove. Administrators only. */
+/** Pull (EDR, SIEM, cloud, identity, edge) and outbound (chat, paging, tickets) connections: list, add, pause, remove. Administrators only. */
 export default function ConnectionsSection({ isAdmin }: { isAdmin: boolean }) {
   const { t, locale } = useLanguage();
   const m = t.connections;
@@ -56,9 +69,10 @@ export default function ConnectionsSection({ isAdmin }: { isAdmin: boolean }) {
       const v = (values[f.key] ?? "").trim();
       if (!v) continue;
       if (f.where === "secrets") secrets[f.key] = v;
-      else config[f.key] = f.type === "regions" ? v.split(",").map((r) => r.trim()).filter(Boolean) : v;
+      else config[f.key] = f.type === "regions" ? v.split(",").map((r) => r.trim()).filter(Boolean) : f.type === "number" ? Number(v) : v;
     }
-    if (adding === "slack" || adding === "jira" || adding === "teams") config.min_severity ??= "high";
+    for (const f of FIELDS[adding]) if (f.type === "choice" && config[f.key] === undefined && f.options) config[f.key] = f.options[0];
+    if (OUTBOUND.includes(adding) && adding !== "pagerduty") config.min_severity ??= "high";
     if (adding === "pagerduty") config.min_severity ??= "critical"; // i18n-ignore: API value
     const made = await createConnection({ kind: adding, name: m.kinds[adding].name, config, secrets });
     setAdding(null); setValues({}); setNotice(adding === "github" ? m.githubUrl(githubWebhookUrl(made.id)) : m.saved);
@@ -109,12 +123,16 @@ export default function ConnectionsSection({ isAdmin }: { isAdmin: boolean }) {
           {FIELDS[adding].map((f) => (
             <label key={f.key} className="block text-xs text-ink-muted">
               {m.fields[f.key as keyof typeof m.fields]}
-              {f.type === "severity" ? (
+              {f.type === "choice" ? (
+                <select className={input} value={values[f.key] ?? f.options?.[0]} onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}>
+                  {(f.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
+                </select>
+              ) : f.type === "severity" ? (
                 <select className={input} value={values[f.key] ?? "high"} onChange={(e) => setValues({ ...values, [f.key]: e.target.value })}>
                   {(["low", "medium", "high", "critical"] as const).map((s) => <option key={s} value={s}>{m.severities[s]}</option>)}
                 </select>
               ) : (
-                <input className={input} type={f.type === "password" ? "password" : "text"} autoComplete="off" value={values[f.key] ?? ""} onChange={(e) => setValues({ ...values, [f.key]: e.target.value })} />
+                <input className={input} type={f.type === "password" ? "password" : f.type === "number" ? "number" : "text"} autoComplete="off" value={values[f.key] ?? ""} onChange={(e) => setValues({ ...values, [f.key]: e.target.value })} />
               )}
             </label>
           ))}

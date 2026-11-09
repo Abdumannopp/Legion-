@@ -21,9 +21,20 @@ import { slackAdapter } from "./slack.js";
 import { cefAdapter } from "./cef.js";
 import { genericWebhookAdapter } from "./generic.js";
 import { wazuhAdapter } from "./wazuh.js";
+import { crowdstrikeAdapter } from "./crowdstrike.js";
+import { sentineloneAdapter } from "./sentinelone.js";
+import { msentinelAdapter } from "./msentinel.js";
+import { securityhubAdapter } from "./securityhub.js";
+import { elasticAdapter } from "./elastic.js";
+import { splunkAdapter } from "./splunk.js";
+import { cloudflareAdapter } from "./cloudflare.js";
+import { gworkspaceAdapter } from "./gworkspace.js";
+import { servicenowAdapter } from "./servicenow.js";
+import { opsgenieAdapter } from "./opsgenie.js";
 
 const adapters = new Map<string, Adapter>();
-const BUILT_IN = new Set(["wazuh", "generic_webhook", "cef", "slack", "jira", "m365", "guardduty", "azure", "gcp", "okta", "pagerduty", "teams", "github"]);
+const BUILT_IN = new Set(["wazuh", "generic_webhook", "cef", "slack", "jira", "m365", "guardduty", "azure", "gcp", "okta", "pagerduty", "teams", "github",
+  "crowdstrike", "sentinelone", "msentinel", "securityhub", "elastic", "splunk", "cloudflare", "gworkspace", "servicenow", "opsgenie"]);
 
 export function register(adapter: Adapter): void {
   if (!/^[a-z][a-z0-9_]{1,40}$/.test(adapter.manifest.kind)) throw new Error(`invalid integration kind: ${adapter.manifest.kind}`);
@@ -70,6 +81,16 @@ register(pagerdutyAdapter);
 register(oktaAdapter);
 register(gcpAdapter);
 register(azureAdapter);
+register(crowdstrikeAdapter);
+register(sentineloneAdapter);
+register(msentinelAdapter);
+register(securityhubAdapter);
+register(elasticAdapter);
+register(splunkAdapter);
+register(cloudflareAdapter);
+register(gworkspaceAdapter);
+register(servicenowAdapter);
+register(opsgenieAdapter);
 
 /**
  * The roadmap, as contracts. Each is the adapter type it will be, the data it
@@ -77,12 +98,6 @@ register(azureAdapter);
  * shape of the work is fixed before any of it is written.
  */
 const PLANNED: IntegrationManifest[] = [
-  {
-    kind: "aws", displayName: "AWS", vendor: "Amazon Web Services", status: "planned", plane: "data", inbound: "pull", outbound: [],
-    egressHosts: ["securityhub.*.amazonaws.com", "sts.amazonaws.com"],
-    summary: "Security Hub findings (GuardDuty, Inspector, Macie, Config) in ASFF, polled by UpdatedAt cursor per region.",
-    auth: "Cross-account IAM role assumed with an external id (no long-lived keys stored).",
-  },
   {
     kind: "azure", displayName: "Microsoft Azure", vendor: "Microsoft", status: "planned", plane: "data", inbound: "pull", outbound: [],
     egressHosts: ["management.azure.com", "login.microsoftonline.com"],

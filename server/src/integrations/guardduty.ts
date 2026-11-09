@@ -14,7 +14,7 @@ import { cleanText, parseTime, pickIp, severityOf } from "./shared.js";
 import { signV4 } from "./sigv4.js";
 import type { ConnectionContext, Finding, PullAdapter } from "./types.js";
 
-const REGION = /^[a-z]{2}(?:-[a-z]+)+-\d$/;
+export const REGION = /^[a-z]{2}(?:-[a-z]+)+-\d$/;
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === "object" && !Array.isArray(v);
 const get = (o: unknown, path: string[]): unknown => path.reduce<unknown>((c, k) => (isObj(c) ? c[k] : undefined), o);
@@ -48,22 +48,22 @@ export function findingFromGuardDuty(f: Obj): Finding | null {
   };
 }
 
-interface AwsCreds { accessKeyId: string; secretAccessKey: string; sessionToken?: string }
+export interface AwsCreds { accessKeyId: string; secretAccessKey: string; sessionToken?: string }
 
 /**
  * Optional cross-account role: with config.role_arn, the stored key only needs sts:AssumeRole on that one role
  * (with the external id the customer set in the role's trust policy); GuardDuty is then read with short-lived
  * credentials (15 minutes). Without role_arn the stored key reads GuardDuty directly.
  */
-export async function credentialsFor(conn: ConnectionContext, signal: AbortSignal): Promise<AwsCreds> {
+export async function credentialsFor(conn: ConnectionContext, signal: AbortSignal, manifest: { egressHosts: string[] } = guarddutyManifest, sessionName = "legion-guardduty"): Promise<AwsCreds> {
   const base: AwsCreds = { accessKeyId: conn.secrets.access_key_id ?? "", secretAccessKey: conn.secrets.secret_access_key ?? "" };
   const roleArn = typeof conn.config.role_arn === "string" ? conn.config.role_arn : "";
   if (!roleArn) return base;
-  const query: Record<string, string> = { Action: "AssumeRole", Version: "2011-06-15", RoleArn: roleArn, RoleSessionName: "legion-guardduty", DurationSeconds: "900" };
+  const query: Record<string, string> = { Action: "AssumeRole", Version: "2011-06-15", RoleArn: roleArn, RoleSessionName: sessionName, DurationSeconds: "900" };
   if (typeof conn.config.external_id === "string" && conn.config.external_id) query.ExternalId = conn.config.external_id;
   const signed = signV4({ method: "GET", host: "sts.amazonaws.com", path: "/", query, region: "us-east-1", service: "sts", ...base });
   const qs = Object.entries(query).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
-  const res = await adapterFetch(guarddutyManifest, `https://sts.amazonaws.com/?${qs}`, { method: "GET", signal, timeoutMs: 15_000, maxBytes: 64 * 1024, headers: signed });
+  const res = await adapterFetch(manifest, `https://sts.amazonaws.com/?${qs}`, { method: "GET", signal, timeoutMs: 15_000, maxBytes: 64 * 1024, headers: signed });
   if (res.status === 429 || res.status >= 500) throw new Error(`AWS STS answered ${res.status}; will retry`);
   if (res.status !== 200) throw new Error(`AWS STS refused to assume the role (${res.status}); check the role's trust policy and external id`);
   const pick = (tag: string) => new RegExp(`<${tag}>([^<]{1,2048})</${tag}>`).exec(res.body)?.[1];

@@ -9,7 +9,7 @@
 import { z } from "zod";
 import { adapterFetch } from "./fetch.js";
 import { cleanText, mitreIn, parseTime, pickIp, severityOf } from "./shared.js";
-import type { Finding, PullAdapter } from "./types.js";
+import type { ConnectionContext, Finding, IntegrationManifest, PullAdapter } from "./types.js";
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -43,6 +43,19 @@ export function findingFromAzureAlert(a: Obj): Finding | null {
   };
 }
 
+/** A management.azure.com token for the app registration of a connection (client credentials). Shared with Microsoft Sentinel. */
+export async function azureManagementToken(manifest: Pick<IntegrationManifest, "egressHosts">, conn: ConnectionContext, signal: AbortSignal): Promise<string> {
+  const tokenRes = await adapterFetch(manifest, `https://login.microsoftonline.com/${encodeURIComponent(String(conn.config.directory_id))}/oauth2/v2.0/token`, {
+    method: "POST", signal, timeoutMs: 20_000, maxBytes: 64 * 1024, headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: String(conn.config.client_id), client_secret: conn.secrets.client_secret ?? "", scope: "https://management.azure.com/.default", grant_type: "client_credentials" }).toString(),
+  });
+  if (tokenRes.status !== 200) throw new Error(`Microsoft sign-in failed (${tokenRes.status}); check the directory id, application id and client secret`);
+  let token = "";
+  try { token = String((JSON.parse(tokenRes.body) as { access_token?: unknown }).access_token ?? ""); } catch { /* below */ }
+  if (!token) throw new Error("Microsoft sign-in returned no token");
+  return token;
+}
+
 export const azureAdapter: PullAdapter = {
   manifest: {
     kind: "azure", displayName: "Microsoft Azure (Defender for Cloud)", vendor: "Microsoft", status: "available", plane: "data", inbound: "pull", outbound: [],
@@ -57,14 +70,7 @@ export const azureAdapter: PullAdapter = {
   }),
   secretFields: ["client_secret"],
   async poll(conn, cursor, signal) {
-    const tokenRes = await adapterFetch(azureAdapter.manifest, `https://login.microsoftonline.com/${encodeURIComponent(String(conn.config.directory_id))}/oauth2/v2.0/token`, {
-      method: "POST", signal, timeoutMs: 20_000, maxBytes: 64 * 1024, headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ client_id: String(conn.config.client_id), client_secret: conn.secrets.client_secret ?? "", scope: "https://management.azure.com/.default", grant_type: "client_credentials" }).toString(),
-    });
-    if (tokenRes.status !== 200) throw new Error(`Microsoft sign-in failed (${tokenRes.status}); check the directory id, application id and client secret`);
-    let token = "";
-    try { token = String((JSON.parse(tokenRes.body) as { access_token?: unknown }).access_token ?? ""); } catch { /* below */ }
-    if (!token) throw new Error("Microsoft sign-in returned no token");
+    const token = await azureManagementToken(azureAdapter.manifest, conn, signal);
     const since = typeof (cursor as { since?: unknown } | null)?.since === "string" ? (cursor as { since: string }).since : new Date(Date.now() - 24 * 3600_000).toISOString();
     let url: string | null = `https://management.azure.com/subscriptions/${encodeURIComponent(String(conn.config.subscription_id))}/providers/Microsoft.Security/alerts?api-version=2022-01-01`;
     const findings: Finding[] = [];

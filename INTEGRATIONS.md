@@ -17,7 +17,19 @@ Legion takes security data in through **adapters** (`server/src/integrations/`):
 | 9 | **GitHub** (secret / code scanning, Dependabot) | **built, simulated deliveries** | push, X-Hub-Signature-256 per connection |
 | 10 | **PagerDuty** (page on-call) | **built, simulated provider** | outbound, Events API v2 (dedup by alert id) |
 | 11 | **Microsoft Teams** (channel) | **built, simulated provider** | outbound, Workflows webhook URL |
-| 5 | Elastic / Splunk dedicated pull adapters | optional later; the generic webhook already receives their alerts | |
+| 12 | **CrowdStrike Falcon** (EDR) | **built, simulated provider** | pull, API client with *Alerts: Read* only |
+| 13 | **SentinelOne** (EDR) | **built, simulated provider** | pull, Viewer API token |
+| 14 | **Microsoft Sentinel** (SIEM incidents) | **built, simulated provider** | pull, Entra app, *Microsoft Sentinel Reader* |
+| 15 | **AWS Security Hub** (Inspector, Macie, Config, partners) | **built, simulated provider; SigV4** | pull, IAM key or read-only role (external id) |
+| 16 | **Elastic Security** on Elastic Cloud | **built, simulated provider** | pull, API key (read alerts) |
+| 17 | **Splunk Cloud** (ES notable events) | **built, simulated provider** | pull, authentication token, REST port 8089 |
+| 18 | **Cloudflare** (WAF / edge) | **built, simulated provider** | pull, token with *Zone · Analytics · Read* |
+| 19 | **Google Workspace** (sign-in security) | **built, simulated provider** | pull, service account, domain-wide delegation, audit read-only scope |
+| 20 | **ServiceNow** (incident) | **built, simulated provider** | outbound, *itil* user, one incident per alert |
+| 21 | **Opsgenie** (on-call) | **built, simulated provider** | outbound, API integration key (dedup by alias) |
+| 5 | Self-managed Elastic / Splunk | through the generic JSON webhook (a Kibana webhook connector / Splunk alert action), because Legion never calls an address a customer typed | |
+
+**Firewalls, IDS and other tools with syslog** (Palo Alto, Fortinet, Check Point, Cisco, Sophos, pfSense, Suricata, Zeek…) connect through **Syslog / CEF** or the **generic JSON webhook**; no vendor-specific code is needed for them.
 
 ## Authentication (all push routes)
 
@@ -121,7 +133,7 @@ GuardDuty IAM policy (read only): `guardduty:ListDetectors`, `guardduty:ListFind
 Firewall for self-hosted installs: allow outbound 443 to the hosts above, plus `hooks.slack.com` and `*.atlassian.net` for Slack and Jira. No other environment variable is needed.
 
 **Verified (simulated providers):** field mapping, severity bands, cursor and paging, a paging link to any host but Graph is refused, wrong secret / missing consent / 403 give a clear error that never contains the secret, an outage backs off and recovers, alerts land only in the owning workspace, secrets are sealed and never returned, region names cannot inject hosts (`tests/integrations-cloud.test.ts`).
-**Not verified:** a real Entra tenant or AWS account. Limits: a Microsoft alert or GuardDuty finding is stored once by its id (later updates of the same object do not raise a new Legion alert); Defender severity "high" is the top Microsoft level, so Defender alerts are never "critical"; Security Hub is not built.
+**Not verified:** a real Entra tenant or AWS account. Limits: a Microsoft alert or GuardDuty finding is stored once by its id (a later update with a **higher** severity raises the existing Legion alert — see "Vendor updates" below; an update never creates a second alert); Defender severity "high" is the top Microsoft level, so Defender alerts are never "critical". Security Hub is built (see below).
 
 ## Definition of done: where each item stands
 
@@ -161,6 +173,41 @@ All added in **Connect → Connections** (or `POST /integrations`). Same rules a
 **Verified (simulated providers/deliveries):** field mapping and severity, paging and cursors, the Google JWT is a valid RS256 signature, SSWS/Bearer auth on the right hosts only, foreign paging links not followed, refused credentials give clear errors without the secret, GitHub signature cases (valid, tampered, missing, wrong secret, unknown/other-workspace/paused connection), PagerDuty dedup and severity, Teams host validation, plain-text cards (`tests/integrations-platforms.test.ts`, 20 tests).
 **Not verified:** a real Azure subscription, Google Cloud organisation, Okta org, GitHub repository, PagerDuty service or Teams channel. The Azure, SCC and Okta request shapes follow the vendors' documentation; confirm each against a sandbox account before relying on it. Limits: an Azure alert, SCC finding or Okta event is stored once by its id; Azure lists current alerts and Legion filters by time itself; Okta ingests warnings and errors only; GitHub delivers at least once and failed deliveries are redelivered by GitHub, not queued by Legion.
 
+## EDR, SIEM, cloud, identity, edge and ticketing (second wave)
+
+| Kind | Vendor side | `config` | `secrets` | Hosts Legion calls |
+|---|---|---|---|---|
+| `crowdstrike` | Falcon → API clients → new client with **Alerts: Read** only | `cloud` (`us-1`, `us-2`, `eu-1`, `us-gov-1`), `client_id` | `client_secret` | that cloud's API host only (`api.crowdstrike.com`, `api.us-2…`, `api.eu-1…`, `api.laggar.gcw…`) |
+| `sentinelone` | Service user with the **Viewer** role → API token | `console` (`acme` = acme.sentinelone.net) | `api_token` | `<console>.sentinelone.net` |
+| `msentinel` | Entra app registration; **Microsoft Sentinel Reader** on the workspace | `directory_id`, `client_id`, `subscription_id`, `resource_group`, `workspace` | `client_secret` | `login.microsoftonline.com`, `management.azure.com` |
+| `securityhub` | IAM policy `securityhub:GetFindings` (on a role assumed with an external id, recommended) | `regions`, `role_arn`, `external_id`, `include_guardduty` (default `false`) | `access_key_id`, `secret_access_key` | `securityhub.<region>.amazonaws.com`, `sts.amazonaws.com` |
+| `elastic` | API key with read access to the security alerts (viewer) | `kibana_host` (an Elastic Cloud Kibana host), `space` (default `default`) | `api_key` | `*.kb.<region>.<provider>.elastic-cloud.com` / `.cloud.es.io` / `.elastic.cloud` |
+| `splunk` | Authentication token of a user who may search the index; **add Legion's outbound address to Splunk Cloud's REST allow list** | `stack` (`acme` = acme.splunkcloud.com), `index` (default `notable`) | `token` | `<stack>.splunkcloud.com:8089` |
+| `cloudflare` | API token with **Zone · Analytics · Read** on the zone | `zone_id`, `min_events` (default 50 per address per hour) | `api_token` | `api.cloudflare.com` |
+| `gworkspace` | Service account; Admin console → domain-wide delegation for **`https://www.googleapis.com/auth/admin.reports.audit.readonly`** only | `admin_email` (the administrator Legion acts as) | `service_account_json` | `oauth2.googleapis.com`, `admin.googleapis.com` |
+| `servicenow` | Integration user with the **itil** role | `instance` (`acme` = acme.service-now.com), `assignment_group` (sys_id, optional), `min_severity` (default `high`) | `username`, `password` | `<instance>.service-now.com` |
+| `opsgenie` | Opsgenie → Integrations → **API** | `region` (`us`/`eu`), `min_severity` (default `high`) | `api_key` | `api.opsgenie.com` / `api.eu.opsgenie.com` |
+
+What each reads, and how repeats are handled:
+
+- **CrowdStrike** — Alerts API v2, by `updated_timestamp`; one Legion alert per composite id. Severity from `severity_name` (or the 1–100 score).
+- **SentinelOne** — threats, by `updatedAt`. SentinelOne has no severity field, so Legion derives it: *malicious and not mitigated* → critical, *malicious* → high, *suspicious* → medium.
+- **Microsoft Sentinel** — incidents by `lastModifiedTimeUtc`; **closed incidents are skipped**.
+- **Security Hub** — ACTIVE findings with workflow NEW or NOTIFIED, by `UpdatedAt`. GuardDuty's own findings are skipped unless `include_guardduty` is true, so a workspace with both connections does not get each GuardDuty finding twice.
+- **Elastic** — Kibana detection engine, open alerts by `@timestamp`, `search_after` paging. Only Elastic Cloud hosts are accepted (an internal or typed address is refused when saving — tested).
+- **Splunk** — the REST export endpoint, events **indexed** since the last poll (so late events are read once), at most 1 000 per poll; a full page resumes from the last index time. The search is fixed; the index name is checked so it cannot carry SPL.
+- **Cloudflare** — the GraphQL Analytics API, blocked or challenged requests **grouped by address per complete UTC hour**: one alert per address per hour with the count (≥ 500 medium, ≥ 5 000 high), never one alert per request. At most 24 hours per poll; the current hour is read in the next poll.
+- **Google Workspace** — the login audit: government-backed attack warning (critical), account disabled as hijacked or for a leaked password, suspicious sign-ins (high), risky action blocked, spam (medium), failed sign-in (low). Ordinary sign-ins and sign-outs are skipped.
+- **ServiceNow** — one incident per alert: `correlation_id = legion-<alert id>` is looked up first (the Table API reads the database, so there is no index lag), and the incident number is stored on the message the moment it is created. The incident link is shown on the alert page.
+- **Opsgenie** — `alias = legion-<alert id>`, so Opsgenie collapses repeats. Atlassian has announced the end of Opsgenie as a separate product; its alerting API lives on in Jira Service Management.
+
+**Vendor updates (audit A-9):** every pull connector above, and Defender XDR, GuardDuty and Okta, reads by *update* time. When an item Legion already stored comes again with a **higher** severity, the Legion alert is raised to it, a dated line ("The source raised the severity to …") is added to its text, the change is written to the audit log, and dashboards see it at once. A source never **lowers** a severity and never changes an alert's status: closing or downgrading stays a person's decision. Tickets and pages already sent are not sent again for the raise.
+
+**Verified (simulated providers):** field mapping and severity, auth header and host of each vendor, cursors and paging, filters sent to each API, only the configured cloud/console/instance/stack is called, refused credentials and outages give clear errors without the secret, Elastic/Splunk/SentinelOne/ServiceNow/CrowdStrike configs refuse a URL or injected text, Cloudflare's hourly grouping and 24-hour cap, Google's delegated JWT (`sub`, read-only scope), ServiceNow one-incident-per-alert and dead-lettering of bad credentials, Opsgenie alias and priority, tenant isolation, an end-to-end CrowdStrike poll through the worker, and the severity-raise rule (`tests/integrations-edr-siem.test.ts`).
+**Not verified:** real CrowdStrike, SentinelOne, Sentinel, Security Hub, Elastic Cloud, Splunk Cloud, Cloudflare, Google Workspace, ServiceNow or Opsgenie accounts. The request shapes follow each vendor's API documentation; run each connector once against a sandbox account before relying on it (audit A-1).
+
+Firewall for self-hosted installs: allow outbound 443 to the hosts in the table (and 8089 to `<stack>.splunkcloud.com` for Splunk).
+
 ## What Legion can DO in these systems today
 
-Everything above **reads, notifies or opens tickets**. The only real response actions remain (a) blocking a public address (enforced by the Wazuh manager's active response) and (b) e-mailing administrators, both opt-in per workspace ([PROTECTION.md](PROTECTION.md)). Disabling an Entra, Okta or Google account, isolating a host (Defender for Endpoint, CrowdStrike) and similar actions are **simulation only**: they need a connector with write permission in the customer's tenant, a security review of that executor, and a person's approval every time. They are not built.
+Everything above **reads, notifies or opens tickets**. The only real response actions remain (a) blocking a public address (enforced by the Wazuh manager's active response) and (b) e-mailing administrators, both opt-in per workspace ([PROTECTION.md](PROTECTION.md)). Disabling an Entra, Okta or Google account, isolating a host (Defender for Endpoint, CrowdStrike, SentinelOne), changing a Cloudflare rule and similar actions are **simulation only**: they need a connector with write permission in the customer's tenant, a security review of that executor, and a person's approval every time. They are not built.
