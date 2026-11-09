@@ -291,6 +291,25 @@ describe("Jira tickets", () => {
     expect(searches).toHaveLength(0);
     expect((await outbox())[0]).toMatchObject({ status: "sent", payload: { ticket: { key: "SEC-8" } } });
   });
+  it("A-7: the ticket link stays on the alert after the delivered message is pruned", async () => {
+    await create(adminA, jiraBody);
+    const state = { exists: false, created: 0 }; respond = jiraRespond(state);
+    await ingestFindings(tA, "wazuh", [finding("j8")]);
+    await deliverDue({ kind: "integration_message" });
+    const id = (await query<{ id: string }>("SELECT id FROM alerts WHERE tenant_id = $1 AND title = 'Alert j8'", [tA])).rows[0]!.id;
+    const show = async (u: User) => (await request(app).get(`/alerts/${id}/deliveries`).set(...bearer(u))).body.deliveries;
+    expect(await show(adminA)).toEqual([expect.objectContaining({ kind: "jira", ticket: { key: "SEC-8", url: "https://acme.atlassian.net/browse/SEC-8" } })]);
+    // retention removes the delivered row (NOTIFY_RETENTION_DAYS)
+    await query("DELETE FROM notification_outbox WHERE kind = 'integration_message'");
+    const after = await show(adminA);
+    expect(after).toHaveLength(1);
+    expect(after[0]).toMatchObject({ connection: "SEC board", kind: "jira", status: "sent", ticket: { key: "SEC-8", url: "https://acme.atlassian.net/browse/SEC-8" } });
+    // another workspace still cannot see it
+    expect((await request(app).get(`/alerts/${id}/deliveries`).set(...bearer(adminB))).status).toBe(404);
+    // a duplicated entry is shown once
+    await query("UPDATE alerts SET tickets = tickets || tickets WHERE tenant_id = $1 AND id = $2", [tA, id]);
+    expect(await show(adminA)).toHaveLength(1);
+  });
   it("bad credentials (401) are not retried; a Jira outage is", async () => {
     await create(adminA, jiraBody);
     respond = () => ({ status: 401 });

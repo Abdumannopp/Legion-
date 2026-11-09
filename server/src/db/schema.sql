@@ -801,3 +801,7 @@ ALTER TABLE alerts ADD COLUMN IF NOT EXISTS acknowledged_at timestamptz;
 ALTER TABLE alerts ADD COLUMN IF NOT EXISTS resolved_at timestamptz;
 ALTER TABLE alerts ADD COLUMN IF NOT EXISTS resolved_by text CHECK (resolved_by IS NULL OR length(resolved_by) <= 120);
 ALTER TABLE alerts ADD COLUMN IF NOT EXISTS reopened_count int NOT NULL DEFAULT 0 CHECK (reopened_count >= 0);
+
+-- Audit A-7: the tickets an alert became (Jira, ...) live on the alert itself, so the link outlives the
+-- delivered outbox rows, which are pruned after NOTIFY_RETENTION_DAYS. [{connection_id, key, url, at}].
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS tickets jsonb NOT NULL DEFAULT '[]'::jsonb;

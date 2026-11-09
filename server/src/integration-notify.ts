@@ -66,17 +66,30 @@ export interface AlertDelivery { connection: string; kind: string; status: strin
 
 /** Where one alert was sent (Slack, Jira…) and, for tickets, which ticket it became. Tenant-scoped. */
 export async function deliveriesForAlert(tenantId: string, alertId: string): Promise<AlertDelivery[]> {
-  const rows = await query<{ name: string | null; kind: string | null; status: string; payload: { ticket?: { key?: unknown; url?: unknown } }; last_error: string | null; sent_at: string | null }>(
-    `SELECT c.name, c.kind, o.status, o.payload, o.last_error, o.sent_at
+  const rows = await query<{ connection_id: string; name: string | null; kind: string | null; status: string; payload: { ticket?: { key?: unknown; url?: unknown } }; last_error: string | null; sent_at: string | null }>(
+    `SELECT o.recipient AS connection_id, c.name, c.kind, o.status, o.payload, o.last_error, o.sent_at
        FROM notification_outbox o LEFT JOIN integration_connections c ON c.id::text = o.recipient AND c.tenant_id = o.tenant_id
       WHERE o.tenant_id = $1 AND o.kind = 'integration_message' AND o.payload->>'alertId' = $2
       ORDER BY o.created_at`, [tenantId, alertId],
   );
-  return rows.rows.map((r) => {
+  const okUrl = (u: unknown): u is string => typeof u === "string" && /^https:\/\/[a-z0-9-]+\.atlassian\.net\/browse\//.test(u);
+  const out: AlertDelivery[] = [];
+  const seen = new Set<string>();
+  for (const r of rows.rows) {
+    seen.add(r.connection_id);
     const t = r.payload?.ticket;
-    const ticket = t && typeof t.key === "string" && typeof t.url === "string" && /^https:\/\/[a-z0-9-]+\.atlassian\.net\/browse\//.test(t.url) ? { key: t.key, url: t.url } : null;
-    return { connection: r.name ?? "(removed)", kind: r.kind ?? "unknown", status: r.status, ticket, last_error: r.last_error, sent_at: r.sent_at ? new Date(r.sent_at).toISOString() : null };
-  });
+    const ticket = t && typeof t.key === "string" && okUrl(t.url) ? { key: t.key, url: t.url } : null;
+    out.push({ connection: r.name ?? "(removed)", kind: r.kind ?? "unknown", status: r.status, ticket, last_error: r.last_error, sent_at: r.sent_at ? new Date(r.sent_at).toISOString() : null });
+  }
+  // Audit A-7: tickets kept on the alert show even after the delivered outbox rows were pruned.
+  const kept = await query<{ tickets: Array<{ connection_id?: unknown; key?: unknown; url?: unknown; at?: unknown }> }>("SELECT tickets FROM alerts WHERE tenant_id = $1 AND id = $2", [tenantId, alertId]);
+  for (const t of kept.rows[0]?.tickets ?? []) {
+    if (typeof t.connection_id !== "string" || seen.has(t.connection_id) || typeof t.key !== "string" || !okUrl(t.url)) continue;
+    seen.add(t.connection_id);
+    const c = await queryOne<{ name: string; kind: string }>("SELECT name, kind FROM integration_connections WHERE id::text = $1 AND tenant_id = $2", [t.connection_id, tenantId]);
+    out.push({ connection: c?.name ?? "(removed)", kind: c?.kind ?? "jira", status: "sent", ticket: { key: t.key, url: t.url }, last_error: null, sent_at: typeof t.at === "string" ? t.at : null });
+  }
+  return out;
 }
 
 export type DeliveryOutcome = { ok: true } | { ok: false; detail: string; permanent?: boolean };
@@ -112,6 +125,15 @@ export async function deliverIntegrationMessage(row: { id: string; tenant_id: st
     if (result.ref) {
       // The ticket is remembered with the message, so the dashboard and an auditor can see which alert became which ticket.
       await query(`UPDATE notification_outbox SET payload = payload || $3::jsonb WHERE id = $1 AND tenant_id = $2`, [row.id, row.tenant_id, JSON.stringify({ ticket: result.ref })]);
+      // Audit A-7: and on the alert itself (one entry per connection), because delivered rows are pruned after NOTIFY_RETENTION_DAYS.
+      const alertId = (row.payload as { alertId?: unknown } | null)?.alertId;
+      if (typeof alertId === "string") {
+        const entry = JSON.stringify({ connection_id: conn.id, key: result.ref.key, url: result.ref.url, at: new Date().toISOString() });
+        await query(
+          `UPDATE alerts SET tickets = coalesce((SELECT jsonb_agg(t) FROM jsonb_array_elements(tickets) t WHERE t->>'connection_id' <> $3), '[]'::jsonb) || $4::jsonb
+            WHERE tenant_id = $1 AND id = $2`, [conn.tenant_id, alertId, conn.id, `[${entry}]`],
+        ).catch(() => { /* the outbox row still has it; the alert page falls back to that */ });
+      }
     }
     return { ok: true };
   } catch (error) {
