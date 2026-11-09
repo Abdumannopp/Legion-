@@ -168,6 +168,33 @@ describe("Slack delivery", () => {
   });
 });
 
+describe("fan-out cost (audit A-5)", () => {
+  it("queries per new alert do not grow with the number of connections, and every connection still gets its message once", async () => {
+    const { enqueueIntegrationMessages } = await import("../src/integration-notify.js");
+    const { pool } = await import("../src/db/pool.js");
+    // Alerts are stored first, while no connection exists, so nothing is queued yet.
+    await ingestFindings(tA, "wazuh", [finding("fan1"), finding("fan2")]);
+    const alertOf = async (ext: string) => (await query<{ id: string }>("SELECT id FROM alerts WHERE tenant_id = $1 AND title = $2", [tA, `Alert ${ext}`])).rows[0]!.id;
+    const measure = async (ext: string) => {
+      const alert = (await store.getAlert(tA, await alertOf(ext)))!;
+      let n = 0;
+      const client = { query: (...a: unknown[]) => { n++; return pool.query(...(a as [string, unknown[]])); } };
+      const queued = await enqueueIntegrationMessages(client as never, alert);
+      return { n, queued, alert };
+    };
+    await create(adminA, slackBody);
+    const one = await measure("fan1");
+    for (let i = 0; i < 6; i++) expect((await create(adminA, { ...slackBody, name: `chan ${i}` })).status).toBe(201);
+    const seven = await measure("fan2");
+    expect(one.queued).toBe(1);
+    expect(seven.queued).toBe(7);
+    expect(seven.n).toBe(one.n);                 // constant: 3 queries either way
+    expect(seven.n).toBeLessThanOrEqual(3);
+    // the same alert again is a no-op
+    expect((await measure("fan2")).queued).toBe(0);
+  });
+});
+
 describe("tenant isolation", () => {
   it("workspace B's Slack never receives workspace A's alerts, and A cannot see or change B's connection", async () => {
     await create(adminA, slackBody);

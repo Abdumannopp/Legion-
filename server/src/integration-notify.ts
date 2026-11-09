@@ -29,29 +29,37 @@ export async function enqueueIntegrationMessages(client: PoolClient, alert: Aler
   const conns = await client.query<{ id: string; kind: string; config: { min_severity?: string } | null }>(
     "SELECT id, kind, config FROM integration_connections WHERE tenant_id = $1 AND status = 'active' AND kind = ANY($2::text[])", [alert.tenant_id, kinds],
   );
-  let queued = 0;
+  if (!conns.rows.length) return 0;
+  // Audit A-5: the number of queries is constant (3), however many connections the workspace has —
+  // one read of the hourly counts for all of them, one multi-row insert.
+  const counts = await client.query<{ recipient: string; n: number }>(
+    `SELECT recipient, count(*)::int AS n FROM notification_outbox
+      WHERE tenant_id = $1 AND kind = 'integration_message' AND recipient = ANY($2::text[]) AND created_at > now() - interval '1 hour'
+      GROUP BY recipient`, [alert.tenant_id, conns.rows.map((c) => c.id)],
+  );
+  const recent = new Map(counts.rows.map((r) => [r.recipient, r.n]));
+  const link = `${config.frontendUrl.replace(/\/$/, "")}/incident/${encodeURIComponent(alert.id)}`;
+  const ids: string[] = [], dedupe: string[] = [], recipients: string[] = [], payloads: string[] = [];
   for (const c of conns.rows) {
     const adapter = outboundAdapter(c.kind);
     if (!adapter) continue;
     // A per-connection ceiling, like alert mail: a sensor controls how many alerts arrive, not how much a provider is called.
-    const recent = await client.query<{ n: number }>(
-      "SELECT count(*)::int AS n FROM notification_outbox WHERE tenant_id = $1 AND kind = 'integration_message' AND recipient = $2 AND created_at > now() - interval '1 hour'", [alert.tenant_id, c.id],
-    );
-    if ((recent.rows[0]?.n ?? 0) >= config.alertEmailHourlyCap) continue;
+    if ((recent.get(c.id) ?? 0) >= config.alertEmailHourlyCap) continue;
     const message: OutboundMessage = {
       type: adapter.manifest.outbound.includes("ticket") ? "ticket" : "notify",
       alertId: alert.id, title: alert.title.slice(0, 300), severity: alert.severity, summary: (alert.summary ?? "").slice(0, 2000),
-      sourceIp: alert.source_ip ?? null, target: alert.target ?? null,
-      link: `${config.frontendUrl.replace(/\/$/, "")}/incident/${encodeURIComponent(alert.id)}`,
+      sourceIp: alert.source_ip ?? null, target: alert.target ?? null, link,
     };
-    const r = await client.query(
-      `INSERT INTO notification_outbox (id, tenant_id, kind, dedupe_key, recipient, payload, max_attempts)
-       VALUES ($1, $2, 'integration_message', $3, $4, $5, $6) ON CONFLICT (tenant_id, kind, dedupe_key) DO NOTHING`,
-      [randomUUID(), alert.tenant_id, `${alert.id}:${c.id}`.slice(0, 200), c.id, JSON.stringify(message), config.notifyMaxAttempts],
-    );
-    queued += r.rowCount ?? 0;
+    ids.push(randomUUID()); dedupe.push(`${alert.id}:${c.id}`.slice(0, 200)); recipients.push(c.id); payloads.push(JSON.stringify(message));
   }
-  return queued;
+  if (!ids.length) return 0;
+  const r = await client.query(
+    `INSERT INTO notification_outbox (id, tenant_id, kind, dedupe_key, recipient, payload, max_attempts)
+     SELECT i, $1, 'integration_message', d, rc, p::jsonb, $6 FROM unnest($2::uuid[], $3::text[], $4::text[], $5::text[]) AS t(i, d, rc, p)
+     ON CONFLICT (tenant_id, kind, dedupe_key) DO NOTHING`,
+    [alert.tenant_id, ids, dedupe, recipients, payloads, config.notifyMaxAttempts],
+  );
+  return r.rowCount ?? 0;
 }
 
 export interface AlertDelivery { connection: string; kind: string; status: string; ticket: { key: string; url: string } | null; last_error: string | null; sent_at: string | null }
