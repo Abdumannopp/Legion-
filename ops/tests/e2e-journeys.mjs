@@ -172,7 +172,10 @@ async function main() {
   await page.goto(`${WEB}/connect`);
   await sees(page, "connect page explains itself without Wazuh jargon", "Connect the tools that watch your computers");
   await sees(page, "setup opens straight away when nothing is connected", "Create a connection key");
-  await sees(page, "other integrations are listed as coming soon", "Coming soon");
+  // Every integration on the old roadmap is built now, so nothing is listed as "coming soon"; the other
+  // platforms are offered in the Connections card instead.
+  await sees(page, "other platforms are offered as connections", "CrowdStrike Falcon");
+  check("nothing is listed as coming soon any more", !(await text(page)).toLowerCase().includes("coming soon"), "a planned integration is still shown");
   await page.getByPlaceholder("e.g. Production Wazuh").fill("Production Wazuh");
   await page.getByRole("button", { name: "Create key" }).click();
   await sees(page, "key is shown once, with a warning", "shown only once");
