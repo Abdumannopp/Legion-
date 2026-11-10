@@ -109,7 +109,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Alert rules and Prometheus config (promtool), alert unit tests
@@ -365,7 +365,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       # Fails the build on high/critical advisories. The docs once claimed
@@ -398,7 +398,7 @@ jobs:
       TEST_DATABASE_URL: postgresql://legion:legion-test@localhost:55432/legion_test
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -436,7 +436,7 @@ jobs:
           for d in server frontend; do
             [ -f "$d/package.json" ] || { echo "::error::$d/ is missing from the repository — nothing to test"; exit 1; }
           done
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -561,7 +561,7 @@ jobs:
       TEST_DATABASE_URL: postgresql://legion:legion-sec@localhost:55433/legion_sec
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
