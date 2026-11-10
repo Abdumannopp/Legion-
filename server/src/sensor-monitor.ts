@@ -16,7 +16,7 @@
  */
 import { createHash } from "node:crypto";
 import { config } from "./config.js";
-import { query, withLeaderLock } from "./db/pool.js";
+import { query, withLeaderLock, withTenant } from "./db/pool.js";
 
 const SENSOR_CHECK_LOCK = 734_012_031;
 import * as outbox from "./outbox.js";
@@ -55,7 +55,7 @@ export async function checkSensors(opts: {
         AND last_used_at > now() - make_interval(days => $2)`,
     [minutes, WATCH_DAYS],
   );
-  for (const s of silent.rows) {
+  for (const s of silent.rows) await withTenant(s.tenant_id, async () => {   // F-04: the credential's workspace
     const label = s.label ? `"${s.label.slice(0, 80)}"` : `credential ${s.key_id.slice(0, 12)}…`;
     const alert = await outbox.insertAlertAndNotify({
       id: silenceAlertId(s.key_id, new Date(s.last_used_at)), tenant_id: s.tenant_id,
@@ -68,23 +68,28 @@ export async function checkSensors(opts: {
       source: "legion-monitor",
     }, { realtime: opts.realtimeFrame });
     if (alert) report.raised++;
-  }
+  });
 
   // The sensor is back: resolve its open silence alerts. Their id encodes the
   // quiet moment, so a credential used after it is proof of life.
-  const back = await query<{ tenant_id: string; id: string }>(
-    `SELECT a.tenant_id, a.id FROM alerts a
-       JOIN webhook_credentials c ON c.tenant_id = a.tenant_id
-        AND a.id LIKE 'SENSOR-SILENT-' || upper(substr(encode(sha256(convert_to(c.key_id, 'UTF8')), 'hex'), 1, 12)) || '-%'
-      WHERE a.source = 'legion-monitor' AND a.status <> 'resolved'
-        -- The id holds the quiet moment rounded DOWN to the second, so "used
-        -- again" means at or after the next whole second; otherwise the very
-        -- timestamp that caused the alert would count as proof of life.
-        AND c.last_used_at >= to_timestamp(split_part(a.id, '-', 4)::bigint + 1)`,
-  );
-  for (const r of back.rows) {
-    if (await store.updateAlertStatus(r.tenant_id, r.id, "resolved")) report.resolved++;
-  }
+  // One workspace at a time (F-04: the alerts table is reached workspace-first, like everywhere else).
+  const watched = await query<{ tenant_id: string }>("SELECT DISTINCT tenant_id FROM webhook_credentials WHERE last_used_at IS NOT NULL");
+  for (const { tenant_id: tenantId } of watched.rows) await withTenant(tenantId, async () => {
+    const back = await query<{ id: string }>(
+      `SELECT a.id FROM alerts a
+         JOIN webhook_credentials c ON c.tenant_id = a.tenant_id
+          AND a.id LIKE 'SENSOR-SILENT-' || upper(substr(encode(sha256(convert_to(c.key_id, 'UTF8')), 'hex'), 1, 12)) || '-%'
+        WHERE a.tenant_id = $1 AND a.source = 'legion-monitor' AND a.status <> 'resolved'
+          -- The id holds the quiet moment rounded DOWN to the second, so "used
+          -- again" means at or after the next whole second; otherwise the very
+          -- timestamp that caused the alert would count as proof of life.
+          AND c.last_used_at >= to_timestamp(split_part(a.id, '-', 4)::bigint + 1)`,
+      [tenantId],
+    );
+    for (const r of back.rows) {
+      if (await store.updateAlertStatus(tenantId, r.id, "resolved", { by: "system:sensor_monitor" })) report.resolved++;
+    }
+  });
   return report;
 }
 

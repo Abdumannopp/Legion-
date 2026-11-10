@@ -61,7 +61,7 @@ async function main() {
     NODE_ENV: "development", DEPLOYMENT_MODE: "self-hosted", DATABASE_URL: db.url,
     // The manager runs in its own network namespace and reaches Legion through the bridge.
     LEGION_BIND_ADDRESS: "0.0.0.0",
-    JWT_SECRET: randomBytes(48).toString("hex"), LEGION_ENCRYPTION_KEYS: `wzr:${randomBytes(32).toString("hex")}`,
+    JWT_SECRET: randomBytes(48).toString("hex"), PAYMENT_HASH_KEY: randomBytes(32).toString("hex"), LEGION_ENCRYPTION_KEYS: `wzr:${randomBytes(32).toString("hex")}`,
     FRONTEND_URL: FRONTEND, COOKIE_SECURE: "true",
   }, { port });
   check("built API up", api.up, api.log().slice(-600));

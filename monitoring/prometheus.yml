@@ -1,0 +1,28 @@
+# Prometheus for the Legion pilot. Scrapes the API's /metrics (counts only, no
+# tenant data) with the bearer token from a mounted file, and probes /health.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: legion-api
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/metrics-token
+    static_configs:
+      # host.docker.internal → the API published on the host's loopback.
+      - targets: ["host.docker.internal:8000"]
+        labels: { instance: legion-pilot }
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

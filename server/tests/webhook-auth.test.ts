@@ -185,6 +185,17 @@ describe("credentials", () => {
     await sendSigned(app, credA, event("leg-2")).expect(202);
     expect(encryptSecret("whs_x", "whk_" + "A".repeat(22))).not.toBe(encryptSecret("whs_x", "whk_" + "A".repeat(22))); // fresh IV each time
   });
+
+  it("an old-format secret with a truncated authentication tag is refused, not decrypted (Semgrep gcm-no-tag-length)", () => {
+    const keyId = "whk_" + "T".repeat(22);
+    const sealed = legacyEncryptForTests("whs_truncation", keyId);
+    expect(decryptSecret(sealed, keyId)).toBe("whs_truncation");
+    const [v, iv, tag, body] = sealed.split(".");
+    for (const bytes of [4, 8, 12, 15]) {
+      const short = Buffer.from(tag!, "base64url").subarray(0, bytes).toString("base64url");
+      expect(decryptSecret([v, iv, short, body].join("."), keyId)).toBeNull();
+    }
+  });
 });
 
 // --- 2. forged signature -----------------------------------------------------

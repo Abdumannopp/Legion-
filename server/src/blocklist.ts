@@ -23,10 +23,12 @@
  *     blocks an hour and MAX_ACTIVE at once,
  *   - every block and unblock is audited, and an administrator can undo it.
  */
+import { shadowEvaluate } from "./policy/shadow.js";
 import { BlockList, isIP } from "node:net";
 import { randomUUID } from "node:crypto";
 import type { Campaign, CampaignRule } from "./campaigns.js";
 import { queryAll, queryOne } from "./db/pool.js";
+import { allows, resolvePlan } from "./plan-limits.js";
 import * as store from "./store.js";
 
 export const AUTO_RULES: ReadonlySet<CampaignRule> = new Set(["rapid_chain", "wide_sweep", "velocity", "credential_attack", "account_compromise"]);
@@ -54,7 +56,14 @@ export interface Block {
   active: boolean;
 }
 
-export interface AutoResponseSettings { mode: "off" | "auto"; minutes: number; allowlist: string }
+export interface AutoResponseSettings { mode: "off" | "auto"; minutes: number; allowlist: string; /** An administrator has accepted the current notice. */ acknowledged: boolean }
+
+/**
+ * The notice an administrator accepts before Legion may block addresses on their
+ * own (the text is shown in the dashboard). Bump the version when its meaning
+ * changes: everyone is asked again before turning automatic blocking on.
+ */
+export const AUTO_BLOCK_NOTICE_VERSION = "1";
 
 // --- which addresses may ever be blocked automatically ------------------------
 
@@ -105,7 +114,7 @@ export function parseAllowlist(text: string): AllowlistResult {
   return { ok: true, list, entries };
 }
 
-function allowlisted(allowlist: string, ip: string): boolean {
+export function isAllowlisted(allowlist: string, ip: string): boolean {
   const parsed = parseAllowlist(allowlist);
   if (!parsed.ok) return false;
   const v = unmap(ip);
@@ -115,13 +124,16 @@ function allowlisted(allowlist: string, ip: string): boolean {
 // --- settings -----------------------------------------------------------------
 
 export async function getSettings(tenantId: string): Promise<AutoResponseSettings> {
-  const row = await queryOne<{ auto_block_mode: "off" | "auto"; auto_block_minutes: number; block_allowlist: string }>(
-    "SELECT auto_block_mode, auto_block_minutes, block_allowlist FROM tenants WHERE id = $1", [tenantId],
+  const row = await queryOne<{ auto_block_mode: "off" | "auto"; auto_block_minutes: number; block_allowlist: string; auto_block_ack_version: string | null }>(
+    "SELECT auto_block_mode, auto_block_minutes, block_allowlist, auto_block_ack_version FROM tenants WHERE id = $1", [tenantId],
   );
-  return { mode: row?.auto_block_mode ?? "off", minutes: row?.auto_block_minutes ?? 60, allowlist: row?.block_allowlist ?? "" };
+  return {
+    mode: row?.auto_block_mode ?? "off", minutes: row?.auto_block_minutes ?? 60, allowlist: row?.block_allowlist ?? "",
+    acknowledged: row?.auto_block_ack_version === AUTO_BLOCK_NOTICE_VERSION,
+  };
 }
 
-export async function updateSettings(tenantId: string, patch: Partial<AutoResponseSettings>): Promise<AutoResponseSettings> {
+export async function updateSettings(tenantId: string, patch: Partial<Pick<AutoResponseSettings, "mode" | "minutes" | "allowlist">>): Promise<AutoResponseSettings> {
   if (patch.allowlist !== undefined) {
     const parsed = parseAllowlist(patch.allowlist);
     if (!parsed.ok) throw Object.assign(new Error(parsed.error), { status: 400, expose: true });
@@ -136,6 +148,14 @@ export async function updateSettings(tenantId: string, patch: Partial<AutoRespon
     [tenantId, patch.mode ?? null, patch.minutes ?? null, patch.allowlist ?? null],
   );
   return getSettings(tenantId);
+}
+
+/** Records that `by` accepted the current notice. */
+export async function acknowledgeNotice(tenantId: string, by: string): Promise<void> {
+  await queryOne(
+    "UPDATE tenants SET auto_block_ack_at = now(), auto_block_ack_by = $2, auto_block_ack_version = $3 WHERE id = $1",
+    [tenantId, by.slice(0, 254), AUTO_BLOCK_NOTICE_VERSION],
+  );
 }
 
 // --- the list -----------------------------------------------------------------
@@ -217,7 +237,7 @@ export async function revokeBlock(tenantId: string, ipInput: string, userId: str
 
 export type AutoDecision =
   | { campaign: string; ip: string; action: "blocked" | "extended" }
-  | { campaign: string; ip: string | null; action: "skipped"; why: "off" | "rule" | "not_public" | "allowlisted" | "rate_limited" | "full" };
+  | { campaign: string; ip: string | null; action: "skipped"; why: "off" | "plan" | "rule" | "not_public" | "allowlisted" | "rate_limited" | "full" };
 
 /**
  * Decides, for campaigns that were just detected, which source addresses to
@@ -227,13 +247,17 @@ export type AutoDecision =
 export async function respondToCampaigns(tenantId: string, campaigns: Campaign[]): Promise<AutoDecision[]> {
   if (!campaigns.length) return [];
   const settings = await getSettings(tenantId);
+  // Automatic blocking is a plan feature (policy-based blocking: Business and up). A workspace
+  // that switched it on and then moved to a smaller plan keeps detection, loses the automatic block.
+  const planAllowsAuto = settings.mode !== "auto" || allows(await resolvePlan(tenantId), "autoBlocking");
   const decisions: AutoDecision[] = [];
   for (const c of campaigns) {
     const ip = attackerOf(c);
+    if (!planAllowsAuto) { decisions.push({ campaign: c.id, ip, action: "skipped", why: "plan" }); continue; }
     if (settings.mode !== "auto") { decisions.push({ campaign: c.id, ip, action: "skipped", why: "off" }); continue; }
     if (!ip) { decisions.push({ campaign: c.id, ip: null, action: "skipped", why: "rule" }); continue; }
     if (!isPublicAddress(ip)) { decisions.push({ campaign: c.id, ip, action: "skipped", why: "not_public" }); continue; }
-    if (allowlisted(settings.allowlist, ip)) { decisions.push({ campaign: c.id, ip, action: "skipped", why: "allowlisted" }); continue; }
+    if (isAllowlisted(settings.allowlist, ip)) { decisions.push({ campaign: c.id, ip, action: "skipped", why: "allowlisted" }); continue; }
     const recent = await queryOne<{ n: number }>(
       "SELECT count(*)::int AS n FROM ip_blocks WHERE tenant_id = $1 AND created_by IS NULL AND created_at > now() - interval '1 hour'",
       [tenantId],
@@ -245,6 +269,11 @@ export async function respondToCampaigns(tenantId: string, campaigns: Campaign[]
         reason: `Automatic: campaign ${c.id} (${c.rule.replace("_", " ")})`,
       });
       decisions.push({ campaign: c.id, ip, action: created ? "blocked" : "extended" });
+      // Policy Engine v0, shadow: what the engine would have decided about this automatic block.
+      shadowEvaluate(tenantId, {
+        call_site: "auto_response", action_id: "ip.block", actor: { kind: "system", component: "auto_response" }, origin: "system",
+        input: { ip, minutes: settings.minutes, campaign_id: c.id }, legacy_outcome: created ? "blocked" : "extended",
+      });
       await store.audit({
         tenant_id: tenantId, user_id: null, user_email: null, action: "security.auto_block", resource_type: "ip",
         resource_id: ip, detail: `campaign ${c.id} (${c.rule}), ${settings.minutes} min`, ip_address: null,

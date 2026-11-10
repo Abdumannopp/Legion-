@@ -37,7 +37,25 @@ and which tests prove it. Audit of 2026-09-29.
 - `updateUser(id)` has no tenant condition; every caller first resolved the user with `findUserInTenant`, or is the user themselves. The static guard records this.
 - Inviting an address already registered in another organisation answers "already in use" and nothing else. Email is the global login identifier, and public sign-up gives the same answer, so this is no new disclosure.
 - The AI circuit breaker is shared: one organisation's provider failures can switch AI to the fallback for everyone for a while. That affects availability, not data.
-- The core tables have no Postgres row-level security; isolation is enforced in the application, guarded by the tests below. The agent layer has its own RLS option. Adding RLS to the core would be defence in depth, and needs a per-request `SET LOCAL` design.
+- **Row-level security, first group (F-04, `DB_RLS=enforce`).** The 14 tables Legion only ever reaches
+  workspace-first — alerts, assets, the audit log and the SOC policy, approval, action, workflow, learning
+  and audit-chain tables (`server/src/db/rls.ts`) — have a Postgres policy (migration
+  `0009_row_level_security.sql`). With `DB_RLS=enforce` every request, webhook, agent call and
+  per-workspace job declares its workspace (`withTenant`), the API hands it to Postgres with each
+  query, and the database itself shows and accepts only that workspace's rows: a query that forgets
+  `tenant_id` stays confined; with no workspace declared it sees nothing (fail closed), and the API
+  refuses such a query outright so a missed code path is loud. It binds the API under the
+  owner/runtime split (F-02, Docker installs); a single-role install, whose API owns the tables, is
+  not bound by it. It protects against forgotten predicates, not against SQL injection (a session
+  that can run arbitrary SQL can also declare another workspace).
+  Evidence: `server/tests/row-level-security.test.ts` (database level, as the API's role) and every
+  end-to-end suite in CI runs with `DB_RLS=enforce` and fails on any missing context.
+  **Default: on (`enforce`) in both Docker installs** (`docker-compose.yml`, `docker-compose.pilot.yml`),
+  where the owner/runtime split is also on; off for a bare-metal single-role install, which it would
+  not bind anyway. `/metrics` counts across workspaces through an owner-run aggregate that returns
+  numbers only (`0010_metrics_aggregate.sql`). Not yet in the first group (their lookups happen before the workspace is known,
+  so they need their own design): users, tenants, memberships, sessions, billing, webhook credentials,
+  notification outbox, SOC jobs and memory. `DB_RLS=off` in `.env` turns it off.
 
 ## Tests
 
@@ -57,3 +75,6 @@ and which tests prove it. Audit of 2026-09-29.
   - a credential revoke without a tenant check
 
   A newly planted unscoped query fails the static guard.
+
+
+**2026-11-08 (audit A-3):** `notification_outbox` and `integration_connections` are now under row-level security too (migration 0014; 16 tables). Background workers reach other workspaces' due work only through bounded `SECURITY DEFINER` functions and then act on each row inside that row's workspace.

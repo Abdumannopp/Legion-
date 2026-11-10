@@ -1,7 +1,7 @@
 /**
  * Skills for business customers: secrets in logs (Guardian), who reads the
  * data that matters (Sentinel), how late the open alerts are (Oracle) and the
- * review of held payments (Executor). Read-only; nothing here acts.
+ * review of held payments (Vanguard). Read-only; nothing here acts.
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { ibanValid, luhnValid, sensitiveKinds } from "../src/skills/builtin/secret-exposure-check.js";
@@ -192,7 +192,7 @@ describe("Oracle: response_sla_review", () => {
   });
 });
 
-describe("Executor: payment_fraud_review", () => {
+describe("Vanguard: payment_fraud_review", () => {
   it("counts what was held, what still waits and for how long, and never shows an account number", async () => {
     const r = await run("payment_fraud_review", {}, (d) => {
       d.payments = [
@@ -212,7 +212,12 @@ describe("Executor: payment_fraud_review", () => {
     expect(call.description).toMatch(/number you ALREADY had/);
     expect(call.description).toMatch(/waiting 30 hours/);
     noExecution(out.proposedActions);
-    expect(JSON.stringify(r.body)).not.toMatch(/DE89|\d{9,}/);
+    // No account number anywhere in the response. The response also carries random identifiers (UUIDs), whose hex
+    // digits can by chance contain nine decimal digits in a row, so UUID-shaped tokens are set aside first; a real
+    // account number (an IBAN, or a long digit string) is still caught.
+    const noIds = JSON.stringify(r.body).replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<id>");
+    expect(noIds).not.toMatch(/DE89|\d{9,}/);
+    expect("DE89370400440532013000 and 123456789012").toMatch(/DE89|\d{9,}/);   // the check itself still fires on an account number
   });
 
   it("patterns: repeated attempts, a retry after a rejection, one requester with several new accounts", async () => {

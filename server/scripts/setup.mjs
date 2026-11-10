@@ -301,6 +301,14 @@ async function main() {
   // ADD to an existing install: secrets written before it are still readable and
   // are re-encrypted under it at the next start.
   const encryptionKeys = existingEnvValue("LEGION_ENCRYPTION_KEYS") || `k1:${randomHex(32)}`;
+  // Payment-check account hashes (HMAC key). Installs from before it existed hashed with the webhook
+  // secret (or a built-in value); that becomes the previous key so confirmed accounts still match.
+  const socAuditKey = existingEnvValue("SOC_AUDIT_KEY") || randomHex(32);
+  // An install without it signed its audit chain with a key derived from JWT_SECRET: keep that verifiable.
+  const socAuditPrevious = existingEnvValue("SOC_AUDIT_PREVIOUS_KEYS") || (reusing && !existingEnvValue("SOC_AUDIT_KEY") ? "jwt" : "");
+  const paymentHashKey = existingEnvValue("PAYMENT_HASH_KEY") || randomHex(32);
+  const paymentHashPrevious = existingEnvValue("PAYMENT_HASH_PREVIOUS_KEYS") ||
+    (reusing && !existingEnvValue("PAYMENT_HASH_KEY") ? (existingEnvValue("SECURITY_EVENT_WEBHOOK_SECRET") || "legion-payments") : "");
   // Superseded by LEGION_ENCRYPTION_KEYS; only carried over if an install has one.
   const webhookKey = existingEnvValue("WEBHOOK_ENCRYPTION_KEY");
   const dbPassword = existingEnvValue("__DB_PASSWORD") || randomHex(16);
@@ -342,6 +350,12 @@ JWT_SECRET=${jwtSecret}
 # with two-factor sign-in. To rotate, put a new "id:key" FIRST and keep the old
 # one after it (see INSTALL.md, "Encryption keys").
 LEGION_ENCRYPTION_KEYS=${encryptionKeys}
+# Signs the SOC audit chain. Back it up with .env; rotate with SOC_AUDIT_PREVIOUS_KEYS (INSTALL.md).
+SOC_AUDIT_KEY=${socAuditKey}
+${socAuditPrevious ? `SOC_AUDIT_PREVIOUS_KEYS=${socAuditPrevious}` : ""}
+# Recognises bank accounts in the payment check without storing them. Back it up with .env.
+PAYMENT_HASH_KEY=${paymentHashKey}
+${paymentHashPrevious ? `# Older payment hashes (kept matching; remove after 24 months).\nPAYMENT_HASH_PREVIOUS_KEYS=${paymentHashPrevious}` : ""}
 ${webhookKey ? `# Legacy, read-only: lets webhook secrets from before LEGION_ENCRYPTION_KEYS be
 # re-encrypted. Safe to delete once "npm run secrets -w server -- status" shows no legacy-v1.
 WEBHOOK_ENCRYPTION_KEY=${webhookKey}` : ""}
@@ -382,6 +396,11 @@ ALERT_EMAIL_MIN_SEVERITY=high
 PADDLE_ENVIRONMENT=sandbox
 PADDLE_API_KEY=
 PADDLE_WEBHOOK_SECRET=
+# One Paddle price per plan and period (Paddle > Catalog > Prices): see SAAS.md.
+# starter.month=pri_...,starter.year=pri_...,professional.month=...,business.month=...
+PADDLE_PLAN_PRICES=
+# One monthly Paddle price per add-on: agent_security=pri_...,payment_fraud=pri_...
+PADDLE_ADDON_PRICES=
 # Free days every new workspace gets. Keep NEXT_PUBLIC_TRIAL_DAYS the same.
 TRIAL_DAYS=14
 ` : `# --- Email (optional) --------------------------------------------------------
@@ -440,14 +459,10 @@ NEXT_PUBLIC_DEPLOYMENT_MODE=saas
 # Where your server is, e.g. "Germany (Hetzner)" - named in the Privacy Policy.
 NEXT_PUBLIC_DATA_LOCATION=
 NEXT_PUBLIC_TRIAL_DAYS=14
-# Paddle > Developer tools > Authentication > client-side token, and the
-# plan's price id (pri_...). Environment must match PADDLE_ENVIRONMENT.
+# Paddle > Developer tools > Authentication > client-side token.
+# Environment must match PADDLE_ENVIRONMENT. Prices are chosen by the server.
 NEXT_PUBLIC_PADDLE_ENVIRONMENT=sandbox
 NEXT_PUBLIC_PADDLE_CLIENT_TOKEN=
-NEXT_PUBLIC_PADDLE_PRICE_ID=
-# Optional: shown before Paddle's localized price loads, e.g. 49 USD.
-# Don't use the "$" sign here: it is read as a variable and comes out empty.
-NEXT_PUBLIC_PRICE_LABEL=
 ` : ""}`;
   const frontendForce = new Set();
   if (domain) frontendForce.add("NEXT_PUBLIC_API_URL");
@@ -477,8 +492,8 @@ ${c.green("Setup complete - hosted service.")}
   Before it can take customers, fill in (details in SAAS.md):
     server/.env          SMTP_PASSWORD (Resend API key), PADDLE_API_KEY, PADDLE_WEBHOOK_SECRET
     frontend/.env.local  NEXT_PUBLIC_OPERATOR_NAME, NEXT_PUBLIC_SUPPORT_EMAIL,
-                         NEXT_PUBLIC_DATA_LOCATION, NEXT_PUBLIC_PADDLE_CLIENT_TOKEN,
-                         NEXT_PUBLIC_PADDLE_PRICE_ID
+                         NEXT_PUBLIC_DATA_LOCATION, NEXT_PUBLIC_PADDLE_CLIENT_TOKEN
+    server/.env          also PADDLE_PLAN_PRICES (one Paddle price per plan and period)
   Then:
     ${c.cyan("npm run build")}
     ${c.cyan("sudo systemctl restart legion")}   (or npm start)

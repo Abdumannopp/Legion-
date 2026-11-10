@@ -3,7 +3,7 @@ import cookieParser from "cookie-parser";
 import { apiLimiter, authLimiter, closeRateLimitStore, initRateLimitStore, redisConnected, loginAccountLimiter, mailPerAddressLimiter, makeMfaLimiter, makeStepUpLimiter } from "./ratelimit.js";
 import { hashForComparison, notifyAccountOwner, networkOf, recentLoginFailures, rememberLoginDevice } from "./account-security.js";
 import { backupHealthReport } from "./backup-health.js";
-import { applyTrustedProxies, checkWebSocketOrigin, limitSilentConnections, clientAddress, corsMiddleware, originGuard, securityHeaders, upgradeRateLimited } from "./edge.js";
+import { applyTrustedProxies, checkWebSocketOrigin, limitSilentConnections, KEEP_ALIVE_TIMEOUT_MS, clientAddress, corsMiddleware, originGuard, securityHeaders, upgradeRateLimited } from "./edge.js";
 import { signToken, verifyLegacyCheckoutToken, verifyTokenOf } from "./auth-jwt.js";
 import { comparePassword, hashPassword, HashingBusyError } from "./passwords.js";
 import { captchaEnabled, requireHuman } from "./turnstile.js";
@@ -22,8 +22,13 @@ import * as integrations from "./integrations/registry.js";
 import * as connections from "./integrations/connections.js";
 import { ingestFindings } from "./integrations/ingest.js";
 import { wazuhAdapter } from "./integrations/wazuh.js";
-import { closePool, currentRoleAttributes, migrate, query, transaction } from "./db/pool.js";
-import { databaseRoleDecision } from "./db/provision.js";
+import { genericWebhookAdapter } from "./integrations/generic.js";
+import { cefAdapter } from "./integrations/cef.js";
+import { githubAdapter } from "./integrations/github.js";
+import { deliveriesForAlert } from "./integration-notify.js";
+import type { PushAdapter } from "./integrations/types.js";
+import { closePool, currentRoleAttributes, inTenant, migrate, query, transaction, withTenant } from "./db/pool.js";
+import { databaseRoleDecision, refusePrivilegedRole } from "./db/provision.js";
 import { SETUP_LOCK_KEY, consumeSetupToken, ensureSetupToken, removeSetupTokenFile, setupBanner } from "./setup-token.js";
 import { WEBHOOK_REJECTION_DETAIL, isKeyId } from "./webhook-auth.js";
 import { webhookFailureGate } from "./webhook-guard.js";
@@ -31,6 +36,13 @@ import { listCampaigns, threatCoverage } from "./campaigns.js";
 import * as blocklist from "./blocklist.js";
 import * as payments from "./payments.js";
 import { rejectNul } from "./text.js";
+import { accessLog } from "./access-log.js";
+import { runRetention } from "./retention.js";
+import { auditCheckpoints } from "./audit/events.js";
+import { autoDeleteExpired } from "./tenant-deletion.js";
+import { streamWorkspaceExport } from "./workspace-export.js";
+import { adminSeatFree, allows, classifyPrices, offeredPriceIds, planRefusal, pruneAlertsByPlan, resolvePlan, usageOf } from "./plan-limits.js";
+import { ADDON_IDS, ADDONS, PLAN_IDS, PLANS, SELF_HOSTED, SETUP_SERVICES } from "./plans.js";
 import * as webhookCredentials from "./webhook-credentials.js";
 import { hashOneTimeToken, newOneTimeToken } from "./auth-tokens.js";
 import { describeReport, migrateSecretsAtRest } from "./secrets-migration.js";
@@ -48,6 +60,11 @@ import * as mfa from "./mfa.js";
 import * as sessions from "./sessions.js";
 import * as realtime from "./realtime.js";
 import { createAgentLayer } from "./agents.js";
+import { registerSocRoutes } from "./soc-routes.js";
+import { shadowEvaluate } from "./policy/shadow.js";
+import { startRuntime, stopRuntime } from "./runtime/worker.js";
+import { collectMetrics } from "./metrics.js";
+import { pruneExpiredMemory } from "./memory/store.js";
 import type { AccessState, Alert, Role, Severity, Subscription, User } from "./types.js";
 
 export const app = express();
@@ -60,22 +77,29 @@ const now = () => new Date().toISOString();
 // who is not a named proxy is ignored.
 export const trustedProxies = applyTrustedProxies(app);
 app.disable("x-powered-by");
+// A request ID on every response and one JSON access-log line per request (audit P1-10).
+app.use(accessLog(() => config.accessLog));
 app.use(securityHeaders());
 app.use(corsMiddleware());
 // Machine endpoints authenticated by signature; they are not browsers.
-app.use(originGuard(/^\/(security-events\/webhook|billing\/webhook)$/));
+app.use(originGuard(/^\/(security-events\/webhook(\/(generic|cef|github))?|billing\/webhook)$/));
 // Paddle signs the RAW bytes, so keep a copy before JSON.parse rewrites them.
 // The sensor webhook is parsed by its own route instead (below): its body is
 // kept as raw bytes and only parsed AFTER the signature over those bytes checks
 // out, so an unauthenticated sender never gets its JSON parsed at all.
 export const WEBHOOK_PATH = "/security-events/webhook";
+// The same signed webhook for other formats: free-form JSON (Elastic, Splunk, custom) and Syslog/CEF text.
+export const WEBHOOK_GENERIC_PATH = "/security-events/webhook/generic";
+export const WEBHOOK_CEF_PATH = "/security-events/webhook/cef";
+// GitHub signs with its own scheme (X-Hub-Signature-256) and a secret that belongs to one connection (?connection=<id>).
+export const WEBHOOK_GITHUB_PATH = "/security-events/webhook/github";
 // The Wazuh manager's pull of its blocklist: signed like the webhook, so raw too.
 export const BLOCKLIST_PATH = "/security-events/blocklist";
 const jsonBody = express.json({
   limit: "256kb",
   verify: (req, _res, buf) => { (req as Request & { rawBody?: Buffer }).rawBody = buf; },
 });
-app.use((req, res, next) => (req.path === WEBHOOK_PATH || req.path === BLOCKLIST_PATH || req.path === payments.PAYMENT_CHECK_PATH ? next() : jsonBody(req, res, next)));
+app.use((req, res, next) => (req.path === WEBHOOK_PATH || req.path === WEBHOOK_GENERIC_PATH || req.path === WEBHOOK_CEF_PATH || req.path === WEBHOOK_GITHUB_PATH || req.path === BLOCKLIST_PATH || req.path === payments.PAYMENT_CHECK_PATH ? next() : jsonBody(req, res, next)));
 app.use(express.urlencoded({ extended: false, limit: "32kb" }));
 app.use(cookieParser());
 // Error messages and confirmations in the reader's language (Accept-Language).
@@ -94,7 +118,7 @@ app.use(rejectNul);
  * reason — their callers are authenticated or trivial, and rate limiting them
  * breaks the integration rather than protecting it.
  */
-const RATE_LIMIT_EXEMPT = /^\/(health|security-events\/webhook|billing\/webhook)$/;
+const RATE_LIMIT_EXEMPT = /^\/(health|security-events\/webhook(\/(generic|cef|github))?|billing\/webhook)$/;
 app.use((req, res, next) => {
   if (RATE_LIMIT_EXEMPT.test(req.path)) return next();
   return apiLimiter(req, res, next);
@@ -117,12 +141,30 @@ export const agentLayer = createAgentLayer(
 app.use(agentLayer.identity.principal);
 agentLayer.mount(app);
 
-type Token = { sub: string; tenant_id: string; token_version: number; purpose?: string; exp?: number };
+type Token = { sub: string; tenant_id: string; token_version: number; purpose?: string; exp?: number; auth_time?: number };
 type AuthedRequest = Request & { user?: User };
 
-function sign(user: User): string {
-  // Per-purpose key, issuer, audience and key id: see auth-jwt.ts.
-  return signToken("access", { sub: user.id, tenant_id: user.tenant_id, token_version: user.token_version }, `${config.accessTokenMinutes}m`);
+function sign(user: User, authTime?: number): string {
+  // Per-purpose key, issuer, audience and key id: see auth-jwt.ts. auth_time is the moment the person
+  // last proved who they are (password, and code if MFA is on); a refreshed token does not carry it,
+  // so the "recently confirmed" window below never outlives one access token.
+  const claims: Record<string, unknown> = { sub: user.id, tenant_id: user.tenant_id, token_version: user.token_version };
+  if (authTime !== undefined) claims.auth_time = authTime;
+  return signToken("access", claims, `${config.accessTokenMinutes}m`);
+}
+
+/**
+ * Dangerous actions (removing a person, changing a role, revoking or rotating a sensor key,
+ * deleting an integration, exporting the whole workspace) need a RECENT proof of identity, not
+ * only a session: a stolen or unattended admin session must not be enough. Signing in, or
+ * POST /auth/step-up (password, and a code when MFA is on), opens a 10-minute window.
+ */
+export const RECENT_AUTH_SECONDS = 600;
+const nowSeconds = () => Math.floor(Date.now() / 1000);
+function recentAuth(req: AuthedRequest, res: Response, next: NextFunction): void {
+  const t = verifyToken(tokenFrom(req));
+  if (typeof t?.auth_time === "number" && nowSeconds() - t.auth_time <= RECENT_AUTH_SECONDS && t.auth_time <= nowSeconds() + 60) return next();
+  res.status(403).json({ code: "reauth_required", detail: "Confirm it is you: enter your password to continue." });
 }
 
 const ACCESS_COOKIE_MS = () => config.accessTokenMinutes * 60_000;
@@ -206,7 +248,7 @@ async function checkTotp(user: User, code: string): Promise<"ok" | "wrong" | "un
 // that cannot log in or open the billing portal can never start paying again.
 // /workspaces: a person whose trial ended in one workspace can still reach
 // their others (list, switch, accept, leave).
-const ACCESS_EXEMPT = /^\/(auth|billing|health|workspaces)(\/|$)/;
+const ACCESS_EXEMPT = /^\/(auth|billing|health|workspaces|workspace\/export)(\/|$)/;
 
 export const isSelfHosted = (): boolean => config.deploymentMode === "self-hosted";
 
@@ -229,6 +271,25 @@ export async function accessState(tenantId: string): Promise<AccessState> {
   if (!tenant) return "blocked";
   if (!tenant.trial_ends_at) return "ok";
   return new Date(tenant.trial_ends_at) > new Date() ? "ok" : "blocked";
+}
+
+/** Refuses with 403 `plan_feature` when the workspace's plan lacks `feature`; true when allowed. */
+async function planAllows(tenantId: string, feature: Parameters<typeof allows>[1], res: Response): Promise<boolean> {
+  const plan = await resolvePlan(tenantId);
+  if (allows(plan, feature)) return true;
+  res.status(403).json(planRefusal(feature, plan.plan));
+  return false;
+}
+
+/** Refuses with 403 `plan_limit` when another admin seat is not included in the plan; true when there is room. */
+async function adminSeatAvailable(tenantId: string, res: Response, excludeUserId?: string): Promise<boolean> {
+  const seat = await adminSeatFree(tenantId, excludeUserId);
+  if (seat.ok) return true;
+  res.status(403).json({
+    detail: `The ${PLANS[seat.plan].name} plan includes ${seat.limit} administrator${seat.limit === 1 ? "" : "s"}. Remove one, or upgrade your plan, to add another.`,
+    code: "plan_limit", limit: "admins", max: seat.limit, plan: seat.plan,
+  });
+  return false;
 }
 
 async function enforceAccess(req: AuthedRequest, res: Response): Promise<boolean> {
@@ -306,7 +367,7 @@ async function authenticate(req: AuthedRequest, res: Response): Promise<boolean>
 }
 
 async function auth(req: AuthedRequest, res: Response, next: NextFunction): Promise<void> {
-  if (await authenticate(req, res)) next();
+  if (await authenticate(req, res)) withTenant(req.user!.tenant_id, next);
 }
 
 const rank: Record<Role, number> = { viewer: 0, analyst: 1, admin: 2 };
@@ -317,7 +378,8 @@ function requireRole(minimum: Role) {
       res.status(403).json({ detail: "Insufficient permissions" });
       return;
     }
-    next();
+    // F-04: everything this request does runs in its own workspace (db/rls.ts).
+    withTenant(req.user!.tenant_id, next);
   };
 }
 
@@ -329,7 +391,7 @@ function requirePermission(permission: Permission) {
       res.status(403).json({ detail: "Insufficient permissions" });
       return;
     }
-    next();
+    withTenant(req.user!.tenant_id, next);
   };
 }
 
@@ -477,6 +539,25 @@ app.get("/health/outbox", async (req, res) => {
   if (!safeEqual(given, expected)) return res.status(401).json({ detail: "Authentication required" });
   try {
     return res.json({ ...(await outbox.queueMetrics()), worker: outbox.workerStatus() });
+  } catch {
+    return res.status(503).json({ detail: "Service unavailable" });
+  }
+});
+
+/**
+ * Prometheus metrics for the pilot dashboards and alerts (metrics.ts): counts
+ * only, platform-wide. Same token and same "absent unless configured" rule as
+ * /health/outbox.
+ */
+app.get("/metrics", async (req, res) => {
+  const expected = config.healthMetricsToken;
+  if (!expected) return res.status(404).json({ detail: "Not found" });
+  const given = (req.header("authorization") || "").replace(/^Bearer\s+/i, "");
+  if (!safeEqual(given, expected)) return res.status(401).json({ detail: "Authentication required" });
+  try {
+    res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    return res.send(await collectMetrics());
   } catch {
     return res.status(503).json({ detail: "Service unavailable" });
   }
@@ -687,7 +768,7 @@ app.post("/auth/login", authLimiter, requireHuman, loginAccountLimiter, async (r
     });
   }
 
-  const accessToken = await startSession(req, res, user);
+  const accessToken = await startSession(req, res, user, undefined, { authTime: nowSeconds() });
   rememberDevice(res, user);
   await store.audit({ tenant_id: user.tenant_id, user_id: user.id, user_email: user.email, action: "auth.login", resource_type: "user", resource_id: user.id, detail: null, ip_address: req.ip || null });
   await completeSignIn(req, user);
@@ -702,6 +783,11 @@ app.post("/auth/login", authLimiter, requireHuman, loginAccountLimiter, async (r
  * the second factor is the control, this is the alarm.
  */
 async function completeSignIn(req: Request, user: User): Promise<void> {
+  // F-04: signing in has no request workspace yet; this check reads the account's own workspace.
+  return inTenant(user.tenant_id, () => completeSignInChecks(req, user));
+}
+
+async function completeSignInChecks(req: Request, user: User): Promise<void> {
   try {
     const newDevice = await rememberLoginDevice(user.id, req);
     const failures = await recentLoginFailures(user);
@@ -718,11 +804,11 @@ async function completeSignIn(req: Request, user: User): Promise<void> {
 
 /** Starts a session. One place, so every path that creates one (password
  *  login, MFA completion) stays consistent. */
-async function startSession(req: Request, res: Response, user: User, workspace?: User): Promise<string> {
+async function startSession(req: Request, res: Response, user: User, workspace?: User, opts: { authTime?: number } = {}): Promise<string> {
   // Lands in the chosen default workspace, else the home one (workspaces.ts).
   const member = workspace ?? await workspaces.landingMember(user);
   if (!member) throw Object.assign(new Error("no active workspace"), { status: 403, expose: true });
-  const accessToken = sign(member);
+  const accessToken = sign(member, opts.authTime);
   const refreshToken = await sessions.issue(member.id, {
     userAgent: req.header("user-agent"),
     ip: req.ip || null,
@@ -796,7 +882,7 @@ app.post("/auth/mfa/verify", authLimiter, mfaAccountLimiter, async (req, res) =>
     usedRecovery = true;
   }
 
-  const accessToken = await startSession(req, res, user);
+  const accessToken = await startSession(req, res, user, undefined, { authTime: nowSeconds() });
   rememberDevice(res, user);
   const remaining = usedRecovery ? await mfa.countRecoveryCodes(user.id) : null;
   await store.audit({ tenant_id: user.tenant_id, user_id: user.id, user_email: user.email, action: "auth.login", resource_type: "user", resource_id: user.id, detail: usedRecovery ? "mfa:recovery" : "mfa:totp", ip_address: req.ip || null });
@@ -852,7 +938,7 @@ app.post("/auth/mfa/enable", authLimiter, stepUpLimiter, auth, async (req: Authe
   // password alone before it was on — and starts a fresh one for this browser.
   const enabled = await store.updateUser(user.id, { mfa_enabled: true, mfa_enrolled_at: new Date().toISOString(), bump_token_version: true });
   await revokeUserEverywhere(user.id);
-  await startSession(req, res, enabled!);
+  await startSession(req, res, enabled!, undefined, { authTime: nowSeconds() });   // a code was just verified
   const recoveryCodes = await mfa.regenerateRecoveryCodes(user.id);
   await log(req, "auth.mfa_enabled", "user", user.id);
   notifyAccountOwner(user, "mfa_enabled", req);
@@ -883,7 +969,7 @@ app.post("/auth/mfa/disable", authLimiter, stepUpLimiter, auth, async (req: Auth
   // Same as enabling: every other session ends, this one continues.
   const updated = await store.updateUser(user.id, { bump_token_version: true });
   await revokeUserEverywhere(user.id);
-  await startSession(req, res, updated!);
+  await startSession(req, res, updated!, undefined, { authTime: nowSeconds() });   // password + code just verified
   await log(req, "auth.mfa_disabled", "user", user.id);
   notifyAccountOwner(user, "mfa_disabled", req);
   return res.json({ enabled: false });
@@ -1019,6 +1105,24 @@ app.get("/agent-permissions", auth, async (req: AuthedRequest, res) => {
   res.json(await agentPermissionCatalogue(req.user!.tenant_id));
 });
 
+/**
+ * The workspace's data as one JSON file (workspace-export.ts). Administrators
+ * only, a few times an hour, and reachable even when the workspace is locked:
+ * leaving a subscription must not lock the customer away from their own data.
+ */
+app.get("/workspace/export", requireRole("admin"), recentAuth, async (req: AuthedRequest, res) => {
+  const tenantId = req.user!.tenant_id;
+  if ((await store.recentAuditCount(tenantId, "workspace.exported", 60)) >= 3) {
+    res.setHeader("Retry-After", "600");
+    return res.status(429).json({ detail: "Too many exports. Try again later." });
+  }
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="legion-workspace-${new Date().toISOString().slice(0, 10)}.json"`);
+  res.setHeader("Cache-Control", "no-store");
+  const counts = await streamWorkspaceExport(tenantId, res);
+  await log(req, "workspace.exported", "tenant", tenantId, Object.entries(counts).map(([k, v]) => `${k}=${v}`).join(" "));
+});
+
 app.get("/workspace/roles", auth, (_req, res) => {
   res.json({ roles: roleMatrix() });
 });
@@ -1103,7 +1207,8 @@ app.post("/workspaces", auth, async (req: AuthedRequest, res) => {
     return res.status(429).json({ detail: `You can belong to at most ${config.maxWorkspacesPerUser} workspaces` });
   }
   const created = await workspaces.create(req.user!, body.name, { currency: body.currency, timezone: body.timezone, locale: body.locale });
-  await store.audit({ tenant_id: created.id, user_id: req.user!.id, user_email: req.user!.email, action: "workspace.created", resource_type: "workspace", resource_id: created.id, detail: body.name, ip_address: req.ip || null });
+  // F-04: recorded in the NEW workspace, deliberately (this request runs in the current one).
+  await withTenant(created.id, () => store.audit({ tenant_id: created.id, user_id: req.user!.id, user_email: req.user!.email, action: "workspace.created", resource_type: "workspace", resource_id: created.id, detail: body.name, ip_address: req.ip || null }));
   return res.status(201).json({ id: created.id, name: created.name, role: "admin", region: config.region });
 });
 
@@ -1112,8 +1217,10 @@ app.post("/workspaces/switch", auth, async (req: AuthedRequest, res) => {
   const member = await workspaces.memberView(req.user!.id, body.workspace_id);
   // Not a member and not active are answered the same: no probing for workspace ids.
   if (!member || member.status !== "active") return res.status(404).json({ detail: "Workspace not found" });
-  const accessToken = await startSession(req, res, member, member);
-  await store.audit({ tenant_id: member.tenant_id, user_id: member.id, user_email: member.email, action: "workspace.switched", resource_type: "workspace", resource_id: member.tenant_id, detail: null, ip_address: req.ip || null });
+  // Switching workspace is not a new proof of identity: the window carries over, it does not reopen.
+  const accessToken = await startSession(req, res, member, member, { authTime: verifyToken(tokenFrom(req))?.auth_time });
+  // F-04: recorded in the workspace switched TO (an active membership, checked above).
+  await withTenant(member.tenant_id, () => store.audit({ tenant_id: member.tenant_id, user_id: member.id, user_email: member.email, action: "workspace.switched", resource_type: "workspace", resource_id: member.tenant_id, detail: null, ip_address: req.ip || null }));
   const tenant = await store.getTenant(member.tenant_id);
   return res.json({ access_token: accessToken, token_type: "bearer", workspace: { id: member.tenant_id, name: tenant?.name ?? null, role: member.role } });
 });
@@ -1123,7 +1230,8 @@ app.post("/workspaces/invitations/accept", authLimiter, auth, async (req: Authed
   const accepted = await workspaces.acceptInvite(hashOneTimeToken(body.token), req.user!.id);
   // Someone else's invitation, a used one and an expired one look alike.
   if (!accepted) return res.status(400).json({ detail: "This invitation is invalid, has expired, or was sent to another account" });
-  await store.audit({ tenant_id: accepted.tenantId, user_id: req.user!.id, user_email: req.user!.email, action: "user.invite_accepted", resource_type: "user", resource_id: req.user!.id, detail: `${accepted.role} (existing account)`, ip_address: req.ip || null });
+  // F-04: recorded in the workspace that was joined (the invitation, verified above, is for it).
+  await withTenant(accepted.tenantId, () => store.audit({ tenant_id: accepted.tenantId, user_id: req.user!.id, user_email: req.user!.email, action: "user.invite_accepted", resource_type: "user", resource_id: req.user!.id, detail: `${accepted.role} (existing account)`, ip_address: req.ip || null }));
   return res.json({ workspace_id: accepted.tenantId, role: accepted.role });
 });
 
@@ -1134,7 +1242,8 @@ app.post("/workspaces/leave", auth, async (req: AuthedRequest, res) => {
   if (outcome === "home") return res.status(400).json({ detail: "This is the workspace your account belongs to; it cannot be left" });
   if (outcome === "last_admin") return res.status(400).json({ detail: "A workspace must keep at least one admin" });
   await revokeMemberSessions(req.user!.id, body.workspace_id, false);
-  await store.audit({ tenant_id: body.workspace_id, user_id: req.user!.id, user_email: req.user!.email, action: "workspace.left", resource_type: "user", resource_id: req.user!.id, detail: null, ip_address: req.ip || null });
+  // F-04: recorded in the workspace that was left (only after leave() succeeded above).
+  await withTenant(body.workspace_id, () => store.audit({ tenant_id: body.workspace_id, user_id: req.user!.id, user_email: req.user!.email, action: "workspace.left", resource_type: "user", resource_id: req.user!.id, detail: null, ip_address: req.ip || null }));
   return res.json({ status: "left" });
 });
 
@@ -1204,6 +1313,28 @@ app.post("/auth/reset-password", authLimiter, async (req, res) => {
   await store.audit({ tenant_id: user.tenant_id, user_id: user.id, user_email: user.email, action: "auth.password_reset", resource_type: "user", resource_id: user.id, detail: null, ip_address: req.ip || null });
   notifyAccountOwner(user, "password_changed", req);
   return res.json({ message: "Password updated. Please log in again." });
+});
+
+/**
+ * Re-confirm identity before a dangerous action (see recentAuth): the password, and a current code when
+ * MFA is on. Issues a fresh access token whose auth_time opens the 10-minute window; the session and
+ * its refresh token are unchanged. Failed attempts count against the same limiter as other step-ups.
+ */
+app.post("/auth/step-up", authLimiter, stepUpLimiter, auth, async (req: AuthedRequest, res) => {
+  const body = parse(z.object({ password: z.string().min(1).max(128), code: z.string().min(6).max(20).optional() }), req.body, res); if (!body) return;
+  const user = req.user!;
+  if (!(await comparePassword(body.password, user.password_hash, { priority: true }))) {
+    await log(req, "auth.step_up_failed", "user", user.id);
+    return res.status(400).json({ detail: "Password is incorrect" });
+  }
+  if (user.mfa_enabled) {
+    const codeOk = body.code && (await checkTotp(user, body.code)) === "ok";
+    if (!codeOk) return res.status(400).json({ code: "mfa_code_required", detail: "Enter the current code from your authenticator app" });
+  }
+  const accessToken = sign(user, nowSeconds());
+  res.cookie("legion_token", accessToken, { ...cookieBase(), httpOnly: true, maxAge: ACCESS_COOKIE_MS() });
+  await log(req, "auth.step_up", "user", user.id);
+  return res.json({ access_token: accessToken, token_type: "bearer", valid_for_seconds: RECENT_AUTH_SECONDS });
 });
 
 /** Password change for a signed-in user. Bumps token_version, which signs out
@@ -1299,7 +1430,7 @@ app.get("/alerts/sync", auth, async (req: AuthedRequest, res) => {
 });
 
 app.post("/alerts", requireRole("analyst"), async (req: AuthedRequest, res) => {
-  const body = parse(z.object({ id: z.string().max(100).optional(), title: z.string().min(1).max(300), severity: z.enum(["critical", "high", "medium", "low"]), agent: z.enum(["Sentinel", "Hunter", "Guardian", "Oracle", "Executor"]), summary: z.string().min(1).max(4000), confidence: z.number().min(0).max(100).default(0), source_ip: z.string().nullable().optional(), target: z.string().nullable().optional(), mitre_technique: z.string().nullable().optional() }), req.body, res); if (!body) return;
+  const body = parse(z.object({ id: z.string().max(100).optional(), title: z.string().min(1).max(300), severity: z.enum(["critical", "high", "medium", "low"]), agent: z.enum(["Sentinel", "Hunter", "Guardian", "Oracle", "Vanguard", "Executor"]).transform((a) => (a === "Executor" ? "Vanguard" : a)), summary: z.string().min(1).max(4000), confidence: z.number().min(0).max(100).default(0), source_ip: z.string().nullable().optional(), target: z.string().nullable().optional(), mitre_technique: z.string().nullable().optional() }), req.body, res); if (!body) return;
   const id = body.id || `LGN-${randomBytes(8).toString("hex").toUpperCase()}`;
   const alert = await outbox.insertAlertAndNotify({
     ...body, id, tenant_id: req.user!.tenant_id, status: "open",
@@ -1323,11 +1454,24 @@ app.get("/alerts/:id", auth, async (req: AuthedRequest, res) => {
   return alert ? res.json(outputAlert(alert)) : res.status(404).json({ detail: "Alert not found" });
 });
 
-app.patch("/alerts/:id/status", requireRole("analyst"), async (req: AuthedRequest, res) => {
-  const body = parse(z.object({ status: z.enum(["open", "investigating", "resolved"]) }), req.body, res); if (!body) return;
-  const alert = await store.updateAlertStatus(req.user!.tenant_id, String(req.params.id), body.status);
+app.get("/alerts/:id/deliveries", auth, async (req: AuthedRequest, res) => {
+  const alert = await store.getAlert(req.user!.tenant_id, String(req.params.id));
   if (!alert) return res.status(404).json({ detail: "Alert not found" });
-  await log(req, "alert.status_updated", "alert", alert.id, body.status);
+  res.json({ deliveries: await deliveriesForAlert(req.user!.tenant_id, alert.id) });
+});
+
+app.patch("/alerts/:id/status", requireRole("analyst"), async (req: AuthedRequest, res) => {
+  const body = parse(z.object({ status: z.enum(["open", "investigating", "resolved"]), reason: z.string().trim().min(1).max(500).optional() }), req.body, res); if (!body) return;
+  let alert;
+  try {
+    alert = await store.updateAlertStatus(req.user!.tenant_id, String(req.params.id), body.status, { by: `user:${req.user!.id}`, reason: body.reason });
+  } catch (error) {
+    if (error instanceof store.AlertTransitionError) return res.status(422).json({ detail: "Reopening a resolved alert needs a reason (\"reason\")", code: error.code });
+    throw error;
+  }
+  if (!alert) return res.status(404).json({ detail: "Alert not found" });
+  shadowEvaluate(req.user!.tenant_id, { call_site: "route:alert_status", action_id: "alert.set_status", actor: { kind: "human", user_id: req.user!.id, role: req.user!.role }, origin: "human", input: { alert_id: alert.id, status: body.status }, legacy_outcome: "updated" });
+  await log(req, "alert.status_updated", "alert", alert.id, body.reason ? `${body.status}: ${body.reason}` : body.status);
   broadcast(alert.tenant_id, { type: "alert.status_updated", alert: outputAlert(alert) });
   return res.json(outputAlert(alert));
 });
@@ -1380,6 +1524,8 @@ app.get("/assets", auth, async (req: AuthedRequest, res) => {
 });
 
 app.post("/copilot/chat", requireRole("analyst"), async (req: AuthedRequest, res) => {
+  // The Copilot assistant is part of extended AI analysis (Professional and up).
+  if (!(await planAllows(req.user!.tenant_id, "copilot", res))) return;
   const body = parse(z.object({ message: z.string().min(1).max(4000), history: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().min(1).max(4000) })).max(20).default([]) }), req.body, res); if (!body) return;
 
   const tenantId = req.user!.tenant_id;
@@ -1425,6 +1571,7 @@ async function aiSettingsView(tenantId: string) {
     // Names the third party that would receive alert text.
     provider: policy.provider,
     data_mode: policy.dataMode,
+    data_mode_is_default: policy.dataModeIsDefault,
     reason: policy.reason,
     circuit: aiCircuit().state,
     advisory: true,
@@ -1459,6 +1606,9 @@ app.post("/users/invite", requireRole("admin"), async (req: AuthedRequest, res) 
     email: z.string().email().max(254).transform((v) => v.toLowerCase()),
     role: z.enum(["admin", "analyst", "viewer"]),
   }), req.body, res); if (!body) return;
+
+  // The plan includes a number of administrator seats (audit: plans).
+  if (body.role === "admin" && !(await adminSeatAvailable(req.user!.tenant_id, res))) return;
 
   // Invitations are platform email to an address the tenant chooses: capped per tenant.
   const invitesThisHour = (await store.recentAuditCount(req.user!.tenant_id, "user.invited")) + (await store.recentAuditCount(req.user!.tenant_id, "user.invite_resent"));
@@ -1549,10 +1699,12 @@ app.post("/users/:id/resend-invite", requireRole("admin"), async (req: AuthedReq
   return res.json({ email_sent: mail.sent, invite_url: mail.sent || config.isProduction ? undefined : inviteUrl });
 });
 
-app.patch("/users/:id/role", requireRole("admin"), async (req: AuthedRequest, res) => {
+app.patch("/users/:id/role", requireRole("admin"), recentAuth, async (req: AuthedRequest, res) => {
   if (!UUID_RE.test(String(req.params.id))) return res.status(404).json({ detail: "User not found" });
   const body = parse(z.object({ role: z.enum(["admin", "analyst", "viewer"]) }), req.body, res); if (!body) return;
   const userId = String(req.params.id);
+  // Promoting to admin takes a seat (the person's own seat, if already an admin, does not count twice).
+  if (body.role === "admin" && !(await adminSeatAvailable(req.user!.tenant_id, res, userId))) return;
   // Check "a tenant keeps at least one admin" and change the role atomically
   // (store.updateUserKeepingAnAdmin): two admins demoting each other at once
   // can no longer leave the tenant with none.
@@ -1573,7 +1725,7 @@ app.patch("/users/:id/role", requireRole("admin"), async (req: AuthedRequest, re
 
 /** Deactivation, not deletion: audit rows reference this user and must keep
  *  resolving to a real identity. Bumping token_version kills live sessions. */
-app.delete("/users/:id", requireRole("admin"), async (req: AuthedRequest, res) => {
+app.delete("/users/:id", requireRole("admin"), recentAuth, async (req: AuthedRequest, res) => {
   if (!UUID_RE.test(String(req.params.id))) return res.status(404).json({ detail: "User not found" });
   const userId = String(req.params.id);
   if (userId === req.user!.id) return res.status(400).json({ detail: "You cannot deactivate your own account" });
@@ -1750,16 +1902,59 @@ app.get("/billing/subscription", auth, async (req: AuthedRequest, res) => {
   return res.json({ ...sub, access_state: state, trial_ends_at: tenant?.trial_ends_at || null });
 });
 
+/** The price list: public (the pricing page), the same data the server enforces. Never exposes Paddle price ids. */
+app.get("/billing/plans", (_req, res) => {
+  const purchasable = (id: string, interval: "month" | "year") => Boolean(config.paddlePlanPrices[`${id}.${interval}`]);
+  res.setHeader("Cache-Control", "public, max-age=300");
+  res.json({
+    currency: "USD",
+    trial_days: config.trialDays,
+    plans: PLAN_IDS.map((id) => ({ ...PLANS[id], buy: { month: purchasable(id, "month"), year: purchasable(id, "year") } })),
+    addons: Object.values(ADDONS).map((a) => ({ ...a, buy: Boolean(config.paddleAddonPrices[a.id]) })),
+    self_hosted: SELF_HOSTED,
+    setup: SETUP_SERVICES,
+  });
+});
+
+/** What this workspace's plan allows, and how much of it is used. */
+app.get("/billing/entitlements", auth, async (req: AuthedRequest, res) => {
+  const plan = await resolvePlan(req.user!.tenant_id);
+  res.json({ ...plan, usage: await usageOf(req.user!.tenant_id, plan) });
+});
+
 app.post("/billing/checkout-context", requireRole("admin"), async (req: AuthedRequest, res) => {
-  // The workspace is checked out in its own currency: the server chooses the
-  // price (PADDLE_PRICE_IDS), so the client cannot pick a cheaper one. null:
-  // no price for that currency — the client falls back to its default.
+  // A plan and billing period, plus add-ons. The server maps them to Paddle
+  // prices (PADDLE_PLAN_PRICES / PADDLE_ADDON_PRICES), so the client can only
+  // ask for what Legion sells, never name a price. Without a body it behaves as
+  // before: the workspace's currency price (PADDLE_PRICE_IDS), if any.
   const tenant = await store.getTenant(req.user!.tenant_id);
   const currency = tenant?.currency ?? config.defaultCurrency;
-  res.json({
-    checkout_token: signToken("checkout", { purpose: "paddle_checkout", tenant_id: req.user!.tenant_id }, "1h"),
-    currency,
-    price_id: config.paddlePriceIds[currency] ?? null,
+  const token = signToken("checkout", { purpose: "paddle_checkout", tenant_id: req.user!.tenant_id }, "1h");
+  const body = parse(z.object({
+    plan: z.enum(PLAN_IDS).optional(),
+    interval: z.enum(["month", "year"]).default("month"),
+    addons: z.array(z.enum(ADDON_IDS)).max(10).default([]),
+  }), req.body ?? {}, res); if (!body) return; // unknown keys (a client-chosen price, another tenant) are ignored: nothing reads them if (!body) return;
+  if (!body.plan) {
+    return res.json({ checkout_token: token, currency, price_id: config.paddlePriceIds[currency] ?? null });
+  }
+  const planPrice = config.paddlePlanPrices[`${body.plan}.${body.interval}`];
+  if (!planPrice) {
+    return res.status(409).json({
+      detail: body.plan === "enterprise" ? "Enterprise is by agreement. Contact us." : "That plan cannot be bought online yet.",
+      code: "plan_not_purchasable",
+    });
+  }
+  // Add-ons are billed monthly, so they ride only on a monthly plan; each once.
+  const addonIds = [...new Set(body.addons)];
+  if (addonIds.length && body.interval !== "month") {
+    return res.status(400).json({ detail: "Add-ons are billed monthly. Choose the monthly plan to add them.", code: "addon_interval" });
+  }
+  const unavailable = addonIds.filter((a) => !config.paddleAddonPrices[a]);
+  if (unavailable.length) return res.status(409).json({ detail: "An add-on you chose cannot be bought online yet.", code: "addon_not_purchasable" });
+  return res.json({
+    checkout_token: token, currency: "USD", plan: body.plan, interval: body.interval,
+    items: [planPrice, ...addonIds.map((a) => config.paddleAddonPrices[a]!)].map((priceId) => ({ priceId, quantity: 1 })),
   });
 });
 
@@ -1791,6 +1986,9 @@ interface PaddleSubscriptionData {
   items?: Array<{ price?: { id?: string } }>;
   custom_data?: Record<string, unknown> | null;
 }
+
+/** Statuses that let a workspace in (past_due: read-only, still not locked out). */
+const GRANTS_ACCESS = new Set<Subscription["status"]>(["active", "trialing", "past_due"]);
 
 const subscriptionStatuses = new Set<Subscription["status"]>([
   "trialing", "active", "past_due", "paused", "canceled",
@@ -1851,10 +2049,50 @@ app.post("/billing/webhook", async (req, res) => {
   }
 
   const status = payload.status as Subscription["status"] | undefined;
-  const resolved: Subscription["status"] =
+  let resolved: Subscription["status"] =
     eventType === "subscription.canceled" ? "canceled"
       : status && subscriptionStatuses.has(status) ? status
         : existing?.status || "trialing";
+
+  // Audit P1-4: the browser opens the checkout, so it could pick any price in
+  // the vendor's catalogue (a cheaper plan, a test price). Only the prices the
+  // server offers (plans, add-ons, the legacy single price) grant access;
+  // anything else is recorded but kept blocked, and the operator is told.
+  const priceIds = (payload.items ?? []).map((i) => i?.price?.id).filter((x): x is string => typeof x === "string");
+  const offered = offeredPriceIds();
+  const bought = classifyPrices(priceIds);
+  if (offered.size && GRANTS_ACCESS.has(resolved) && (!priceIds.length || bought.unknown.length)) {
+    console.error(`Paddle ${eventType} for subscription ${payload.id}: price ${(bought.unknown.length ? bought.unknown : priceIds).join(",") || "(none)"} is not one Legion offers — access not granted.`);
+    resolved = "paused";
+    await store.audit({
+      tenant_id: tenantId, user_id: null, user_email: null, action: "billing.unrecognised_price",
+      resource_type: "subscription", resource_id: payload.id, detail: (bought.unknown.length ? bought.unknown : priceIds).join(",").slice(0, 200) || "(none)", ip_address: req.ip || null,
+    });
+  }
+  // Add-ons alone are not a plan: a subscription of only add-ons grants nothing.
+  if (offered.size && GRANTS_ACCESS.has(resolved) && priceIds.length && !bought.plan) {
+    console.error(`Paddle ${eventType} for subscription ${payload.id}: no plan among its items — access not granted.`);
+    resolved = "paused";
+    await store.audit({
+      tenant_id: tenantId, user_id: null, user_email: null, action: "billing.no_plan",
+      resource_type: "subscription", resource_id: payload.id, detail: priceIds.join(",").slice(0, 200), ip_address: req.ip || null,
+    });
+  }
+
+  // Audit P1-5: one subscription row per workspace. A late event for an OLDER
+  // subscription (cancelled when the customer bought a new one) must not
+  // overwrite the subscription that is paying now.
+  if (!existing) {
+    const current = await store.getSubscription(tenantId);
+    if (current?.paddle_subscription_id && current.paddle_subscription_id !== payload.id
+        && GRANTS_ACCESS.has(current.status) && !GRANTS_ACCESS.has(resolved)) {
+      await store.audit({
+        tenant_id: tenantId, user_id: null, user_email: null, action: "billing.superseded_event",
+        resource_type: "subscription", resource_id: payload.id, detail: `${eventType} ignored; current ${current.paddle_subscription_id} is ${current.status}`.slice(0, 300), ip_address: req.ip || null,
+      });
+      return res.status(202).json({ status: "skipped", reason: "another subscription is current" });
+    }
+  }
 
   // Ordering is enforced inside the statement — Paddle does not guarantee
   // delivery order, and a stale retry must not overwrite newer state.
@@ -1863,10 +2101,12 @@ app.post("/billing/webhook", async (req, res) => {
     status: resolved,
     paddle_customer_id: payload.customer_id || existing?.paddle_customer_id || "",
     paddle_subscription_id: payload.id,
-    paddle_price_id: payload.items?.[0]?.price?.id || existing?.paddle_price_id || null,
+    paddle_price_id: priceIds.find((id) => classifyPrices([id]).plan) ?? priceIds[0] ?? existing?.paddle_price_id ?? null,
     current_period_end: payload.current_billing_period?.ends_at || null,
     cancel_at_period_end: payload.scheduled_change?.action === "cancel",
     last_event_at: occurredAt,
+    plan: bought.plan,
+    addons: bought.addons,
   });
 
   if (!record) return res.status(202).json({ status: "skipped", reason: "stale event" });
@@ -1913,7 +2153,7 @@ app.post("/security-events/credentials", requireRole("admin"), async (req: Authe
   } catch (error) { return credentialFailure(res, error); }
 });
 
-app.post("/security-events/credentials/:id/rotate", requireRole("admin"), async (req: AuthedRequest, res) => {
+app.post("/security-events/credentials/:id/rotate", requireRole("admin"), recentAuth, async (req: AuthedRequest, res) => {
   const keyId = String(req.params.id);
   if (!isKeyId(keyId)) return res.status(404).json({ detail: "Webhook credential not found" });
   const body = parse(z.object({ overlap_hours: z.number().min(0).max(168).optional() }), req.body ?? {}, res); if (!body) return;
@@ -1925,7 +2165,7 @@ app.post("/security-events/credentials/:id/rotate", requireRole("admin"), async 
   } catch (error) { return credentialFailure(res, error); }
 });
 
-app.delete("/security-events/credentials/:id", requireRole("admin"), async (req: AuthedRequest, res) => {
+app.delete("/security-events/credentials/:id", requireRole("admin"), recentAuth, async (req: AuthedRequest, res) => {
   const keyId = String(req.params.id);
   if (!isKeyId(keyId)) return res.status(404).json({ detail: "Webhook credential not found" });
   try {
@@ -1959,7 +2199,14 @@ app.post("/security-events/test", requireRole("admin"), async (req: AuthedReques
   return res.status(201).json({ alert_id: report.ingested[0] });
 });
 
+// A development aid that fabricates a HIGH-severity alert (and its email).
+// Audit P2-15: on a real installation that is a fake incident in a security
+// product, so it exists only under NODE_ENV=development or test. The real way
+// to see a sample alert is POST /security-events/test (labelled, low severity).
+const MOCK_PROVIDER_ENABLED = () => process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test";
+
 app.post("/security-events/sync", requireRole("admin"), async (req: AuthedRequest, res) => {
+  if (!MOCK_PROVIDER_ENABLED()) return res.status(404).json({ detail: "Not found" });
   const id = `SEC-${randomBytes(8).toString("hex").toUpperCase()}`;
   const alert = await outbox.insertAlertAndNotify({
     id, tenant_id: req.user!.tenant_id, title: "Mock provider: suspicious authentication burst",
@@ -1987,12 +2234,18 @@ app.post("/security-events/sync", requireRole("admin"), async (req: AuthedReques
 // eventTime moved to the Wazuh adapter; re-exported for existing callers.
 export { eventTime } from "./integrations/wazuh.js";
 
-app.post(WEBHOOK_PATH,
+/**
+ * One signed ingestion route per format, all with the same gate: the failure gate, raw bytes only, the
+ * credential's HMAC over those bytes, THEN parsing, then the adapter, then the shared ingestion path.
+ * `wazuh` and `generic_webhook` take JSON; `cef` takes text/plain lines.
+ */
+function sensorIngest(adapter: PushAdapter, contentType: "application/json" | "text/plain") {
+  return [
   // Refuses an address that keeps failing BEFORE its body is read.
   webhookFailureGate,
-  // Raw bytes only, JSON content types only; nothing is parsed yet.
-  express.raw({ type: "application/json", limit: config.webhookMaxBodyBytes }),
-  async (req, res) => {
+  // Raw bytes only, one content type per route; nothing is parsed yet.
+  express.raw({ type: contentType, limit: config.webhookMaxBodyBytes }),
+  async (req: Request, res: Response) => {
   // The organisation is whatever the credential belongs to. Nothing the sender
   // types — including the old x-tenant-id header, which is only cross-checked —
   // can choose it. See webhook-auth.ts for the scheme.
@@ -2009,16 +2262,22 @@ app.post(WEBHOOK_PATH,
     return res.status(401).json({ detail: WEBHOOK_REJECTION_DETAIL[auth.reason] });
   }
   const tenantId = auth.tenantId;
+  // F-04: the rest of this request runs in the credential's workspace (db/rls.ts).
+  return withTenant(tenantId, async () => {
 
   // Only now — the bytes are proven to come from the credential's holder — is
   // the body parsed. A signed document that is not valid JSON is the sender's
   // bug: 400, no stack trace.
   let body: unknown;
-  try {
-    const parsed: unknown = JSON.parse(rawBody!.toString("utf8"));
-    body = parsed !== null && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return res.status(400).json({ detail: "Invalid request" });
+  if (contentType === "text/plain") {
+    body = rawBody!.toString("utf8");
+  } else {
+    try {
+      const parsed: unknown = JSON.parse(rawBody!.toString("utf8"));
+      body = parsed !== null && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return res.status(400).json({ detail: "Invalid request" });
+    }
   }
 
   // Data residency: this deployment stores data only for its own region's
@@ -2033,15 +2292,52 @@ app.post(WEBHOOK_PATH,
   // commit, and nothing here waits on SMTP or Redis — the outbox worker does
   // that, with retries. If the commit fails the request fails (5xx) and the
   // sensor retries; nothing was stored, so the retry is not a duplicate.
-  const normalized = wazuhAdapter.normalize(body);
+  const normalized = adapter.normalize(body);
   if (normalized.skipped) return res.status(202).json({ status: "skipped" });
   const report = await ingestFindings(tenantId, normalized.source, normalized.findings, { realtime: newAlertFrame });
   // Idempotent by construction: retries from the sensor collapse onto the same
   // primary key instead of creating duplicates.
   const id = report.ingested[0] ?? report.duplicates[0]!;
   if (!report.ingested.length) return res.status(202).json({ status: "skipped", reason: "duplicate", alert_id: id });
-  return res.status(202).json({ status: "ingested", alert_id: id });
+  return res.status(202).json({ status: "ingested", alert_id: id, ...(normalized.findings.length > 1 ? { ingested: report.ingested.length, duplicates: report.duplicates.length } : {}) });
   });
+  },
+  ];
+}
+/**
+ * GitHub deliveries: the connection (and so the workspace and the secret) is named in the URL, and only
+ * GitHub's HMAC over the raw bytes proves the sender holds that connection's secret. Unknown connection,
+ * wrong signature and a missing signature all look the same (401) and count as failures for the address.
+ */
+app.post(WEBHOOK_GITHUB_PATH, webhookFailureGate, express.raw({ type: "application/json", limit: config.webhookMaxBodyBytes }), async (req: Request, res: Response) => {
+  const reject = () => res.status(401).json({ detail: "Invalid request" });
+  const id = String(req.query.connection ?? "");
+  const raw = Buffer.isBuffer(req.body) ? req.body : null;
+  const signature = req.header("x-hub-signature-256") ?? "";
+  if (!UUID_RE.test(id) || !raw || !/^sha256=[0-9a-f]{64}$/.test(signature)) return reject();
+  const conn = await connections.githubSecret(id);
+  // Always compute one HMAC, whether or not the connection exists, so the answer does not reveal which ids are real.
+  const expected = createHmac("sha256", conn?.secret ?? "unknown-connection").update(raw).digest();
+  const given = Buffer.from(signature.slice(7), "hex");
+  if (!conn || given.length !== expected.length || !timingSafeEqual(given, expected)) return reject();
+  return withTenant(conn.tenantId, async () => {
+    const workspace = await store.getTenant(conn.tenantId);
+    if (workspace && !servesRegion(workspace)) return misdirected(res, workspace);
+    let body: unknown;
+    try { body = JSON.parse(raw.toString("utf8")); } catch { return res.status(400).json({ detail: "Invalid request" }); }
+    const event = String(req.header("x-github-event") ?? "");
+    if (event === "ping") return res.status(202).json({ status: "pong" });
+    const normalized = githubAdapter.normalize({ event, body });
+    if (normalized.skipped) return res.status(202).json({ status: "skipped" });
+    const report = await ingestFindings(conn.tenantId, normalized.source, normalized.findings, { realtime: newAlertFrame });
+    await connections.touchSuccess(conn.id, conn.tenantId);
+    return res.status(202).json({ status: report.ingested.length ? "ingested" : "skipped", ...(report.ingested.length ? {} : { reason: "duplicate" }) });
+  });
+});
+
+app.post(WEBHOOK_PATH, ...sensorIngest(wazuhAdapter, "application/json"));
+app.post(WEBHOOK_GENERIC_PATH, ...sensorIngest(genericWebhookAdapter, "application/json"));
+app.post(WEBHOOK_CEF_PATH, ...sensorIngest(cefAdapter, "text/plain"));
 
 // --- Attack campaigns and automatic response ---------------------------------
 // Campaigns are correlated attacks (campaigns.ts); the blocklist is what this
@@ -2062,6 +2358,7 @@ app.get("/security/blocks", auth, async (req: AuthedRequest, res) => {
 });
 
 app.post("/security/blocks", requireRole("admin"), async (req: AuthedRequest, res) => {
+  if (!(await planAllows(req.user!.tenant_id, "ipBlocking", res))) return;
   const body = parse(z.object({
     ip: z.string().min(2).max(45),
     minutes: z.number().int().min(5).max(10_080).optional(),
@@ -2072,6 +2369,7 @@ app.post("/security/blocks", requireRole("admin"), async (req: AuthedRequest, re
     const { block, created } = await blocklist.addBlock(req.user!.tenant_id, body.ip, {
       minutes: body.minutes ?? settings.minutes, reason: body.reason?.trim() || `Blocked by ${req.user!.email}`, userId: req.user!.id,
     });
+    shadowEvaluate(req.user!.tenant_id, { call_site: "route:manual_block", action_id: "ip.block", actor: { kind: "human", user_id: req.user!.id, role: req.user!.role }, origin: "human", input: { ip: block.ip, minutes: body.minutes ?? settings.minutes }, legacy_outcome: created ? "blocked" : "extended" });
     await log(req, "security.block", "ip", block.ip, `${body.minutes ?? settings.minutes} min`);
     res.status(created ? 201 : 200).json({ block });
   } catch (error) {
@@ -2084,6 +2382,7 @@ app.delete("/security/blocks/:ip", requireRole("admin"), async (req: AuthedReque
   try {
     const block = await blocklist.revokeBlock(req.user!.tenant_id, String(req.params.ip), req.user!.id);
     if (!block) return res.status(404).json({ detail: "That address is not blocked" });
+    shadowEvaluate(req.user!.tenant_id, { call_site: "route:manual_unblock", action_id: "ip.unblock", actor: { kind: "human", user_id: req.user!.id, role: req.user!.role }, origin: "human", input: { ip: block.ip }, legacy_outcome: "unblocked" });
     await log(req, "security.unblock", "ip", block.ip);
     res.json({ block });
   } catch (error) {
@@ -2101,8 +2400,28 @@ app.patch("/security/auto-response", requireRole("admin"), async (req: AuthedReq
     mode: z.enum(["off", "auto"]).optional(),
     minutes: z.number().int().min(5).max(10_080).optional(),
     allowlist: z.string().max(10_000).optional(),
+    /** The administrator confirms they have read the notice (see blocklist.AUTO_BLOCK_NOTICE_VERSION). */
+    acknowledge: z.boolean().optional(),
   }), req.body, res); if (!body) return;
-  const settings = await blocklist.updateSettings(req.user!.tenant_id, body);
+  // Turning automatic blocking ON needs a plan with policy-based blocking. Turning it off, or changing the allowlist, never does.
+  if (body.mode === "auto" && !(await planAllows(req.user!.tenant_id, "autoBlocking", res))) return;
+  // …and a written acknowledgement: Legion will act on the customer's systems on its own, so a person says they understand how.
+  if (body.mode === "auto") {
+    const current = await blocklist.getSettings(req.user!.tenant_id);
+    if (!current.acknowledged && body.acknowledge !== true) {
+      return res.status(400).json({
+        detail: "Read and confirm the notice before turning on automatic blocking.",
+        code: "acknowledgement_required", notice_version: blocklist.AUTO_BLOCK_NOTICE_VERSION,
+      });
+    }
+    if (body.acknowledge === true && !current.acknowledged) {
+      await blocklist.acknowledgeNotice(req.user!.tenant_id, req.user!.email);
+      await log(req, "security.auto_block_acknowledged", "tenant", req.user!.tenant_id, `notice v${blocklist.AUTO_BLOCK_NOTICE_VERSION}`);
+    }
+  }
+  const { acknowledge: _ack, ...patch } = body;
+  void _ack;
+  const settings = await blocklist.updateSettings(req.user!.tenant_id, patch);
   await log(req, "security.auto_response_changed", "tenant", req.user!.tenant_id,
     `mode=${settings.mode} minutes=${settings.minutes} allowlist=${settings.allowlist ? settings.allowlist.split(",").length : 0}`);
   res.json(settings);
@@ -2126,12 +2445,16 @@ app.post(BLOCKLIST_PATH,
     console.warn(`Legion: rejected blocklist request (${authResult.cause}) key=${authResult.keyId ? authResult.keyId.slice(0, 8) : "-"} ip=${req.ip || "unknown"}`);
     return res.status(401).json({ detail: WEBHOOK_REJECTION_DETAIL[authResult.reason] });
   }
+  // F-04: the rest of this request runs in the credential's workspace (db/rls.ts).
+  return withTenant(authResult.tenantId, async () => {
   let body: { action?: unknown } = {};
   try { body = JSON.parse(rawBody!.toString("utf8")) ?? {}; } catch { /* checked below */ }
   if (body.action !== "sync-blocklist") return res.status(400).json({ detail: "Invalid request" });
-  const entries = await blocklist.activeEntries(authResult.tenantId);
+  // A plan without address blocking has nothing for the manager to enforce (an empty list also un-blocks anything left over).
+  const entries = allows(await resolvePlan(authResult.tenantId), "ipBlocking") ? await blocklist.activeEntries(authResult.tenantId) : [];
   res.setHeader("Cache-Control", "no-store");
   res.json({ generated_at: new Date().toISOString(), entries });
+  });
   });
 
 // Payment check (src/payments.ts): the customer's payment software asks before
@@ -2149,10 +2472,25 @@ app.post(payments.PAYMENT_CHECK_PATH,
     console.warn(`Legion: rejected payment check (${authResult.cause}) key=${authResult.keyId ? authResult.keyId.slice(0, 8) : "-"} ip=${req.ip || "unknown"}`);
     return res.status(401).json({ detail: WEBHOOK_REJECTION_DETAIL[authResult.reason] });
   }
+  // F-04: the rest of this request runs in the credential's workspace (db/rls.ts).
+  return withTenant(authResult.tenantId, async () => {
   let body: unknown = null;
   try { body = JSON.parse(rawBody!.toString("utf8")); } catch { /* checked below */ }
   const parsed = payments.paymentCheckSchema.safeParse(body);
   if (!parsed.success) return res.status(400).json({ detail: "Invalid request" });
+  // The payment check is included from Professional, or bought as an add-on. Refusing
+  // makes the client exit 1: the payment software must not pay on its own.
+  const checkPlan = await resolvePlan(authResult.tenantId);
+  if (!allows(checkPlan, "paymentCheck")) return res.status(403).json(planRefusal("paymentCheck", checkPlan.plan));
+  // A new hosted workspace may use the check only after an administrator confirmed the notice
+  // (what a "hold" is, who decides, what Legion does not do). Refusing makes the client exit 1.
+  const consent = await payments.paymentConsent(authResult.tenantId);
+  if (consent.required) {
+    return res.status(403).json({
+      code: "acknowledgement_required", notice_version: consent.notice_version,
+      detail: "An administrator must read and confirm the payment-check notice in the dashboard (Defense → Payments on hold) before the first check.",
+    });
+  }
   let result;
   try { result = await payments.checkPayment(authResult.tenantId, parsed.data); }
   catch (err) {
@@ -2165,6 +2503,23 @@ app.post(payments.PAYMENT_CHECK_PATH,
   res.setHeader("Cache-Control", "no-store");
   res.json({ id: result.check.id, decision: result.check.decision, reasons: result.reasons, verify: result.verify });
   });
+  });
+
+app.get("/security/payments/consent", auth, async (req: AuthedRequest, res) => {
+  res.json(await payments.paymentConsent(req.user!.tenant_id));
+});
+
+// Administrators confirm the notice in writing: who, when, and which version of the text.
+app.post("/security/payments/consent", requireRole("admin"), async (req: AuthedRequest, res) => {
+  const body = parse(z.strictObject({ acknowledge: z.literal(true) }), req.body ?? {}, res); if (!body) return;
+  const before = await payments.paymentConsent(req.user!.tenant_id);
+  if (!before.applicable) return res.status(400).json({ detail: "This installation does not need the payment-check notice." });
+  if (!before.acknowledged) {
+    await payments.acknowledgePaymentNotice(req.user!.tenant_id, req.user!.email);
+    await log(req, "security.payment_notice_acknowledged", "tenant", req.user!.tenant_id, `notice v${payments.PAYMENT_NOTICE_VERSION}`);
+  }
+  res.json(await payments.paymentConsent(req.user!.tenant_id));
+});
 
 app.get("/security/payments", auth, async (req: AuthedRequest, res) => {
   res.json({ payments: await payments.listPayments(req.user!.tenant_id, { heldOnly: req.query.held === "true" }) });
@@ -2175,6 +2530,7 @@ async function resolvePaymentRoute(req: AuthedRequest, res: express.Response, re
   if (!/^PAY-[0-9A-F]{16}$/.test(id)) return res.status(404).json({ detail: "No such payment on hold" });
   const check = await payments.resolvePayment(req.user!.tenant_id, id, req.user!.id, resolution);
   if (!check) return res.status(404).json({ detail: "No such payment on hold" });
+  shadowEvaluate(req.user!.tenant_id, { call_site: "route:payment_resolve", action_id: resolution === "released" ? "payment.release" : "payment.reject", actor: { kind: "human", user_id: req.user!.id, role: req.user!.role }, origin: "human", input: { payment_id: id }, legacy_outcome: resolution });
   await store.audit({
     tenant_id: req.user!.tenant_id, user_id: req.user!.id, user_email: req.user!.email, action: `security.payment_${resolution}`,
     resource_type: "payment", resource_id: id, detail: `${check.amount} ${check.currency} to ${check.beneficiary_hint}`, ip_address: req.ip ?? null,
@@ -2229,7 +2585,7 @@ for (const [action, status] of [["pause", "paused"], ["resume", "active"]] as co
   });
 }
 
-app.delete("/integrations/:id", requireRole("admin"), async (req: AuthedRequest, res) => {
+app.delete("/integrations/:id", requireRole("admin"), recentAuth, async (req: AuthedRequest, res) => {
   if (!UUID_RE.test(String(req.params.id))) return res.status(404).json({ detail: "Integration not found." });
   try {
     const c = await connections.setStatus(req.user!.tenant_id, String(req.params.id), "disabled");
@@ -2239,6 +2595,11 @@ app.delete("/integrations/:id", requireRole("admin"), async (req: AuthedRequest,
     if (error instanceof connections.ConnectionError) return res.status(404).json({ detail: error.message });
     throw error;
   }
+});
+
+registerSocRoutes(app, {
+  requirePermission, parse, log, stepUp: stepUpLimiter, recentAuth,
+  verifyMfa: async (user, code) => user.mfa_enabled && (await checkTotp(user, code)) === "ok",
 });
 
 app.use((_req, res) => res.status(404).json({ detail: "Not found" }));
@@ -2359,8 +2720,10 @@ wss.on("connection", (ws: WebSocket & { tenantId?: string; grant?: realtime.Sock
 if (process.env.NODE_ENV !== "test") {
   // The API must not hold the database superuser (db/provision.ts). Refused
   // in production; said out loud everywhere else.
+  // F-01: refused everywhere except an explicit NODE_ENV=development (a laptop), not only in
+  // production — the default Docker install did not set NODE_ENV and ran as the superuser.
   const roleDecision = databaseRoleDecision(await currentRoleAttributes(), {
-    production: config.isProduction, allowPrivileged: config.dbAllowPrivilegedRole,
+    production: refusePrivilegedRole(process.env.NODE_ENV), allowPrivileged: config.dbAllowPrivilegedRole,
   });
   if (roleDecision.action === "refuse") throw new Error(`Refusing to start: ${roleDecision.message}`);
   if (roleDecision.action === "warn") console.warn(`Legion: WARNING — ${roleDecision.message}`);
@@ -2414,6 +2777,8 @@ if (process.env.NODE_ENV !== "test") {
 
   // Delivers queued alert emails and retries failed ones (outbox.ts).
   outbox.startOutboxWorker();
+  // SOC core jobs: queued action simulations, background workflow runs (runtime/worker.ts).
+  startRuntime();
   // "Wazuh went quiet" becomes an alert of its own (sensor-monitor.ts).
   startSensorMonitor(5 * 60_000, newAlertFrame);
   // Several instances need shared state for realtime fan-out and rate limits
@@ -2437,6 +2802,19 @@ if (process.env.NODE_ENV !== "test") {
       if (removed > 0) console.info(`Pruned ${removed} expired session token(s).`);
       // Shared counters older than a day are no longer consulted.
       await query("DELETE FROM usage_counters WHERE window_start < now() - interval '1 day'");
+      await pruneExpiredMemory();
+      // Resolved alerts older than the plan keeps them (hosted only).
+      const aged = await pruneAlertsByPlan();
+      if (aged > 0) console.info(`Removed ${aged} resolved alert(s) older than their plan's retention.`);
+      const erased = await autoDeleteExpired(undefined, (id, on) => console.info(`Workspace ${id} is locked for more than ${config.tenantAutoDeleteDays} days: its administrators were warned; it will be erased on ${on.toISOString().slice(0, 10)}.`));
+      if (erased.length) console.info(`Erased ${erased.length} workspace(s) locked for more than ${config.tenantAutoDeleteDays} days.`);
+      // K-6: one line per workspace with the head of its SOC audit chain. Ship the log off this host;
+      // GET /soc/audit/verify?checkpoint_seq=&checkpoint_hash= then proves nothing was cut or rewritten since.
+      for (const c of await auditCheckpoints()) console.info(JSON.stringify({ t: new Date().toISOString(), msg: "soc_audit_checkpoint", tenant: c.tenant, seq: c.seq, hash: c.hash }));
+      const kept = await runRetention();
+      if (kept.payments || kept.audit) console.info(`Retention: ${kept.payments} payment check(s) deleted, ${kept.audit} audit entr${kept.audit === 1 ? "y" : "ies"} anonymised.`);
+      const socRemoved = Object.values(kept.soc).reduce((a, b) => a + b, 0);
+      if (socRemoved) console.info(`Retention: removed ${socRemoved} finished SOC record(s) older than ${config.retentionSocDays} days (${Object.entries(kept.soc).filter(([, n]) => n).map(([t, n]) => `${t} ${n}`).join(", ")}).`);
     } catch (error) {
       console.error("Session prune failed:", error instanceof Error ? error.message : error);
     }
@@ -2460,6 +2838,7 @@ if (process.env.NODE_ENV !== "test") {
     console.warn("Legion: WARNING — WS_ALLOW_MISSING_ORIGIN=true lets non-browser WebSocket clients connect without an Origin.");
   }
   // Slow-loris bounds. Generous for a 256 KB body limit; response streaming is unaffected.
+  httpServer.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
   httpServer.headersTimeout = 30_000;
   httpServer.requestTimeout = 60_000;
   // A connection that opens and sends nothing has no Node timeout of its own.
@@ -2475,6 +2854,7 @@ if (process.env.NODE_ENV !== "test") {
       shuttingDown = true;
       console.info(`${signal} received — draining connections.`);
       outbox.stopOutboxWorker(); // undelivered rows stay queued for the next start
+      stopRuntime(); // a job in flight keeps its lease; another instance takes it over when the lease ends
       stopSensorMonitor();
       connections.stopIntegrationWorker();
       realtime.stopHeartbeat();

@@ -2,7 +2,7 @@ import { Router, type Request } from "express";
 import { z } from "zod";
 import type { AuditLog } from "../audit.js";
 import type { createGuards } from "../authorize.js";
-import { ALL_PERMISSIONS, exceedsRole, isPermission, roleAllows, type Permission } from "../permissions.js";
+import { ALL_PERMISSIONS, exceedsRole, isPermission, roleAllows, roleCanDelegate, type Permission } from "../permissions.js";
 import type { ApprovalStatus, ApprovalStore } from "./approvals.js";
 import { clientIp, sendError } from "../principal.js";
 import type { IdentityStore } from "../store.js";
@@ -111,6 +111,10 @@ export function firewallAdminRouter(d: Deps): Router {
     if (overRole.length) return sendError(res, 400, "exceeds_your_role", `You cannot delegate what you do not have: ${overRole.join(", ")}.`);
     const overAgent = permissions.filter((p) => !agent.permissions.includes(p));
     if (overAgent.length) return sendError(res, 400, "exceeds_agent", `The agent does not hold: ${overAgent.join(", ")}.`);
+    const adminOnly = permissions.filter((p) => !roleCanDelegate(user.role, p));
+    if (adminOnly.length) {
+      return sendError(res, 403, "admin_required", `Only an administrator can delegate write or execute authority: ${adminOnly.join(", ")}.`);
+    }
     const grant = await d.store.tx(async (c) => {
       const g = await d.delegations.create(c, { tenantId: user.tenantId, agentId: agent.id, userId: user.id, permissions, expiresAt: b.expiresAt, redelegable: b.redelegable });
       await d.audit.record({

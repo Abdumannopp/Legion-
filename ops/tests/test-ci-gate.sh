@@ -22,21 +22,45 @@ expect 0 "the committed workflow passes" node .github/scripts/check-ci-gate.mjs 
 sed 's/^\(      - name: Attack assessment\)$/\1\n        continue-on-error: true/' "$wf" > "$tmp/coe.yml"
 expect 1 "continue-on-error on a step is refused" node .github/scripts/check-ci-gate.mjs "$tmp/coe.yml"
 
-sed 's/needs: \[deploy-scripts, dependencies, agent-identity, app, security-assessment\]/needs: [deploy-scripts, dependencies, agent-identity, app]/' "$wf" > "$tmp/unhooked.yml"
+sed 's/needs: \[deploy-scripts, dependencies, agent-identity, app, security-assessment, pilot-stack, image-scan, docker, secrets, sast\]/needs: [deploy-scripts, dependencies, agent-identity, app, security-assessment, pilot-stack, image-scan, docker]/' "$wf" > "$tmp/unhooked.yml"
 expect 1 "release gate not waiting for the security job is refused" node .github/scripts/check-ci-gate.mjs "$tmp/unhooked.yml"
 
 sed 's/^    needs: \[release-gate\]$/    needs: [app]/' "$wf" > "$tmp/release.yml"
 expect 1 "release not depending on the gate is refused" node .github/scripts/check-ci-gate.mjs "$tmp/release.yml"
 
+sed 's/ --exit-code 1 --report-format/ --exit-code 0 --report-format/' "$wf" > "$tmp/nosecrets.yml"
+expect 1 "a secret scan that cannot fail is refused" node .github/scripts/check-ci-gate.mjs "$tmp/nosecrets.yml"
+sed 's/--severity ERROR --error/--severity ERROR/' "$wf" > "$tmp/nosast.yml"
+expect 1 "a static analysis that cannot fail is refused" node .github/scripts/check-ci-gate.mjs "$tmp/nosast.yml"
+sed 's/cyclonedx-json/spdx-json/g' "$wf" > "$tmp/nosbom.yml"
+expect 1 "dropping the CycloneDX SBOM is refused" node .github/scripts/check-ci-gate.mjs "$tmp/nosbom.yml"
+
+sed 's/ --fail-on critical//' "$wf" > "$tmp/noscan.yml"
+expect 1 "dropping the image-scan gate is refused" node .github/scripts/check-ci-gate.mjs "$tmp/noscan.yml"
+
 sed 's/ --require-clean//' "$wf" > "$tmp/lax.yml"
 expect 1 "dropping provenance checks from validation is refused" node .github/scripts/check-ci-gate.mjs "$tmp/lax.yml"
 
+# A regression test silently dropped from the security suite is refused.
+mkdir -p "$tmp/root/server/tests" "$tmp/root/packages/agent-identity/test"
+cp -r server/tests/. "$tmp/root/server/tests/"
+cp -r packages/agent-identity/test/. "$tmp/root/packages/agent-identity/test/"
+cp packages/agent-identity/package.json "$tmp/root/packages/agent-identity/package.json"
+sed 's# tests/audit-append-only.test.ts##' server/package.json > "$tmp/root/server/package.json"
+expect 1 "dropping a security regression test from test:security is refused" env CI_GATE_ROOT="$tmp/root" node .github/scripts/check-ci-gate.mjs "$wf"
+cp server/package.json "$tmp/root/server/package.json"
+rm "$tmp/root/server/tests/migrations.test.ts"
+expect 1 "deleting a security regression test file is refused" env CI_GATE_ROOT="$tmp/root" node .github/scripts/check-ci-gate.mjs "$wf"
+sed 's/npm run test:security -w server/npm test -w server -- tests\/mfa.test.ts/' "$wf" > "$tmp/nosec.yml"
+expect 1 "the security job not running the security suite is refused" node .github/scripts/check-ci-gate.mjs "$tmp/nosec.yml"
+
 echo "release-gate.mjs"
-all='{"deploy-scripts":{"result":"success"},"dependencies":{"result":"success"},"agent-identity":{"result":"success"},"app":{"result":"success"},"security-assessment":{"result":"success"}}'
+all='{"deploy-scripts":{"result":"success"},"dependencies":{"result":"success"},"agent-identity":{"result":"success"},"app":{"result":"success"},"security-assessment":{"result":"success"},"pilot-stack":{"result":"success"},"image-scan":{"result":"success"},"docker":{"result":"success"},"secrets":{"result":"success"},"sast":{"result":"success"}}'
 expect 0 "all jobs succeeded → release allowed" env NEEDS="$all" node .github/scripts/release-gate.mjs
 expect 1 "security job failed → release blocked" env NEEDS="${all/\"security-assessment\":{\"result\":\"success\"}/\"security-assessment\":{\"result\":\"failure\"}}" node .github/scripts/release-gate.mjs
 expect 1 "security job skipped → release blocked" env NEEDS="${all/\"security-assessment\":{\"result\":\"success\"}/\"security-assessment\":{\"result\":\"skipped\"}}" node .github/scripts/release-gate.mjs
 expect 1 "security job cancelled → release blocked" env NEEDS="${all/\"security-assessment\":{\"result\":\"success\"}/\"security-assessment\":{\"result\":\"cancelled\"}}" node .github/scripts/release-gate.mjs
+expect 1 "pilot stack job failed → release blocked" env NEEDS="${all/\"pilot-stack\":{\"result\":\"success\"}/\"pilot-stack\":{\"result\":\"failure\"}}" node .github/scripts/release-gate.mjs
 expect 1 "no results at all → release blocked" env NEEDS='{}' node .github/scripts/release-gate.mjs
 
 echo "$pass passed, $fail failed"

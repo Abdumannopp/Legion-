@@ -45,6 +45,8 @@ const { chromium } = loadPlaywright();
 const id = randomBytes(4).toString("hex");
 const DB = `legion_ux_${id}`;
 const APP_ROLE = `legion_app_ux_${id}`;
+const OWNER_ROLE = APP_ROLE.replace("legion_app_", "legion_own_");   // F-02: as the pilot runs
+const RLS = (process.env.DB_RLS ?? "off").toLowerCase();
 const APP_PASSWORD = randomBytes(24).toString("hex");
 const API = "http://localhost:8000";
 const WEB = "http://localhost:3000";
@@ -87,14 +89,14 @@ async function main() {
   console.log("▶ setup: fresh database, API (hosted mode, no SMTP), dashboard");
   await sql("postgres", `CREATE DATABASE "${DB}"`);
   const prov = spawnSync("node", [join(REPO, "server", "dist", "db", "provision-cli.js")], {
-    env: { PATH: process.env.PATH, DATABASE_ADMIN_URL: dbUrl(DB), APP_DB_USER: APP_ROLE, APP_DB_PASSWORD: APP_PASSWORD }, encoding: "utf8",
+    env: { PATH: process.env.PATH, DATABASE_ADMIN_URL: dbUrl(DB), APP_DB_USER: APP_ROLE, APP_DB_PASSWORD: APP_PASSWORD, DB_ROLE_SPLIT: "on", DB_OWNER_ROLE: OWNER_ROLE }, encoding: "utf8",
   });
   check("database provisioned", prov.status === 0, prov.stderr || prov.stdout);
   apiProc = spawn("node", ["dist/index.js"], {
     cwd: join(REPO, "server"),
     env: {
-      PATH: process.env.PATH, DEPLOYMENT_MODE: "saas", PORT: "8000",
-      DATABASE_URL: dbUrl(DB, APP_ROLE, APP_PASSWORD), JWT_SECRET: randomBytes(32).toString("hex"),
+      PATH: process.env.PATH, DEPLOYMENT_MODE: "saas", PORT: "8000", DB_RLS: RLS,
+      DATABASE_URL: dbUrl(DB, APP_ROLE, APP_PASSWORD), JWT_SECRET: randomBytes(32).toString("hex"), PAYMENT_HASH_KEY: randomBytes(32).toString("hex"),
       FRONTEND_URL: WEB, COOKIE_SECURE: "false", LEGION_ENCRYPTION_KEYS: `ux:${randomBytes(32).toString("hex")}`,
       SEED_DEMO_DATA: "false", DATA_FILE: join(WORK, "legion.json"), TRIAL_DAYS: "14",
     },
@@ -142,7 +144,7 @@ async function main() {
   await sees(page, "first step: connect a sensor", "Connect a security sensor");
   const t0 = await text(page);
   check("no misleading security score", !/Security score/i.test(t0));
-  check("no internal persona names on the first screen", !/Sentinel|Hunter|Guardian|Executor/.test(t0));
+  check("no internal persona names on the first screen", !/Sentinel|Hunter|Guardian|Vanguard/.test(t0));
   await shot(page, "dashboard-new");
 
   // ---------------------------------------------------------------------------
@@ -170,7 +172,10 @@ async function main() {
   await page.goto(`${WEB}/connect`);
   await sees(page, "connect page explains itself without Wazuh jargon", "Connect the tools that watch your computers");
   await sees(page, "setup opens straight away when nothing is connected", "Create a connection key");
-  await sees(page, "other integrations are listed as coming soon", "Coming soon");
+  // Every integration on the old roadmap is built now, so nothing is listed as "coming soon"; the other
+  // platforms are offered in the Connections card instead.
+  await sees(page, "other platforms are offered as connections", "CrowdStrike Falcon");
+  check("nothing is listed as coming soon any more", !(await text(page)).toLowerCase().includes("coming soon"), "a planned integration is still shown");
   await page.getByPlaceholder("e.g. Production Wazuh").fill("Production Wazuh");
   await page.getByRole("button", { name: "Create key" }).click();
   await sees(page, "key is shown once, with a warning", "shown only once");
@@ -239,6 +244,22 @@ async function main() {
   const askPayment = () => spawnSync("python3", [join(REPO, "integrations", "custom-legion.py"), "--payment-check", apiKey ?? "", `${API}/security-events/webhook`, paymentFile], {
     env: { ...process.env, LEGION_INTEGRATION_LOG: join(WORK, "integrations.log") }, encoding: "utf8", timeout: 30_000,
   });
+  const refusedFirst = askPayment();
+  check("a new workspace's first check is refused until an administrator confirms the notice (exit 1: do not pay)", refusedFirst.status === 1, `${refusedFirst.status} ${refusedFirst.stdout} ${refusedFirst.stderr}`);
+  await page.goto(`${WEB}/defense`);
+  await sees(page, "the payment-check notice is shown to the administrator", "Confirm how the payment check works");
+  await sees(page, "and says the check does not answer yet", "The payment check does not answer until an administrator confirms this");
+  const confirmButton = page.getByRole("button", { name: "Confirm", exact: true });
+  check("Confirm stays disabled until the box is ticked", await confirmButton.isDisabled());
+  await page.getByLabel("I have read this notice and I want my payment software to use the payment check.").check();
+  await confirmButton.click();
+  await sees(page, "the confirmation is accepted", "Confirmed.");
+  const paymentAck = await sql(DB, "SELECT payment_ack_by, payment_ack_version FROM tenants WHERE payment_ack_at IS NOT NULL");
+  check("who confirmed, and which version of the notice, is recorded", paymentAck.length === 1 && !!paymentAck[0].payment_ack_by && paymentAck[0].payment_ack_version === "1", JSON.stringify(paymentAck));
+  const [{ n: payAudit }] = await sql(DB, "SELECT count(*)::int AS n FROM audit_log WHERE action = 'security.payment_notice_acknowledged'");
+  check("the confirmation is in the audit log", payAudit === 1, String(payAudit));
+  await page.reload();
+  check("once confirmed, the notice is not shown again", !(await text(page)).includes("Confirm how the payment check works"));
   const first = askPayment();
   check("the payment software is told to HOLD a payment to a new account (exit 3)", first.status === 3 && /"decision": "hold"/.test(first.stdout), `${first.status} ${first.stdout} ${first.stderr}`);
   await page.reload();
@@ -250,6 +271,53 @@ async function main() {
   await sees(page, "released by a person", "Released. The payment software will be allowed on its next check.");
   const second = askPayment();
   check("the payment software is now allowed (exit 0)", second.status === 0 && /"decision": "allow"/.test(second.stdout), `${second.status} ${second.stdout} ${second.stderr}`);
+
+  console.log("▶ 6d. automatic blocking needs a written acknowledgement first");
+  const ON = "On — block attacking addresses automatically";
+  const OFF = "Off — detect and report only";
+  const ACK = "I have read this notice and I turn on automatic blocking for my workspace.";
+  const NOTICE = "Automatic blocking acts without a person approving each block";
+  const save = page.getByRole("button", { name: "Save", exact: true });
+  await page.goto(`${WEB}/defense`);
+  await sees(page, "the automatic response settings are shown", "Automatic response");
+  await page.getByText(ON, { exact: true }).click();
+  await sees(page, "choosing 'On' shows the notice", NOTICE);
+  check("Save stays disabled until the notice is acknowledged", await save.isDisabled());
+  // The trial is the Professional plan, which keeps a person in the loop: the plan says so.
+  await page.getByLabel(ACK).check();
+  check("ticking the acknowledgement enables Save", await save.isEnabled());
+  await save.click();
+  await sees(page, "on the Professional plan, automatic blocking is refused and the upgrade is named", "not included in the Professional plan");
+  await shot(page, "auto-block-plan-refused");
+  const [{ n: acknowledgedEarly }] = await sql(DB, "SELECT count(*)::int AS n FROM tenants WHERE auto_block_ack_at IS NOT NULL");
+  check("a refused change records no acknowledgement", acknowledgedEarly === 0, String(acknowledgedEarly));
+
+  await sql(DB, "UPDATE tenants SET plan_override = 'business'");
+  await page.goto(`${WEB}/defense`);
+  await page.getByText(ON, { exact: true }).click();
+  await sees(page, "on a plan that allows it, the notice is shown", NOTICE);
+  check("Save is still disabled before the acknowledgement", await save.isDisabled());
+  await page.getByLabel(ACK).check();
+  await save.click();
+  await sees(page, "the setting is saved", "Saved");
+  await shot(page, "auto-block-acknowledged");
+  const ack = await sql(DB, "SELECT auto_block_mode, auto_block_ack_by, auto_block_ack_version FROM tenants WHERE auto_block_ack_at IS NOT NULL");
+  check("who acknowledged, and which version of the notice, is recorded", ack.length === 1 && ack[0].auto_block_mode === "auto" && !!ack[0].auto_block_ack_by && ack[0].auto_block_ack_version === "1", JSON.stringify(ack));
+  const [{ n: ackAudit }] = await sql(DB, "SELECT count(*)::int AS n FROM audit_log WHERE action = 'security.auto_block_acknowledged'");
+  check("the acknowledgement is in the audit log", ackAudit === 1, String(ackAudit));
+
+  await page.goto(`${WEB}/defense`);
+  await page.getByText(OFF, { exact: true }).click();
+  await save.click();
+  await sees(page, "turning it off needs no acknowledgement", "Saved");
+  await page.getByText(ON, { exact: true }).click();
+  check("once acknowledged, the notice is not asked again", !(await text(page)).includes(NOTICE));
+  check("and Save is enabled at once", await save.isEnabled());
+  await page.getByText(OFF, { exact: true }).click();   // back to what is saved: nothing to save
+  check("changing nothing leaves Save disabled", await save.isDisabled());
+  const [{ auto_block_mode: finalMode }] = await sql(DB, "SELECT auto_block_mode FROM tenants WHERE auto_block_ack_at IS NOT NULL");
+  check("automatic blocking is left off for the rest of the journey", finalMode === "off", finalMode);
+  await sql(DB, "UPDATE tenants SET plan_override = NULL");
 
   console.log("▶ 7. first AI agent");
   await page.goto(`${WEB}/agents`);
@@ -283,7 +351,7 @@ async function main() {
 
   console.log("▶ 8b. Legion's five agents: give one of their skills to this agent");
   await page.getByRole("tab", { name: "Skills" }).click();
-  for (const name of ["Sentinel", "Hunter", "Guardian", "Oracle", "Executor"]) await sees(page, `skills are grouped under ${name}`, name);
+  for (const name of ["Sentinel", "Hunter", "Guardian", "Oracle", "Vanguard"]) await sees(page, `skills are grouped under ${name}`, name);
   await page.getByLabel("Use this skill: Triage Priority").check();
   await sees(page, "choosing a skill is saved", "Saved");
   await sees(page, "the agent already holds what the skill reads with", "Ready to use");
@@ -298,7 +366,7 @@ async function main() {
   console.log("▶ 8c. the Legion team page");
   await page.goto(`${WEB}/team`);
   await sees(page, "team page is titled", "Legion team");
-  await sees(page, "Executor only prepares the response", "Prepares the response");
+  await sees(page, "Vanguard only prepares the response", "Prepares the response");
   await sees(page, "a skill is described in words", "Lists the attacking addresses worth blocking");
   await sees(page, "the page says skills never act", "Nothing here blocks, deletes or changes anything");
   await shot(page, "team");
@@ -375,7 +443,7 @@ async function main() {
   console.log("▶ 12. billing / plan visibility");
   await page.goto(`${WEB}/billing`);
   await sees(page, "plan: free trial with days left and end date", "Free trial —");
-  await sees(page, "what the plan includes", "Real-time alerts from your security sensors");
+  await sees(page, "what the plan includes", "Your free trial includes everything in the Professional plan.");
   await shot(page, "billing");
 
   console.log("▶ 13. an error, explained");
@@ -399,7 +467,15 @@ try {
   await sleep(1500);
   await sql("postgres", "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", [DB]).catch(() => {});
   await sql("postgres", `DROP DATABASE IF EXISTS "${DB}"`).catch(() => {});
+  // A failed run shows what the API said last (errors are logged without secrets).
+  if (failures) console.log("\n--- API log (last 40 lines) ---\n" + apiLog.join("").split("\n").slice(-40).join("\n"));
+  // F-04: with DB_RLS=enforce, no code path may have reached a row-level-security table without a workspace.
+  if (RLS === "enforce") {
+    const hits = [...new Set(apiLog.join("").match(/DB_RLS=enforce: a query on \w+|violates row-level security policy/g) ?? [])];
+    if (hits.length) bad("no query ran without a workspace context (DB_RLS=enforce)", hits.join("; "));
+  }
   await sql("postgres", `DROP ROLE IF EXISTS "${APP_ROLE}"`).catch(() => {});
+  await sql("postgres", `DROP ROLE IF EXISTS "${OWNER_ROLE}"`).catch(() => {});
   console.log(failures ? `\n${failures} check(s) failed` : "\nAll journey checks passed");
   process.exit(failures ? 1 : 0);
 }

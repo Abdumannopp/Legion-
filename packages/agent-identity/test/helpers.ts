@@ -113,12 +113,15 @@ export async function makeApp(opts: { pool?: pg.Pool; logs?: string[]; extra?: P
   app.get("/agent/v1/whoami", identity.guards.traced("test:whoami"), (req, res) => { res.json({ principal: req.principal }); });
   // Deliberately missing a guard: the firewall must flag it.
   app.get("/agent/v1/unguarded", (_req, res) => { res.json({ oops: true }); });
-  app.post("/webhooks/wazuh", identity.guards.externalSystem("wazuh-webhook"),
+  // The test integration's proof of origin: a shared secret header (a real one
+  // verifies an HMAC signature, as Legion's sensor webhook does).
+  app.post("/webhooks/wazuh", identity.guards.externalSystem("wazuh-webhook", { verify: (req) => req.get("x-test-webhook-secret") === WEBHOOK_TEST_SECRET }),
     identity.guards.traced("alert.ingest"), (_req, res) => { res.status(202).json({ ok: true }); });
 
   return { app, host, identity, pool, seen };
 }
 
+export const WEBHOOK_TEST_SECRET = "test-webhook-shared-secret";
 export const as = (userId: string) => ({ cookie: `session=${userId}` });
 export const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
 

@@ -291,21 +291,24 @@ const labels = (signs: ThreatSign[]) => [...new Set(signs.map((s) => s.label))];
 function threatDetections(alert: Alert): Detection[] {
   const signs = threatSigns(`${alert.title}\n${alert.summary}`);
   if (!signs.length) return [];
-  const techniques = parentTechniques([alert.mitre_technique]);
+  const fromEvent = parentTechniques([alert.mitre_technique]);
+  // The event's own techniques, plus those the matched signs prove (THREAT_SIGNS[].technique).
+  const withSigns = (s: ThreatSign[]) => [...new Set([...fromEvent, ...s.map((x) => x.technique).filter((t): t is string => Boolean(t))])];
+  const techniques = fromEvent;
   const host = alert.target ?? alert.source_ip ?? alert.id;
   const base = { alertCount: 1, sources: alert.source_ip ? [alert.source_ip] : [], targets: alert.target ? [alert.target] : [], techniques, minutes: 0, sourceIp: alert.source_ip, target: alert.target };
   const found: Detection[] = [];
   const ransom = strong(signs, "ransomware");
-  if (ransom.length) found.push({ ...base, rule: "ransomware", subject: host, signals: labels(ransom) });
+  if (ransom.length) found.push({ ...base, techniques: withSigns(ransom), rule: "ransomware", subject: host, signals: labels(ransom) });
   const mailbox = strong(signs, "bec", "ai_deception");
   if (mailbox.length) {
     const account = userFromLog(alert.summary) ?? userFromLog(alert.title);
-    found.push({ ...base, rule: "mailbox_takeover", subject: account ?? host, signals: labels(mailbox) });
+    found.push({ ...base, techniques: withSigns(mailbox), rule: "mailbox_takeover", subject: account ?? host, signals: labels(mailbox) });
   }
   const phish = strong(signs, "phishing");
-  if (phish.length) found.push({ ...base, rule: "phishing_execution", subject: host, signals: labels(phish) });
+  if (phish.length) found.push({ ...base, techniques: withSigns(phish), rule: "phishing_execution", subject: host, signals: labels(phish) });
   const supply = strong(signs, "supply_chain");
-  if (supply.length) found.push({ ...base, rule: "supply_chain", subject: host, signals: labels(supply) });
+  if (supply.length) found.push({ ...base, techniques: withSigns(supply), rule: "supply_chain", subject: host, signals: labels(supply) });
   return found;
 }
 

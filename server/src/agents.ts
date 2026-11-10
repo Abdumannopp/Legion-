@@ -29,8 +29,9 @@ export { userFromLog };
 import { alertForBehaviorChange, alertForFirewallDecision, alertForSecurityEvent } from "./agent-alerts.js";
 import { chatSafe } from "./ai.js";
 import { aiPolicy, consumeAiQuota } from "./ai-policy.js";
+import { allows, planRefusal, resolvePlan } from "./plan-limits.js";
 import { Pseudonymizer } from "./ai-safety.js";
-import { pool, withLeaderLock } from "./db/pool.js";
+import { pool, withLeaderLock, withTenant } from "./db/pool.js";
 import { mailEnabled, sendMail } from "./mailer.js";
 import * as store from "./store.js";
 import { regionOf, regionUrl, servesRegion } from "./regional.js";
@@ -163,7 +164,7 @@ export function createAgentLayer(deps: AgentLayerDeps, opts: { withModel: boolea
   const identity = createAgentIdentity({
     pool,
     host,
-    exemptPaths: ["/health", "/security-events/webhook", "/billing/webhook"],
+    exemptPaths: ["/health", "/security-events/webhook", "/security-events/webhook/generic", "/security-events/webhook/cef", "/security-events/webhook/github", "/billing/webhook"],
     skillData: skillData(),
     skillModel: opts.withModel ? skillModel : undefined,
     // Without SMTP, suspension notices stay visible (undeliverable) at
@@ -247,6 +248,8 @@ const STOP_ACTIONS: Array<[method: string, path: RegExp]> = [
   ["POST", /^\/agent\/v1\/token\/revoke$/],
 ];
 const READ = new Set(["GET", "HEAD", "OPTIONS"]);
+/** The Legion team's skills; everything else on the agent surface is agent security. */
+const SKILLS_SURFACE = /^\/skills(\/|$)/;
 
 /**
  * The subscription rules the dashboard's own routes follow (index.ts
@@ -281,7 +284,16 @@ export function subscriptionGate(deps: Pick<AgentLayerDeps, "accessState">) {
     if (STOP_ACTIONS.some(([m, re]) => m === req.method && re.test(path))) return next();
     try {
       const state = await deps.accessState(tenantId);
-      if (state === "ok" || (state === "readonly" && READ.has(req.method))) return next();
+      if (state === "ok" || (state === "readonly" && READ.has(req.method))) {
+        // The plan decides whether this surface is included at all: the five
+        // Legion agents' skills (Professional+), identities/firewall for the
+        // customer's own agents (AI Agent Security: Professional+, or the add-on).
+        // Stopping agents was let through above; nothing a plan removes can strand a running agent.
+        const plan = await resolvePlan(tenantId);
+        const feature = SKILLS_SURFACE.test(path) ? "aiAgents" : "agentSecurity";
+        if (!allows(plan, feature)) return res.status(403).json({ ...planRefusal(feature, plan.plan), error: { code: "plan_feature", message: planRefusal(feature, plan.plan).detail } });
+        return next();
+      }
       return res.status(402).json({
         detail: state === "readonly"
           ? "Your subscription payment is past due. Legion is read-only until it is settled."
@@ -297,6 +309,11 @@ export function subscriptionGate(deps: Pick<AgentLayerDeps, "accessState">) {
 
 function mount(app: Application, identity: Identity, deps: AgentLayerDeps): void {
   app.use(subscriptionGate(deps));
+  // F-04: an authenticated agent (or person) on these routes works in its own workspace (db/rls.ts).
+  app.use((req, _res, next) => {
+    const tenantId = req.principal?.tenantId;
+    return typeof tenantId === "string" && UUID.test(tenantId) ? withTenant(tenantId, next) : next();
+  });
   app.use("/agent/v1", identity.agentApi);
   app.use("/agent/v1", agentRoutes(identity, deps));
   app.use("/agents", identity.agents);
@@ -380,18 +397,24 @@ function agentRoutes(identity: Identity, deps: AgentLayerDeps): Router {
     res.json({ trust: "untrusted_external_content", alert: agentAlert(alert) });
   });
 
-  const statusBody = z.strictObject({ status: z.enum(["open", "investigating", "resolved"]) });
+  const statusBody = z.strictObject({ status: z.enum(["open", "investigating", "resolved"]), reason: z.string().trim().min(1).max(500).optional() });
   r.patch("/alerts/:id/status", g.requirePermission("alerts:update_status", { resource: (req) => ({ type: "alert", id: String(req.params.id) }) }), async (req, res) => {
     const body = statusBody.safeParse(req.body ?? {});
     if (!body.success) return res.status(400).json({ error: { code: "invalid_request", message: body.error.issues[0]?.message ?? "invalid" } });
     if (!(await allowed(req, res, true))) return;
     const p = me(req);
-    const alert = await store.updateAlertStatus(p.tenantId, String(req.params.id).slice(0, 200), body.data.status);
+    let alert;
+    try {
+      alert = await store.updateAlertStatus(p.tenantId, String(req.params.id).slice(0, 200), body.data.status, { by: `agent:${p.id}`, reason: body.data.reason });
+    } catch (error) {
+      if (error instanceof store.AlertTransitionError) return res.status(422).json({ error: { code: error.code, message: "Reopening a resolved alert needs a reason." } });
+      throw error;
+    }
     if (!alert) return res.status(404).json({ error: { code: "not_found", message: "Alert not found." } });
     // Legion's own audit log, next to the people's changes: who (the agent) and on whose behalf (its owner).
     await store.audit({
       tenant_id: p.tenantId, user_id: null, user_email: null, action: "alert.status_updated", resource_type: "alert",
-      resource_id: alert.id, detail: `${body.data.status} (by ${p.type} ${p.displayName} ${p.id}, owner ${p.ownerUserId})`, ip_address: req.ip || null,
+      resource_id: alert.id, detail: `${body.data.status}${body.data.reason ? `: ${body.data.reason}` : ""} (by ${p.type} ${p.displayName} ${p.id}, owner ${p.ownerUserId})`, ip_address: req.ip || null,
     });
     deps.onAlertUpdated(alert);
     res.json({ alert: agentAlert(alert) });

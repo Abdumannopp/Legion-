@@ -7,7 +7,7 @@ import {
 import LegionLogo from "@/components/brand/LegionLogo";
 import SiteHeader from "./SiteHeader";
 import SiteFooter from "./SiteFooter";
-import PricingCard from "./PricingCard";
+import PlansGrid from "./PricingCard";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 import { TRIAL_DAYS } from "@/lib/site";
 
@@ -90,7 +90,8 @@ export default function Landing() {
       <section id="pricing" className="max-w-6xl mx-auto px-5 mt-24 scroll-mt-20">
         <p className="legion-eyebrow text-brand-bright text-center">{l.pricingEyebrow}</p>
         <h2 className="legion-title text-center text-xl mt-3 mb-10">{l.pricingTitle}</h2>
-        <PricingCard />
+        <PlansGrid />
+        <p className="text-center mt-6"><Link href="/pricing#compare" className="text-brand-bright text-sm">{t.pricing.seeComparison} →</Link></p>
       </section>
 
       <section className="max-w-3xl mx-auto px-5 mt-24 grid gap-4 sm:grid-cols-3 text-center">

@@ -5,6 +5,18 @@ end the same way: money is sent to the attacker's account. Legion is not in the
 payment path, so **your payment software (ERP, bank connector, accounting) asks
 Legion before sending money**. Legion answers "allow" or "hold".
 
+## Before the first check (hosted workspaces)
+
+An administrator must first read and confirm the notice in Dashboard → **Defense** → **Payments on hold**:
+what a "hold" is, that a person decides, that Legion's answers are not financial advice and can be wrong, and that
+the customer remains responsible for payments. Who confirmed, when, and which version of the text are recorded
+and written to the audit log.
+
+Until it is confirmed, a **new** workspace's check answers `403` (`acknowledgement_required`), so the client exits
+with `1` and **your payment software must not pay automatically**: nothing is decided, nothing is stored. A
+workspace that was already using the check is asked to confirm but is not cut off. If the text of the notice changes
+in substance, the version number rises and administrators are asked again. A self-hosted installation is not asked.
+
 ## When a payment is held
 
 | Reason | Meaning |
@@ -15,7 +27,7 @@ Legion before sending money**. Legion answers "allow" or "hold".
 | Rejected before | Someone has already rejected this exact payment. |
 
 A held payment appears in Dashboard → **Defense** → **Payments on hold**, and an
-alert is raised (the Executor agent, MITRE T1657).
+alert is raised (the Vanguard agent, MITRE T1657).
 
 ## What a person does
 
@@ -83,3 +95,22 @@ recognise it). The hash is different for every organisation.
   looks only at the organisation's own history and active attacks.
 - The confirmation call is a human step. Clicking "release" without making it
   defeats the protection.
+
+
+## The hash key (`PAYMENT_HASH_KEY`)
+
+Legion never stores an account number. It stores an HMAC of it so the same account is recognised
+next time. An account number has little entropy, so whoever knows the key can recover accounts from
+the hashes by trying them all. Therefore:
+
+- `PAYMENT_HASH_KEY` (32+ random characters, `openssl rand -hex 32`) is **required in production**;
+  the API refuses to start without it, with a placeholder, or with a value reused from `JWT_SECRET`
+  or `SECURITY_EVENT_WEBHOOK_SECRET`. Back it up with `.env`, not with the database.
+- Before 2026-11 the hash used the webhook secret, or a built-in value when none was set. `install.sh`,
+  `start-docker.ps1` and `npm run setup` add a new key to an existing installation and keep the old
+  one as `PAYMENT_HASH_PREVIOUS_KEYS`, so accounts already confirmed are still recognised. Remove the
+  previous key after the payment-record retention period (24 months).
+- Rotating: put the new key in `PAYMENT_HASH_KEY` and the old one first in `PAYMENT_HASH_PREVIOUS_KEYS`.
+  A confirmation is carried to the new hash the next time the account is checked.
+- A lost key fails safe: known accounts look new, so payments to them are **held** for a phone check,
+  never let through.

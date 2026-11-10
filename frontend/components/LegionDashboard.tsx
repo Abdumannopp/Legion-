@@ -30,6 +30,7 @@ import {
   getStats,
   getMe,
   updateAlertStatus,
+  reopenReason,
   explainAlert,
   isLoggedIn,
   logout,
@@ -447,7 +448,9 @@ export default function LegionDashboard() {
   async function changeStatus(id: string, status: Alert["status"]) {
     setError(null);
     try {
-      const updated = await updateAlertStatus(id, status);
+      const reason = reopenReason(alerts.find((a) => a.id === id)?.status, status);
+      if (reason === null) return;
+      const updated = await updateAlertStatus(id, status, reason);
       setAlerts((prev) => upsertAlert(prev, updated, { insert: false }));
       refreshStats();
     } catch (err) {

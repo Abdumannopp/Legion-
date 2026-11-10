@@ -1,0 +1,194 @@
+# Unit tests for monitoring/alerts.yml — run with:  promtool test rules monitoring/alerts.test.yml
+# They feed synthetic metric series and assert which alerts fire (and that a healthy system fires none).
+rule_files: [alerts.yml]
+evaluation_interval: 15s
+
+tests:
+  - name: healthy system fires nothing
+    interval: 15s
+    input_series:
+      - { series: 'up{job="legion-api"}', values: '1x40' }
+      - { series: 'legion_process_uptime_seconds', values: '3600x40' }
+      - { series: 'legion_soc_actions_live', values: '0x40' }
+      - { series: 'legion_soc_workspaces_protection_active', values: '0x40' }
+      - { series: 'legion_soc_runtime_worker_running', values: '1x40' }
+      - { series: 'legion_soc_runtime_last_tick_age_seconds', values: '1x40' }
+      - { series: 'legion_soc_jobs_oldest_due_age_seconds', values: '0x40' }
+      - { series: 'legion_soc_audit_key_mismatch_workspaces', values: '0x40' }
+      - { series: 'legion_soc_approvals_oldest_pending_age_seconds', values: '120x40' }
+      - { series: 'legion_soc_approvals_approved_unused', values: '0x40' }
+      - { series: 'legion_soc_actions_stuck_running', values: '0x40' }
+      - { series: 'legion_soc_jobs_expired_leases', values: '0x40' }
+      - { series: 'legion_outbox_dead', values: '0x40' }
+      - { series: 'legion_integration_poll_lag_seconds', values: '0x40' }
+      - { series: 'legion_integration_connections_error', values: '0x40' }
+      - { series: 'legion_database_size_bytes', values: '1000000000x40' }
+    alert_rule_test:
+      - { eval_time: 8m, alertname: LegionIntegrationPollsBehind, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionIntegrationStopped, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionApiDown, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionRestarted, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionLiveActionDetected, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionSocWorkerStopped, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionSocWorkerStale, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionSocJobsBacklog, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionSocLeasesLapsed, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionActionStuckRunning, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionAuditKeyMismatch, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionApprovalWaitingTooLong, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionApprovedButUnused, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionNotificationsDead, exp_alerts: [] }
+      - { eval_time: 8m, alertname: LegionDatabaseLarge, exp_alerts: [] }
+
+  - name: a database past 20 GiB opens a ticket after 30 minutes
+    interval: 5m
+    input_series:
+      - { series: 'legion_database_size_bytes', values: '25000000000x12' }
+    alert_rule_test:
+      - { eval_time: 20m, alertname: LegionDatabaseLarge, exp_alerts: [] }
+      - eval_time: 40m
+        alertname: LegionDatabaseLarge
+        exp_alerts:
+          - exp_labels: { severity: ticket }
+            exp_annotations: { summary: "Legion's database is larger than 20 GiB. Check free disk space and that retention is on." }
+
+  - name: a live action with no workspace opted in pages immediately
+    interval: 15s
+    input_series:
+      - { series: 'legion_soc_actions_live', values: '0 0 0 1 1 1 1 1' }
+      - { series: 'legion_soc_workspaces_protection_active', values: '0x8' }
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: LegionLiveActionDetected
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: LegionLiveActionDetected
+        exp_alerts:
+          - exp_labels: { severity: page }
+            exp_annotations:
+              summary: An action exists in live mode although no workspace allowed Legion to act on its own. Stop the pilot (PILOT.md §10 kill switch).
+              runbook: PILOT.md §10
+
+  - name: live actions in a workspace that opted in are normal, not a page
+    interval: 15s
+    input_series:
+      - { series: 'legion_soc_actions_live', values: '0 0 0 3 3 3 3 3' }
+      - { series: 'legion_soc_workspaces_protection_active', values: '1x8' }
+    alert_rule_test:
+      - { eval_time: 1m, alertname: LegionLiveActionDetected, exp_alerts: [] }
+
+  - name: API down pages after two minutes
+    interval: 15s
+    input_series:
+      - { series: 'up{job="legion-api"}', values: '1 1 1 0x30' }
+    alert_rule_test:
+      - { eval_time: 1m, alertname: LegionApiDown, exp_alerts: [] }
+      - eval_time: 3m
+        alertname: LegionApiDown
+        exp_alerts:
+          - exp_labels: { severity: page, job: legion-api }
+            exp_annotations:
+              summary: The Legion API is not answering /metrics.
+              runbook: PILOT.md §9 "API down"
+
+  - name: a worker that stopped ticking pages as stale
+    interval: 15s
+    input_series:
+      - { series: 'legion_soc_runtime_worker_running', values: '1x60' }
+      - { series: 'legion_soc_runtime_last_tick_age_seconds', values: '1 1 1 90+15x60' }
+    alert_rule_test:
+      - { eval_time: 2m, alertname: LegionSocWorkerStale, exp_alerts: [] }
+      - eval_time: 6m
+        alertname: LegionSocWorkerStale
+        exp_alerts:
+          - exp_labels: { severity: page }
+            exp_annotations: { summary: "The SOC worker is running but has not finished a pass for over a minute (hung or crash-looping)." }
+
+  - name: a worker that never ran (-1) also counts as stale
+    interval: 15s
+    input_series:
+      - { series: 'legion_soc_runtime_worker_running', values: '1x40' }
+      - { series: 'legion_soc_runtime_last_tick_age_seconds', values: '-1x40' }
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: LegionSocWorkerStale
+        exp_alerts:
+          - exp_labels: { severity: page }
+            exp_annotations: { summary: "The SOC worker is running but has not finished a pass for over a minute (hung or crash-looping)." }
+
+  - name: a backlog of due jobs pages
+    interval: 15s
+    input_series:
+      - { series: 'legion_soc_jobs_oldest_due_age_seconds', values: '0 0 400x60' }
+    alert_rule_test:
+      - { eval_time: 3m, alertname: LegionSocJobsBacklog, exp_alerts: [] }
+      - eval_time: 8m
+        alertname: LegionSocJobsBacklog
+        exp_alerts:
+          - exp_labels: { severity: page }
+            exp_annotations: { summary: "A SOC job has been due for over five minutes and nothing has taken it." }
+
+  - name: a wrong audit key pages at once
+    interval: 15s
+    input_series:
+      - { series: 'legion_soc_audit_key_mismatch_workspaces', values: '0 1 1 1' }
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: LegionAuditKeyMismatch
+        exp_alerts:
+          - exp_labels: { severity: page }
+            exp_annotations:
+              summary: The SOC audit key does not match the one the chain was signed with. Actions will fail until the original SOC_AUDIT_KEY is restored.
+              runbook: PILOT.md §9
+
+  - name: an approval waiting over an hour raises a ticket
+    interval: 1m
+    input_series:
+      - { series: 'legion_soc_approvals_oldest_pending_age_seconds', values: '600 1800 3700 3800' }
+    alert_rule_test:
+      - { eval_time: 1m, alertname: LegionApprovalWaitingTooLong, exp_alerts: [] }
+      - eval_time: 2m
+        alertname: LegionApprovalWaitingTooLong
+        exp_alerts:
+          - exp_labels: { severity: ticket }
+            exp_annotations: { summary: "An approval request has waited over an hour for a person." }
+
+  - name: a sustained rise in server errors pages
+    interval: 1m
+    input_series:
+      - { series: 'legion_http_requests_total{class="2xx"}', values: '0+90x30' }
+      - { series: 'legion_http_requests_total{class="5xx"}', values: '0+10x30' }
+    alert_rule_test:
+      - { eval_time: 5m, alertname: LegionHighErrorRate, exp_alerts: [] }
+      - eval_time: 20m
+        alertname: LegionHighErrorRate
+        exp_alerts:
+          - exp_labels: { severity: page }
+            exp_annotations:
+              summary: More than 2 % of HTTP responses are server errors (5xx) for 10 minutes. This is a rollback trigger (PRODUCTION-READINESS-ASSESSMENT.md §8).
+
+  - name: a handful of errors in healthy traffic does not page
+    interval: 1m
+    input_series:
+      - { series: 'legion_http_requests_total{class="2xx"}', values: '0+990x30' }
+      - { series: 'legion_http_requests_total{class="5xx"}', values: '0+1x30' }
+    alert_rule_test:
+      - { eval_time: 25m, alertname: LegionHighErrorRate, exp_alerts: [] }
+
+  - name: polls falling behind, and a stopped connection, are reported
+    interval: 1m
+    input_series:
+      - { series: 'legion_integration_poll_lag_seconds', values: '0 0 2000x30' }
+      - { series: 'legion_integration_connections_error', values: '0 0 1x60' }
+    alert_rule_test:
+      - { eval_time: 5m, alertname: LegionIntegrationPollsBehind, exp_alerts: [] }   # not yet 10 minutes over the line
+      - eval_time: 20m
+        alertname: LegionIntegrationPollsBehind
+        exp_alerts:
+          - exp_labels: { severity: ticket }
+            exp_annotations: { summary: "A pull integration (Defender XDR, Azure, GCP, GuardDuty, Okta) has waited over 15 minutes to be polled. Raise INTEGRATION_POLL_CONCURRENCY or add an instance." }
+      - eval_time: 40m
+        alertname: LegionIntegrationStopped
+        exp_alerts:
+          - exp_labels: { severity: ticket }
+            exp_annotations: { summary: "An integration connection stopped after repeated errors; an administrator must check its credentials and resume it." }

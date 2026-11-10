@@ -9,7 +9,7 @@ In the dashboard you see them on the **Legion team** page.
 | **Hunter** (hunts) | Connects separate events into one attack, looks for data theft | `attack_investigation`, `threat_intelligence`, `data_exfiltration_hunt` |
 | **Guardian** (protects) | Finds what is open to attack before anyone attacks it, tests Legion's own defences | `vulnerability_analysis`, `ai_security_red_team`, `exposure_review`, `threat_coverage`, `secret_exposure_check` |
 | **Oracle** (explains) | Explains an alert in plain words and says what to look at first | `alert_analysis`, `security_reporting`, `triage_priority`, `response_sla_review` |
-| **Executor** (prepares the response) | Prepares the next step with its evidence; **a person approves it** | `incident_response`, `containment_candidates`, `payment_fraud_review` |
+| **Vanguard** (prepares the response) | Prepares the next step with its evidence; **a person approves it** | `incident_response`, `containment_candidates`, `payment_fraud_review` |
 
 ## Detection skills
 
@@ -20,7 +20,7 @@ In the dashboard you see them on the **Legion team** page.
 | `exposure_review` (Guardian) | Ranks assets by exposure: reachable from the internet, known weaknesses, whether a fixed version exists. Cheapest fixes first |
 | `threat_coverage` (Guardian) | For the seven most dangerous attack types: what Legion detected, what it is watching, and where it is blind because data never arrives ([THREATS.md](THREATS.md)) |
 | `triage_priority` (Oracle) | Orders open alerts into now / today / this week, each score with its reasons |
-| `containment_candidates` (Executor) | Attacker addresses worth blocking, with evidence. Private addresses go into a "cannot block" list. Warns when an attack comes from many addresses and blocking will not help |
+| `containment_candidates` (Vanguard) | Attacker addresses worth blocking, with evidence. Private addresses go into a "cannot block" list. Warns when an attack comes from many addresses and blocking will not help |
 
 ## Skills for business customers (B2B)
 
@@ -29,7 +29,7 @@ In the dashboard you see them on the **Legion team** page.
 | `secret_exposure_check` (Guardian) | Finds passwords, keys, card numbers (Luhn-checked) and bank accounts (IBAN, mod-97-checked) that ended up in logs. Reports the **kind and the place**, **never the value**, and what to do (rotate the key, etc.) |
 | `sensitive_access_watch` (Sentinel) | Watches **who opens** customer data, payroll, contracts, keys and backups. Flags one account opening 10+ different sensitive files or appearing on 3+ machines |
 | `response_sla_review` (Oracle) | Compares open alerts against response targets (default: critical 4 h, high 24 h, medium 3 days, low 7 days; you can change them). Lists late ones and the on-time percentage — the answer to your partners' question "how fast do you respond to a security incident?" |
-| `payment_fraud_review` (Executor) | Reviews the payment check: how many payments were allowed or held, **which one has waited how many hours for a phone confirmation**, and patterns that look like fraud (repeated attempts to one account, a retry after a rejection, one requester asking for several new accounts). Never shows an account number (only the last 4 characters) |
+| `payment_fraud_review` (Vanguard) | Reviews the payment check: how many payments were allowed or held, **which one has waited how many hours for a phone confirmation**, and patterns that look like fraud (repeated attempts to one account, a retry after a rejection, one requester asking for several new accounts). Never shows an account number (only the last 4 characters) |
 
 `payment_fraud_review` needs a new permission: **`payments:read`** (read-only,
 lowest tier). Choosing a skill grants nothing; the page shows it as a missing
@@ -52,8 +52,8 @@ Authorization: Bearer <the agent's short-lived token>
 
 ## Safety rules (cannot be changed)
 
-- Skills **only read and recommend**. No skill blocks, deletes or changes
-  anything — not even Executor's. Every recommendation comes with
+- Skills **only read and recommend**. (Automatic action is a separate, opt-in path through the policy and action engines, see [PROTECTION.md](PROTECTION.md); agents' skills never use it.) No skill blocks, deletes or changes
+  anything — not even Vanguard's. Every recommendation comes with
   `executed: false`; a person approves and carries it out (for example,
   blocking on the Dashboard → **Defense** page).
 - A skill reads your own organisation's data, never another organisation's

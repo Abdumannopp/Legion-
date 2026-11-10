@@ -9,8 +9,9 @@
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { config } from "./config.js";
-import { query, queryAll, queryOne, transaction } from "./db/pool.js";
+import { inTenant, query, queryAll, queryOne, transaction } from "./db/pool.js";
 import { isLocale, type Locale } from "./i18n.js";
+import { isAddonId, isPlanId } from "./plans.js";
 import type {
   Alert, AlertStatus, Asset, AuditLog, Role, Severity,
   Subscription, Tenant, User, UserStatus,
@@ -35,9 +36,9 @@ const toTenant = (r: any): Tenant => ({
   id: r.id, name: r.name, notification_email: r.notification_email,
   notification_email_pending: r.notification_email_pending ?? null,
   notification_locale: isLocale(r.notification_locale) ? r.notification_locale : "en",
-  trial_ends_at: iso(r.trial_ends_at), created_at: isoRequired(r.created_at),
+  trial_ends_at: iso(r.trial_ends_at), plan_override: isPlanId(r.plan_override) ? r.plan_override : null, created_at: isoRequired(r.created_at),
   ai_enabled: typeof r.ai_enabled === "boolean" ? r.ai_enabled : null,
-  ai_data_mode: r.ai_data_mode === "strict" ? "strict" : "standard",
+  ai_data_mode: r.ai_data_mode === "strict" ? "strict" : r.ai_data_mode === "standard" ? "standard" : null,
   region: r.region ?? null, timezone: r.timezone ?? "UTC", locale: r.locale ?? "en", currency: r.currency ?? "USD",
   date_format: r.date_format ?? "locale", time_format: r.time_format ?? "locale",
 });
@@ -75,7 +76,7 @@ export const toMember = (r: any): User => {
 
 const toAlert = (r: any): Alert => ({
   id: r.id, tenant_id: r.tenant_id, title: r.title, severity: r.severity as Severity,
-  agent: r.agent, status: r.status as AlertStatus, summary: r.summary,
+  agent: r.agent === "Executor" ? "Vanguard" : r.agent, status: r.status as AlertStatus, summary: r.summary,
   confidence: Number(r.confidence), created_at: isoRequired(r.created_at),
   ai_explanation: r.ai_explanation, explained_at: iso(r.explained_at),
   ai_explanation_locale: isLocale(r.ai_explanation_locale) ? r.ai_explanation_locale : null,
@@ -83,6 +84,8 @@ const toAlert = (r: any): Alert => ({
   seq: Number(r.seq), created_seq: Number(r.created_seq),
   source_ip: r.source_ip, target: r.target, mitre_technique: r.mitre_technique,
   source: r.source, occurred_at: iso(r.occurred_at ?? null),
+  acknowledged_at: iso(r.acknowledged_at ?? null), resolved_at: iso(r.resolved_at ?? null),
+  resolved_by: r.resolved_by ?? null, reopened_count: Number(r.reopened_count ?? 0),
 });
 
 const toAsset = (r: any): Asset => ({
@@ -101,6 +104,8 @@ const toSubscription = (r: any): Subscription => ({
   paddle_subscription_id: r.paddle_subscription_id, paddle_price_id: r.paddle_price_id,
   current_period_end: iso(r.current_period_end),
   cancel_at_period_end: r.cancel_at_period_end, last_event_at: iso(r.last_event_at),
+  plan: isPlanId(r.plan) ? r.plan : null,
+  addons: Array.isArray(r.addons) ? r.addons.filter(isAddonId) : [],
 });
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
@@ -542,11 +547,10 @@ export async function listAlertsWithCursor(
   tenantId: string, filters: AlertFilters = {}
 ): Promise<{ alerts: Alert[]; cursor: number }> {
   return transaction(async (client) => {
-    await client.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
     const c = await client.query("SELECT alert_seq FROM tenants WHERE id = $1", [tenantId]);
     const alerts = await listAlerts(tenantId, filters, client);
     return { alerts, cursor: Number(c.rows[0]?.alert_seq ?? 0) };
-  });
+  }, { isolation: "REPEATABLE READ READ ONLY" });
 }
 
 export interface AlertSync {
@@ -646,7 +650,7 @@ export async function listVulnerabilityAlerts(tenantId: string, limit: number): 
   return rows.map(toAlert);
 }
 
-export type NewAlert = Omit<Alert, "created_at" | "ai_explanation_locale" | "ai_explanation_source" | "seq" | "created_seq" | "occurred_at"> & { created_at?: string; ai_explanation_locale?: Locale | null; occurred_at?: string | null };
+export type NewAlert = Omit<Alert, "created_at" | "ai_explanation_locale" | "ai_explanation_source" | "seq" | "created_seq" | "occurred_at" | "acknowledged_at" | "resolved_at" | "resolved_by" | "reopened_count"> & { created_at?: string; ai_explanation_locale?: Locale | null; occurred_at?: string | null };
 
 /**
  * Inserts an alert, returning null if that (tenant, id) already exists.
@@ -658,7 +662,7 @@ export type NewAlert = Omit<Alert, "created_at" | "ai_explanation_locale" | "ai_
 export async function insertAlert(alert: NewAlert, client?: PoolClient): Promise<Alert | null> {
   const run = client
     ? async (text: string, params: unknown[]) => (await client.query(text, params)).rows[0] ?? null
-    : queryOne;
+    : (text: string, params: unknown[]) => inTenant(alert.tenant_id, () => queryOne(text, params));   // F-04: webhooks, monitors
   const row = await run(
     // The NOT EXISTS keeps a duplicate from reaching the row trigger at all, so a
     // re-sent event neither takes the tenant's cursor lock nor burns a number.
@@ -680,12 +684,33 @@ export async function insertAlert(alert: NewAlert, client?: PoolClient): Promise
   return row ? toAlert(row) : null;
 }
 
+/** F-09: reopening a resolved alert without saying why is refused. */
+export class AlertTransitionError extends Error {
+  constructor(readonly code: "reason_required") { super("Reopening a resolved alert needs a reason"); this.name = "AlertTransitionError"; }
+}
+
+/**
+ * Moves an alert through its lifecycle (open → investigating → resolved, and back with a reason).
+ * Records when it was first acknowledged, when and by whom it was resolved, and how often it was
+ * reopened. The same status again is a no-op. `by`: user:<id>, agent:<id> or system:<component>.
+ */
 export async function updateAlertStatus(
-  tenantId: string, id: string, status: AlertStatus
+  tenantId: string, id: string, status: AlertStatus, opts: { by?: string; reason?: string } = {},
 ): Promise<Alert | null> {
+  if (status !== "resolved" && !opts.reason?.trim()) {
+    const current = await queryOne<{ status: string }>("SELECT status FROM alerts WHERE tenant_id = $1 AND id = $2", [tenantId, id]);
+    if (!current) return null;
+    if (current.status === "resolved") throw new AlertTransitionError("reason_required");
+  }
   const row = await queryOne(
-    "UPDATE alerts SET status = $3 WHERE tenant_id = $1 AND id = $2 RETURNING *",
-    [tenantId, id, status]
+    `UPDATE alerts SET
+        status = $3,
+        acknowledged_at = CASE WHEN acknowledged_at IS NULL AND $3 <> 'open' THEN now() ELSE acknowledged_at END,
+        resolved_at = CASE WHEN $3 = 'resolved' THEN CASE WHEN status = 'resolved' THEN resolved_at ELSE now() END ELSE NULL END,
+        resolved_by = CASE WHEN $3 = 'resolved' THEN CASE WHEN status = 'resolved' THEN resolved_by ELSE $4 END ELSE NULL END,
+        reopened_count = reopened_count + CASE WHEN status = 'resolved' AND $3 <> 'resolved' THEN 1 ELSE 0 END
+      WHERE tenant_id = $1 AND id = $2 RETURNING *`,
+    [tenantId, id, status, opts.by ? opts.by.slice(0, 120) : null]
   );
   return row ? toAlert(row) : null;
 }
@@ -806,7 +831,8 @@ export async function upsertAsset(
 // --- Audit log ---------------------------------------------------------------
 
 export async function audit(entry: Omit<AuditLog, "id" | "created_at">): Promise<void> {
-  await query(
+  // F-04: sign-in, sign-up and webhooks write audit entries before any request workspace exists.
+  await inTenant(entry.tenant_id, () => query(
     `INSERT INTO audit_log (id, tenant_id, user_id, user_email, action,
                             resource_type, resource_id, detail, ip_address)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
@@ -814,7 +840,7 @@ export async function audit(entry: Omit<AuditLog, "id" | "created_at">): Promise
       randomUUID(), entry.tenant_id, entry.user_id, entry.user_email, entry.action,
       entry.resource_type, entry.resource_id, entry.detail, entry.ip_address,
     ]
-  );
+  ));
 }
 
 export interface AuditFilters { action?: string; resource_id?: string; limit?: number }
@@ -863,8 +889,8 @@ export async function applySubscriptionEvent(
 ): Promise<Subscription | null> {
   const row = await queryOne(
     `INSERT INTO subscriptions (tenant_id, status, paddle_customer_id, paddle_subscription_id,
-                                paddle_price_id, current_period_end, cancel_at_period_end, last_event_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                                paddle_price_id, current_period_end, cancel_at_period_end, last_event_at, plan, addons)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
      ON CONFLICT (tenant_id) DO UPDATE SET
        status                 = EXCLUDED.status,
        paddle_customer_id     = COALESCE(NULLIF(EXCLUDED.paddle_customer_id, ''), subscriptions.paddle_customer_id),
@@ -872,13 +898,16 @@ export async function applySubscriptionEvent(
        paddle_price_id        = COALESCE(EXCLUDED.paddle_price_id, subscriptions.paddle_price_id),
        current_period_end     = EXCLUDED.current_period_end,
        cancel_at_period_end   = EXCLUDED.cancel_at_period_end,
-       last_event_at          = EXCLUDED.last_event_at
+       last_event_at          = EXCLUDED.last_event_at,
+       plan                   = COALESCE(EXCLUDED.plan, subscriptions.plan),
+       addons                 = EXCLUDED.addons
      WHERE subscriptions.last_event_at IS NULL
         OR EXCLUDED.last_event_at >= subscriptions.last_event_at
      RETURNING *`,
     [
       sub.tenant_id, sub.status, sub.paddle_customer_id, sub.paddle_subscription_id,
       sub.paddle_price_id, sub.current_period_end, sub.cancel_at_period_end, sub.last_event_at,
+      sub.plan ?? null, sub.addons ?? [],
     ]
   );
   return row ? toSubscription(row) : null;

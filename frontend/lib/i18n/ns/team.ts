@@ -25,7 +25,7 @@ export const team = defineMessages({
       Hunter: { role: "Hunts", job: "Connects separate events into one attack, and looks for data being gathered and sent out." },
       Guardian: { role: "Protects", job: "Finds what is open to attack before anyone attacks it, and checks Legion's own defences." },
       Oracle: { role: "Explains and prioritises", job: "Explains what an alert means in plain words and puts the open alerts in the order to handle them." },
-      Executor: { role: "Prepares the response", job: "Prepares what to do next — which address to block, what to isolate — with the evidence, for a person to approve." },
+      Vanguard: { role: "Prepares the response", job: "Prepares what to do next — which address to block, what to isolate — with the evidence, for a person to approve." },
     } as Record<string, { role: string; job: string }>,
     skillLines: {
       threat_detection: "Finds suspicious patterns in recent events and groups the related ones.",

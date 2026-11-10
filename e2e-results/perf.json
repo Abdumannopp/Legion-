@@ -1,0 +1,84 @@
+{
+  "env": {
+    "node": "v22.23.4",
+    "cpus": 4,
+    "note": "single process, local Postgres, simulation only"
+  },
+  "policy_evaluation": {
+    "rules_in_policy": 100,
+    "evaluations": 50000,
+    "per_second": 67864,
+    "p99_micros": 42.1
+  },
+  "webhook_ingest": {
+    "sequential": {
+      "n": 60,
+      "p50_ms": 16.2,
+      "p95_ms": 24.6,
+      "max_ms": 65.3,
+      "mean_ms": 18.1,
+      "events_per_second": 55
+    },
+    "concurrent_5_writers": {
+      "events": 60,
+      "events_per_second": 116
+    }
+  },
+  "full_investigation": {
+    "runs": 10,
+    "end_to_end": {
+      "n": 10,
+      "p50_ms": 262,
+      "p95_ms": 409.9,
+      "max_ms": 409.9,
+      "mean_ms": 271.5
+    },
+    "approval_decision": {
+      "n": 10,
+      "p50_ms": 30.9,
+      "p95_ms": 37.3,
+      "max_ms": 37.3,
+      "mean_ms": 29.2
+    },
+    "per_step_p50_ms": {
+      "Legion:wazuh event stored as alert": 0.4,
+      "Sentinel:threat_detection": 21.1,
+      "Hunter:attack_investigation": 28.1,
+      "Guardian:vulnerability_analysis": 20.9,
+      "Guardian:exposure_review": 41.6,
+      "Oracle:alert_analysis": 44.5,
+      "Vanguard:containment_candidates": 37.8,
+      "Vanguard:propose ip.block": 10.5
+    }
+  },
+  "action_pipeline": {
+    "actions": 150,
+    "propose": {
+      "n": 150,
+      "p50_ms": 7.1,
+      "p95_ms": 10.4,
+      "max_ms": 16.4,
+      "mean_ms": 7.4,
+      "per_second": 134
+    },
+    "worker_pool_4": {
+      "drained": 150,
+      "seconds": 0.92,
+      "actions_per_second": 163
+    },
+    "simulated": 150,
+    "audit": {
+      "events": 451,
+      "chain_ok": true,
+      "verify_ms": 9,
+      "verify_events_per_second": 48020
+    }
+  },
+  "concurrent_proposals_one_workspace": {
+    "proposals": 40,
+    "seconds": 0.14,
+    "per_second": 276,
+    "audit_events": 41,
+    "gap_free": true
+  }
+}

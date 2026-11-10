@@ -5,7 +5,7 @@ import { proposedActionSchema, riskLevel, untrustedSummarySchema, type SkillDefi
 import { assemblyOf, clip, isoMinusHours, levelOf, propose, scoreEvent, type ScoredEvent } from "./common.js";
 
 /*
- * Executor: which attacking addresses are worth blocking, with the evidence,
+ * Vanguard: which attacking addresses are worth blocking, with the evidence,
  * ready for a person to approve. It decides nothing and blocks nothing:
  * skills are read-only. The block itself is Dashboard → Defense (or the
  * perimeter firewall); Legion's automatic response uses the same limits.
@@ -44,7 +44,7 @@ type Output = z.infer<typeof output>;
 
 export const containmentCandidates: SkillDefinition<Input, Output> = {
   name: "containment_candidates",
-  agent: "Executor",
+  agent: "Vanguard",
   title: "Containment Candidates",
   description: "Lists the attacking addresses worth blocking, with the evidence for each, separated from addresses that must not be blocked (private, loopback, documentation ranges). Warns when blocking would not help because many addresses attack one host. Recommends only; a person approves and performs the block.",
   version: "1.0.0",

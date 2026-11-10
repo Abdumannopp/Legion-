@@ -48,7 +48,10 @@ No step uses `continue-on-error`. `deploy-scripts` runs
 `.github/scripts/check-ci-gate.mjs`, which fails the build if anyone adds
 `continue-on-error`, removes a job from what `release-gate` waits for, makes
 `release` stop depending on the gate, or drops the provenance flags from
-validation. `ops/tests/test-ci-gate.sh` proves each of those is caught.
+validation. It also fails if a security regression test is dropped from
+`test:security` (server or agent-identity) or deleted, or if the security job
+stops running those suites: every fixed audit finding keeps its guard.
+`ops/tests/test-ci-gate.sh` proves each of those is caught.
 
 ## Evidence
 

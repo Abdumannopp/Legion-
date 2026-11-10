@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
-import { chainHash, GENESIS, lockChain } from "../chain.js";
+import { chainHash, chainStart, lockChain } from "../chain.js";
 import type { FirewallContext, FirewallDecision } from "../firewall/types.js";
 import { digest, redact } from "../firewall/scan.js";
 import type { ToolAnalysis } from "./types.js";
@@ -128,7 +128,7 @@ export class ToolAuditLog {
 
   async verifyChain(tenantId: string): Promise<{ ok: true; rows: number } | { ok: false; brokenAtSeq: string; rows: number }> {
     const res = await this.pool.query("SELECT * FROM tool_call_audit WHERE chain_key = $1 ORDER BY seq", [tenantId]);
-    let prev = GENESIS;
+    let prev = await chainStart(this.pool, "tool_call_audit", tenantId);
     let n = 0;
     for (const r of res.rows) {
       n++;

@@ -35,6 +35,15 @@ export const settings = defineMessages({
       updatePassword: "Update password",
       passwordUpdated: "Password updated. Signing you back in…",
     },
+    dataExport: {
+      title: "Your data",
+      hint: "Download everything this workspace holds — alerts, assets, people, the audit log, payment checks and blocks — as one JSON file. No passwords, keys or tokens are included. Available even when the subscription has ended.",
+      button: "Download workspace data",
+      preparing: "Preparing…",
+      done: "Downloaded.",
+      failed: "Couldn't export the workspace.",
+      tooMany: "Too many exports. Try again in a few minutes.",
+    },
     notifications: {
       emailLabel: "Alert notification email",
       emailHint: "Critical and high-severity alerts are emailed here. Leave blank to turn alert emails off.",
@@ -85,6 +94,7 @@ export const settings = defineMessages({
         "alert.created": "Alert created",
         "alert.explained": "AI explanation generated",
         "alert.status_updated": "Alert status changed",
+        "workspace.exported": "Workspace data exported",
         "auth.email_verified": "Email verified",
         "auth.login": "Signed in",
         "auth.mfa_challenged": "Two-factor code requested",

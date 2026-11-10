@@ -37,7 +37,7 @@ async function main() {
   await sleep(400);
   const env = {
     NODE_ENV: "development", DEPLOYMENT_MODE: "self-hosted", DATABASE_URL: db.url, REDIS_URL: `redis://127.0.0.1:${rp}`,
-    JWT_SECRET: randomBytes(48).toString("hex"), LEGION_ENCRYPTION_KEYS: `al:${randomBytes(32).toString("hex")}`,
+    JWT_SECRET: randomBytes(48).toString("hex"), PAYMENT_HASH_KEY: randomBytes(32).toString("hex"), LEGION_ENCRYPTION_KEYS: `al:${randomBytes(32).toString("hex")}`,
     FRONTEND_URL: "http://localhost:3000", COOKIE_SECURE: "false",
   };
   for (let i = 0; i < 3; i++) insts.push(await startApi(env, { port: await freePort() }));

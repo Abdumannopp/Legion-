@@ -60,7 +60,7 @@ describe("a payment to an account never confirmed is held, then allowed once a p
     await check(credA, pay()).expect(200);
     const alerts = (await query("SELECT * FROM alerts WHERE tenant_id = $1 AND source = 'legion-payments'", [tenantA])).rows;
     expect(alerts).toHaveLength(1);
-    expect(alerts[0]).toMatchObject({ agent: "Executor", severity: "high", mitre_technique: "T1657" });
+    expect(alerts[0]).toMatchObject({ agent: "Vanguard", severity: "high", mitre_technique: "T1657" });
     expect(alerts[0].title).toBe("Payment held: 12,500.00 EUR to …3000 (Acme Supplies Ltd)");
   });
 
@@ -207,5 +207,118 @@ describe("Legion's own payment alerts are not evidence for coverage", () => {
     const by = Object.fromEntries(c.threats.map((t: { threat: string; status: string }) => [t.threat, t.status]));
     expect(by.phishing).toBe("blind");
     expect(by.bec).toBe("blind");
+  });
+});
+
+describe("the payment-check notice: a new hosted workspace confirms it in writing before the first check", () => {
+  const consentOf = (u: User) => request(app).get("/security/payments/consent").set("Authorization", bearer(u));
+  const confirm = (u: User) => request(app).post("/security/payments/consent").set("Authorization", bearer(u)).send({ acknowledge: true });
+  const unconfirm = (t: string) => query("UPDATE tenants SET payment_ack_at = NULL, payment_ack_by = NULL, payment_ack_version = NULL WHERE id = $1", [t]);
+  beforeEach(async () => { config.deploymentMode = "saas"; await unconfirm(tenantA); await unconfirm(tenantB); });
+
+  it("refuses the first check with a reason the payment software cannot mistake, until an administrator confirms", async () => {
+    expect((await consentOf(analystA).expect(200)).body).toMatchObject({ applicable: true, acknowledged: false, required: true, notice_version: "1" });
+    const refused = await check(credA, pay());
+    expect(refused.status).toBe(403);
+    expect(refused.body).toMatchObject({ code: "acknowledgement_required", notice_version: "1" });
+    expect((await query("SELECT count(*)::int AS n FROM payment_checks WHERE tenant_id = $1", [tenantA])).rows[0].n).toBe(0);   // nothing was decided
+    await confirm(adminA).expect(200);
+    await check(credA, pay()).expect(200);
+    // Another workspace is unaffected by A's confirmation.
+    expect((await check(credB, pay())).status).toBe(403);
+  });
+
+  it("only an administrator can confirm, it is recorded once (who, when, which version) and audited", async () => {
+    await confirm(analystA).expect(403);
+    await request(app).post("/security/payments/consent").set("Authorization", bearer(adminA)).send({}).expect(422);
+    const done = await confirm(adminA).expect(200);
+    expect(done.body).toMatchObject({ acknowledged: true, required: false, acknowledged_by: "admin@a.io" });
+    await confirm(adminA).expect(200);                                                       // again: nothing new is recorded
+    expect((await query("SELECT count(*)::int AS n FROM audit_log WHERE tenant_id = $1 AND action = 'security.payment_notice_acknowledged'", [tenantA])).rows[0].n).toBe(1);
+    expect((await query("SELECT payment_ack_version FROM tenants WHERE id = $1", [tenantA])).rows[0].payment_ack_version).toBe("1");
+  });
+
+  it("a workspace that already relies on the check is asked, but not cut off", async () => {
+    await query(
+      `INSERT INTO payment_checks (tenant_id, id, beneficiary_hash, beneficiary_hint, amount, currency, decision, reasons)
+       VALUES ($1, 'PAY-0000000000000001', $2, '3000', 5, 'EUR', 'allow', '{}')`, [tenantA, "c".repeat(64)]);
+    expect((await consentOf(adminA).expect(200)).body).toMatchObject({ applicable: true, acknowledged: false, required: false });
+    await check(credA, pay()).expect(200);
+  });
+
+  it("an older version of the notice no longer counts, and a self-hosted installation is not asked", async () => {
+    await confirm(adminA).expect(200);
+    await query("UPDATE tenants SET payment_ack_version = '0' WHERE id = $1", [tenantA]);
+    expect((await consentOf(adminA)).body).toMatchObject({ acknowledged: false, required: true });
+    config.deploymentMode = "self-hosted";
+    expect((await consentOf(adminA)).body).toMatchObject({ applicable: false, required: false });
+    await check(credA, pay()).expect(200);
+    await confirm(adminA).expect(400);
+  });
+
+  it("is checked after authentication and the plan: an unsigned request is still 401", async () => {
+    await request(app).post("/security-events/payment-check").set("content-type", "application/json").send(pay()).expect(401);
+  });
+});
+
+describe("F-03: the payment hash key is its own secret, mandatory in production, and rotatable", () => {
+  const saved = { key: config.paymentHashKey, prev: config.paymentHashPreviousKeys, webhook: config.webhookSecret };
+  const restore = () => { config.paymentHashKey = saved.key; config.paymentHashPreviousKeys = saved.prev; config.webhookSecret = saved.webhook; };
+
+  it("production refuses a missing, placeholder or reused key, and accepts a proper one", async () => {
+    const { paymentHashKeyProblems } = await import("../src/config.js");
+    const jwt = "j".repeat(10) + randomUUID() + randomUUID();
+    const good = randomUUID() + randomUUID();
+    expect(paymentHashKeyProblems({ paymentHashKey: "", paymentHashPreviousKeys: [], jwtSecret: jwt, webhookSecret: "" }).join()).toMatch(/PAYMENT_HASH_KEY is required/);
+    expect(paymentHashKeyProblems({ paymentHashKey: "change-me", paymentHashPreviousKeys: [], jwtSecret: jwt, webhookSecret: "" }).join()).toMatch(/long random value/);
+    expect(paymentHashKeyProblems({ paymentHashKey: jwt, paymentHashPreviousKeys: [], jwtSecret: jwt, webhookSecret: "" }).join()).toMatch(/its own value/);
+    expect(paymentHashKeyProblems({ paymentHashKey: good, paymentHashPreviousKeys: [], jwtSecret: jwt, webhookSecret: good }).join()).toMatch(/its own value/);
+    expect(paymentHashKeyProblems({ paymentHashKey: good, paymentHashPreviousKeys: [good], jwtSecret: jwt, webhookSecret: "" }).join()).toMatch(/must not contain the current/);
+    expect(paymentHashKeyProblems({ paymentHashKey: good, paymentHashPreviousKeys: [], jwtSecret: jwt, webhookSecret: "w".repeat(40) })).toEqual([]);
+  });
+
+  it("no built-in constant: without a key the hash is not the old HMAC('legion-payments'), and the webhook secret has no effect", async () => {
+    const { createHmac } = await import("node:crypto");
+    try {
+      config.paymentHashKey = ""; config.paymentHashPreviousKeys = []; config.webhookSecret = "";
+      const legacy = createHmac("sha256", "legion-payments").update(`${tenantA}:DE89370400440532013000`).digest("hex");
+      const h = beneficiaryHash(tenantA, IBAN);
+      expect(h).not.toBe(legacy);
+      config.webhookSecret = "a-new-webhook-secret-after-rotation-0123456789";
+      expect(beneficiaryHash(tenantA, IBAN)).toBe(h);           // rotating the webhook secret changes nothing
+      config.paymentHashKey = randomUUID() + randomUUID();
+      expect(beneficiaryHash(tenantA, IBAN)).not.toBe(h);       // the key is what counts
+    } finally { restore(); }
+  });
+
+  it("rotation: an account confirmed under the old key stays confirmed when the old key is listed as previous", async () => {
+    const keyA = randomUUID() + randomUUID(); const keyB = randomUUID() + randomUUID();
+    try {
+      config.paymentHashKey = keyA; config.paymentHashPreviousKeys = [];
+      const first = await check(credA, pay()).expect(200);
+      expect(first.body.decision).toBe("hold");
+      await release(adminA, first.body.id).expect(200);
+      expect((await check(credA, pay({ amount: 99 })).expect(200)).body.decision).toBe("allow");
+
+      config.paymentHashKey = keyB; config.paymentHashPreviousKeys = [keyA];
+      expect((await check(credA, pay({ amount: 98 })).expect(200)).body.decision).toBe("allow");
+      // New rows are written under the new key only.
+      const rows = (await query("SELECT beneficiary_hash, verified_at FROM payment_beneficiaries WHERE tenant_id = $1", [tenantA])).rows;
+      expect(rows.map((r) => r.beneficiary_hash).sort()).toEqual([beneficiaryHash(tenantA, IBAN, keyA), beneficiaryHash(tenantA, IBAN, keyB)].sort());
+      expect(rows.every((r) => r.verified_at)).toBe(true);
+      // Once the old key is dropped, the confirmation carried to the new row is kept.
+      config.paymentHashPreviousKeys = [];
+      expect((await check(credA, pay({ amount: 97 })).expect(200)).body.decision).toBe("allow");
+    } finally { restore(); }
+  });
+
+  it("a lost key fails safe: the account looks new and the payment is held, never let through", async () => {
+    try {
+      config.paymentHashKey = randomUUID() + randomUUID(); config.paymentHashPreviousKeys = [];
+      const first = await check(credA, pay()).expect(200);
+      await release(adminA, first.body.id).expect(200);
+      config.paymentHashKey = randomUUID() + randomUUID();    // the old key is gone and not listed
+      expect((await check(credA, pay({ amount: 96 })).expect(200)).body).toMatchObject({ decision: "hold", reasons: [{ code: "new_beneficiary" }] });
+    } finally { restore(); }
   });
 });

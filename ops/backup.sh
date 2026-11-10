@@ -94,7 +94,10 @@ WORK="$(mktemp -d "$BACKUP_DIR/.work.XXXXXX")"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 PLAIN="$WORK/plain.dump"
 log "dumping database"
-pg_dump "$DATABASE_URL" -Fc > "$PLAIN" 2> "$WORK/dump.err" || fail "pg_dump failed: $(head -c 300 "$WORK/dump.err")"
+# --enable-row-security: some tables have row-level security (F-04). The dump's own session declares
+# no workspace and no enforcement, so the policies let every row through; without the flag pg_dump
+# refuses to dump such a table as a role the policies apply to (the API's role, with the split).
+pg_dump "$DATABASE_URL" --enable-row-security -Fc > "$PLAIN" 2> "$WORK/dump.err" || fail "pg_dump failed: $(head -c 300 "$WORK/dump.err")"
 [[ -s "$PLAIN" ]] || fail "pg_dump produced an empty file"
 pg_restore -l < "$PLAIN" > /dev/null || fail "the dump is not a readable pg_restore archive"
 

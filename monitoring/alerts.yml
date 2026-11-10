@@ -1,0 +1,199 @@
+# Alert rules for the Legion pilot. Every metric used here is emitted by
+# server/src/metrics.ts; tests/pilot-monitoring.test.ts fails if one is not.
+groups:
+  - name: legion-availability
+    rules:
+      - alert: LegionApiDown
+        expr: up{job="legion-api"} == 0
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: The Legion API is not answering /metrics.
+          runbook: PILOT.md §9 "API down"
+
+      - alert: LegionHighErrorRate
+        expr: sum(rate(legion_http_requests_total{class="5xx"}[5m])) / sum(rate(legion_http_requests_total[5m])) > 0.02 and sum(rate(legion_http_requests_total[5m])) > 0.05
+        for: 10m
+        labels: { severity: page }
+        annotations:
+          summary: More than 2 % of HTTP responses are server errors (5xx) for 10 minutes. This is a rollback trigger (PRODUCTION-READINESS-ASSESSMENT.md §8).
+
+      - alert: LegionSlowResponses
+        expr: histogram_quantile(0.95, sum by (le) (rate(legion_http_request_duration_seconds_bucket[5m]))) > 2 and sum(rate(legion_http_requests_total[5m])) > 0.05
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: The 95th percentile response time has been over 2 seconds for 10 minutes.
+
+      - alert: LegionRestarted
+        expr: legion_process_uptime_seconds < 120
+        for: 0m
+        labels: { severity: ticket }
+        annotations:
+          summary: The API restarted in the last two minutes. Check for a crash loop.
+
+      - alert: LegionDatabaseLarge
+        # Raise the threshold to suit your disk. Retention (SOC_RETENTION_DAYS, DATA-RETENTION.md) keeps
+        # growth bounded; a database that keeps growing past this usually means retention is off.
+        expr: legion_database_size_bytes > 20 * 1024 * 1024 * 1024
+        for: 30m
+        labels: { severity: ticket }
+        annotations:
+          summary: Legion's database is larger than 20 GiB. Check free disk space and that retention is on.
+
+      - alert: LegionDbPoolWaiting
+        expr: legion_db_pool_waiting > 5
+        for: 5m
+        labels: { severity: ticket }
+        annotations:
+          summary: Requests are queueing for a database connection.
+
+  - name: legion-pilot-safety
+    rules:
+      # THE pilot invariant. Nothing runs live unless an administrator allowed it: a live action while NO
+      # workspace is in hybrid/automatic protection mode means something bypassed the opt-in.
+      - alert: LegionLiveActionDetected
+        expr: legion_soc_actions_live > 0 and on() legion_soc_workspaces_protection_active == 0
+        for: 0m
+        labels: { severity: page }
+        annotations:
+          summary: An action exists in live mode although no workspace allowed Legion to act on its own. Stop the pilot (PILOT.md §10 kill switch).
+          runbook: PILOT.md §10
+
+      # A wrong or accidentally changed SOC_AUDIT_KEY: the audit chain refuses to grow (fail closed)
+      # and every action that must be audited fails. Restore the original key.
+      - alert: LegionAuditKeyMismatch
+        expr: legion_soc_audit_key_mismatch_workspaces > 0
+        for: 0m
+        labels: { severity: page }
+        annotations:
+          summary: The SOC audit key does not match the one the chain was signed with. Actions will fail until the original SOC_AUDIT_KEY is restored.
+          runbook: PILOT.md §9
+
+      - alert: LegionWorkspacePaused
+        expr: legion_soc_workspaces_paused > 0
+        for: 0m
+        labels: { severity: info }
+        annotations:
+          summary: A workspace emergency stop is on. Confirm it is deliberate.
+
+  - name: legion-workers
+    rules:
+      - alert: LegionSocWorkerStopped
+        expr: legion_soc_runtime_worker_running == 0
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: The SOC job worker is not running on the API instance.
+
+      - alert: LegionSocWorkerStale
+        expr: legion_soc_runtime_worker_running == 1 and (legion_soc_runtime_last_tick_age_seconds > 60 or legion_soc_runtime_last_tick_age_seconds < 0)
+        for: 3m
+        labels: { severity: page }
+        annotations:
+          summary: The SOC worker is running but has not finished a pass for over a minute (hung or crash-looping).
+
+      - alert: LegionSocWorkerErrors
+        expr: increase(legion_soc_runtime_tick_errors_total[10m]) > 3
+        for: 0m
+        labels: { severity: ticket }
+        annotations:
+          summary: The SOC worker is throwing errors.
+
+      - alert: LegionSocJobsBacklog
+        expr: legion_soc_jobs_oldest_due_age_seconds > 300
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: A SOC job has been due for over five minutes and nothing has taken it.
+
+      - alert: LegionSocDeadJobs
+        expr: increase(legion_soc_jobs{status="dead"}[1h]) > 0
+        for: 0m
+        labels: { severity: ticket }
+        annotations:
+          summary: A SOC job failed permanently. Inspect GET /runtime/status.
+
+      - alert: LegionSocLeasesLapsed
+        expr: legion_soc_jobs_expired_leases > 0
+        for: 5m
+        labels: { severity: ticket }
+        annotations:
+          summary: A worker died while holding a job; recovery should pick it up. If this persists, it did not.
+
+      - alert: LegionActionStuckRunning
+        expr: legion_soc_actions_stuck_running > 0
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: An action has been "running" past the recovery window.
+
+      - alert: LegionWorkflowFailures
+        expr: legion_soc_workflow_runs_failed_1h > 0
+        for: 0m
+        labels: { severity: ticket }
+        annotations:
+          summary: A workflow run failed in the last hour.
+
+  - name: legion-approvals
+    rules:
+      - alert: LegionApprovalWaitingTooLong
+        expr: legion_soc_approvals_oldest_pending_age_seconds > 3600
+        for: 0m
+        labels: { severity: ticket }
+        annotations:
+          summary: An approval request has waited over an hour for a person.
+
+      - alert: LegionApprovedButUnused
+        expr: legion_soc_approvals_approved_unused > 0
+        for: 15m
+        labels: { severity: ticket }
+        annotations:
+          summary: An approved request has not been used for 15 minutes (held by a pause, or the action sync did not run).
+
+  - name: legion-policy-shadow
+    rules:
+      # Not an incident — the evidence for the "may we ever enforce?" decision.
+      - alert: LegionShadowDivergenceHigh
+        expr: legion_soc_shadow_divergent_24h > 25
+        for: 0m
+        labels: { severity: info }
+        annotations:
+          summary: Many shadow decisions disagree with what the existing code did. Review before any enforcement is considered.
+
+  - name: legion-dependencies
+    rules:
+      - alert: LegionNotificationsDead
+        expr: legion_outbox_dead > 0
+        for: 0m
+        labels: { severity: ticket }
+        annotations:
+          summary: Notifications failed permanently (check SMTP).
+
+      - alert: LegionNotificationsBacklog
+        expr: legion_outbox_oldest_pending_age_seconds > 900
+        for: 5m
+        labels: { severity: ticket }
+        annotations:
+          summary: The oldest undelivered notification is over 15 minutes old.
+
+      - alert: LegionIntegrationPollsBehind
+        expr: legion_integration_poll_lag_seconds > 900
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: A pull integration (Defender XDR, Azure, GCP, GuardDuty, Okta) has waited over 15 minutes to be polled. Raise INTEGRATION_POLL_CONCURRENCY or add an instance.
+
+      - alert: LegionIntegrationStopped
+        expr: legion_integration_connections_error > 0
+        for: 30m
+        labels: { severity: ticket }
+        annotations:
+          summary: An integration connection stopped after repeated errors; an administrator must check its credentials and resume it.
+
+      - alert: LegionAiCircuitOpen
+        expr: legion_ai_circuit_open == 1
+        for: 15m
+        labels: { severity: info }
+        annotations:
+          summary: The AI provider circuit breaker has been open for 15 minutes. Explanations use Legion's own text.

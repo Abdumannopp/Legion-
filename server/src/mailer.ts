@@ -219,6 +219,41 @@ ${rows
 }
 
 /**
+ * What Legion did on its own (or needs a person to decide), for the workspace's administrators. Built from
+ * fixed templates plus a few short facts; every value is shown as text. The link goes to the dashboard
+ * only (no one-click action: a copy of this mail must not be a way to approve anything).
+ */
+export function protectionEmail(params: {
+  kind: "acted" | "failed" | "approval" | "notice";
+  title: string;
+  facts: Array<[string, string]>;
+  path: string;
+  locale?: Locale;
+}) {
+  const locale = params.locale ?? "en";
+  const t = {
+    en: {
+      subject: { acted: "Legion acted on its own", failed: "Legion tried to act and could not", approval: "Legion needs your decision", notice: "Message from Legion" },
+      footer: {
+        acted: "You allowed Legion to do this in Protection settings. Review it and undo it from the dashboard if it was wrong; you can switch to manual mode or press the emergency stop at any time.",
+        failed: "Nothing more was done. Check the action in the dashboard before trying again.",
+        approval: "Legion will not do this until a signed-in administrator approves it in the dashboard.",
+        notice: "",
+      },
+      open: "Open in Legion",
+    },
+  }[locale];
+  const url = `${config.frontendUrl}${params.path}`;
+  const rows = params.facts.map(([k, v]) => `<tr><td style="color:#857CA8;padding:3px 12px 3px 0">${escape(k)}</td><td style="color:#F6F4FB">${escape(v)}</td></tr>`).join("");
+  const footer = t.footer[params.kind];
+  return {
+    subject: `[Legion] ${t.subject[params.kind]}: ${params.title}`.slice(0, 200),
+    text: `${params.title}\n\n${params.facts.map(([k, v]) => `${k}: ${v}`).join("\n")}\n\n${footer}\n\n${t.open}: ${url}`,
+    html: layout(params.title, `<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;font-size:13px;margin-bottom:16px">${rows}</table>${footer ? para(escape(footer)) : ""}${button(url, t.open)}`, locale),
+  };
+}
+
+/**
  * Sent to an address an administrator asked to receive alert emails. Nothing is
  * sent to it until its owner confirms — the recipient may never have heard of
  * this organisation, so the wording says so and the default is "ignore".
@@ -277,5 +312,31 @@ export function securityNoticeEmail(kind: SecurityNoticeKind, params: { when: st
     subject: t.subject,
     text: `${lines.join("\n")}\n\n${t.notYou}`,
     html: layout(t.title, `${lines.map((l) => para(escape(l))).join("\n")}\n${small(t.notYou)}`, locale),
+  };
+}
+
+/**
+ * Warns a workspace's administrators that it will be erased on a given date unless
+ * it is brought back into use. Links go to the dashboard only (no one-click action),
+ * and the workspace name is shown as text.
+ */
+export function workspaceDeletionNoticeEmail(params: { workspace: string; deleteOn: string; billingUrl: string; exportUrl: string; locale?: Locale }) {
+  const locale = params.locale ?? "en";
+  const t = {
+    en: {
+      subject: `Your Legion workspace "${params.workspace}" will be deleted on ${params.deleteOn}`,
+      title: "Your workspace will be deleted",
+      body: `The Legion workspace "${params.workspace}" has been locked for a long time. On ${params.deleteOn} it will be permanently erased: its alerts, agents, audit history, payment checks and accounts. This cannot be undone.`,
+      keep: "To keep it, subscribe again before that date. The deletion is then cancelled automatically.",
+      subscribe: "Open billing",
+      exportNote: "To keep a copy of your data, an administrator can download it any time before then (Settings → Data export). Export works while the workspace is locked.",
+      exportButton: "Open settings",
+      ignore: "If you no longer need this workspace, you do not have to do anything.",
+    },
+  }[locale];
+  return {
+    subject: t.subject,
+    text: `${t.body}\n\n${t.keep}\n${params.billingUrl}\n\n${t.exportNote}\n${params.exportUrl}\n\n${t.ignore}`,
+    html: layout(t.title, `${para(escape(t.body))}\n${para(escape(t.keep))}\n${button(params.billingUrl, t.subscribe)}\n${para(escape(t.exportNote))}\n${button(params.exportUrl, t.exportButton)}\n${small(t.ignore)}`, locale),
   };
 }

@@ -35,6 +35,16 @@ function readVersion(): string {
 const paddleEnvironment =
   process.env.PADDLE_ENVIRONMENT === "production" ? "production" : "sandbox";
 
+/** "key=pri_…,key=pri_…" → { key: "pri_…" }; entries with an unknown key or a malformed price id are dropped. */
+function parsePriceMap(raw: string | undefined, keyRe: RegExp): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const part of (raw || "").split(",")) {
+    const [key, id] = part.split("=").map((x) => x?.trim() ?? "");
+    if (key && keyRe.test(key) && /^pri_[A-Za-z0-9]+$/.test(id ?? "")) out[key] = id!;
+  }
+  return out;
+}
+
 const isProduction = process.env.NODE_ENV === "production";
 const deploymentMode = (process.env.DEPLOYMENT_MODE || "self-hosted") as
   | "self-hosted"
@@ -77,6 +87,8 @@ export const config = {
     process.env.DATABASE_URL ||
     "postgresql://legion:legion@localhost:5432/legion",
   dbPoolMax: Number(process.env.DB_POOL_MAX || 10),
+  /** F-04: "enforce" turns on row-level security for the first table group (db/rls.ts). */
+  dbRls: (process.env.DB_RLS ?? "off").toLowerCase(),
   dbSsl: process.env.DB_SSL === "true",
   /** PEM contents, or a path to a CA bundle, for providers whose certificate
    *  Node cannot chain to a public root. */
@@ -126,6 +138,15 @@ export const config = {
    * install.
    */
   webhookSecret: process.env.SECURITY_EVENT_WEBHOOK_SECRET || "",
+  /**
+   * Keys the payment check uses to recognise a bank account again without storing it (HMAC-SHA256).
+   * Mandatory in production (≥32 random characters, its own value). Never the webhook secret and
+   * never a built-in constant: an account number has little entropy, so a known key makes every
+   * stored hash reversible by brute force. PAYMENT_HASH_PREVIOUS_KEYS keeps older hashes matching
+   * after a rotation (new hashes always use PAYMENT_HASH_KEY).
+   */
+  paymentHashKey: process.env.PAYMENT_HASH_KEY || "",
+  paymentHashPreviousKeys: (process.env.PAYMENT_HASH_PREVIOUS_KEYS || "").split(",").map((s) => s.trim()).filter(Boolean),
 
   // --- Sensor webhook authentication ---
   /** Requests whose timestamp is further than this from the server's clock
@@ -199,7 +220,11 @@ export const config = {
   aiBreakerThreshold: Math.max(1, Math.floor(Number(process.env.AI_BREAKER_THRESHOLD || 5)) || 5),
   aiBreakerCooldownSeconds: Math.max(5, Math.floor(Number(process.env.AI_BREAKER_COOLDOWN_SECONDS || 60)) || 60),
   /** Provider calls one organisation may trigger per minute (per instance). */
+  /** One JSON line per HTTP request on stdout (route pattern, status, latency, request id). ACCESS_LOG=off disables; off by default under NODE_ENV=test. */
+  accessLog: process.env.ACCESS_LOG === "on" || (process.env.ACCESS_LOG !== "off" && process.env.NODE_ENV !== "test"),
   aiRateLimitPerMinute: Math.max(1, Math.floor(Number(process.env.AI_RATE_LIMIT_PER_MINUTE || 30)) || 30),
+  /** Audit P1-7: a per-workspace daily budget on top of the per-minute rate (0 = no daily cap). */
+  aiDailyLimit: Math.max(0, Math.floor(Number(process.env.AI_DAILY_LIMIT ?? 1000)) || 0),
   /**
    * Whether an organisation that has never chosen gets AI. "on" / "off";
    * empty = by deployment: a self-hosted operator who configured a provider
@@ -233,6 +258,13 @@ export const config = {
   /** Paddle price per billing currency ("USD=pri_…,EUR=pri_…"): a workspace is checked out in its own currency. */
   paddlePriceIds: Object.fromEntries((process.env.PADDLE_PRICE_IDS || "").split(",").map((p) => p.split("=").map((x) => x?.trim() ?? ""))
     .filter(([c, id]) => /^[A-Z]{3}$/.test((c ?? "").toUpperCase()) && /^pri_[A-Za-z0-9]+$/.test(id ?? "")).map(([c, id]) => [c!.toUpperCase(), id!])) as Record<string, string>,
+  /**
+   * Paddle price per plan and billing period: "starter.month=pri_…,starter.year=pri_…,professional.month=…".
+   * A plan with no price here cannot be bought online (Enterprise is by agreement).
+   */
+  paddlePlanPrices: parsePriceMap(process.env.PADDLE_PLAN_PRICES, /^(starter|professional|business|enterprise)\.(month|year)$/),
+  /** Paddle price per add-on (one per month): "agent_security=pri_…,payment_fraud=pri_…". */
+  paddleAddonPrices: parsePriceMap(process.env.PADDLE_ADDON_PRICES, /^(agent_security|payment_fraud|threat_intel|endpoints_100|ai_credits_5000)$/),
   paddleWebhookSecret: process.env.PADDLE_WEBHOOK_SECRET || "",
   paddleEnvironment,
   // Overridable so the billing paths can be exercised against a stub.
@@ -264,6 +296,59 @@ export const config = {
   notifyMaxAttempts: Math.max(1, Number(process.env.NOTIFY_MAX_ATTEMPTS || 8)),
   notifyRetryBaseSeconds: Math.max(1, Number(process.env.NOTIFY_RETRY_BASE_SECONDS || 30)),
   /** How often the background worker looks for due notifications. */
+  /** Hosted only, OFF by default: a workspace locked for more than this many days is erased (0 = never). Irreversible — see DATA-RETENTION.md before turning it on. */
+  tenantAutoDeleteDays: Math.max(0, Math.floor(Number(process.env.TENANT_AUTO_DELETE_DAYS ?? 0)) || 0),
+  /** A file outside the database that records each erased workspace, so a restored backup can replay the deletions. */
+  // Days between the warning e-mail and the erasure of a locked workspace (never fewer than 7).
+  tenantDeleteNoticeDays: Math.max(7, Math.floor(Number(process.env.TENANT_DELETE_NOTICE_DAYS ?? 30)) || 30),
+  deletionLedgerFile: process.env.DELETION_LEDGER_FILE || "",
+  /** Hosted only: payment-check records are deleted after this many months (0 = keep). */
+  retentionPaymentMonths: Math.max(0, Math.floor(Number(process.env.RETENTION_PAYMENT_MONTHS ?? 24)) || 0),
+  /** Hosted only: after this many months the email and IP address in a workspace audit-log entry are removed (0 = keep). */
+  retentionAgentLogMonths: Math.max(0, Math.floor(Number(process.env.RETENTION_AGENT_LOG_MONTHS ?? 24)) || 0),
+  /**
+   * SOC history (policy decisions, finished actions and approvals, workflow runs, finished jobs, the
+   * oldest SOC audit events) is deleted after this many days; 0 = keep forever. Hosted default 365.
+   * Self-hosted default 0 (the customer decides), but an unbounded history fills the disk — set it.
+   */
+  retentionSocDays: Math.max(0, Math.floor(Number(process.env.SOC_RETENTION_DAYS ?? ((process.env.DEPLOYMENT_MODE ?? "self-hosted") === "saas" ? 365 : 0))) || 0),
+  /**
+   * Task 10 Policy Engine v0. "shadow" (default): every covered action is also
+   * evaluated by the policy engine and the would-be decision is recorded —
+   * the decision never changes what happens. "off": nothing is evaluated.
+   * There is deliberately no enforcing value yet.
+   */
+  policyEngineMode: (process.env.POLICY_ENGINE_MODE || "shadow") as "off" | "shadow",
+  /** Task 10 Background Runtime: this process claims and runs SOC jobs ("off" for an API-only replica). */
+  runtimeWorker: (process.env.RUNTIME_WORKER || "on") !== "off",
+  /**
+   * Resource budget: at most this many action requests per workspace per hour (429 beyond it).
+   * Each request stores ~6.5 KB across its tables, and the history is append-only, so without a
+   * ceiling one compromised account could fill the disk at the request-rate limit.
+   */
+  socActionsPerHour: Math.max(10, Math.floor(Number(process.env.SOC_ACTIONS_PER_HOUR ?? 3000)) || 3000),
+  /** Per workspace and hour, how many LIVE actions Legion takes on its own; past it, each waits for a person. */
+  socLiveActionsPerHour: Math.max(1, Math.floor(Number(process.env.SOC_LIVE_ACTIONS_PER_HOUR ?? 20)) || 20),
+  runtimePollSeconds: Math.min(300, Math.max(1, Math.floor(Number(process.env.RUNTIME_POLL_SECONDS ?? 5)) || 5)),
+  /**
+   * Task 10 Orchestrator: run the alert workflow for every NEW alert, in the
+   * background. "off" (default) or "shadow" (decisions recorded, no approval
+   * requests, nothing done). Simulation and live are not offered here.
+   */
+  /** Key for the SOC audit chain (HMAC). Unset: derived from JWT_SECRET (changing that secret then breaks verification of older events). */
+  socAuditKey: process.env.SOC_AUDIT_KEY || "",
+  /**
+   * Keys the SOC audit chain was signed with before (verify only; new events always use
+   * SOC_AUDIT_KEY). Comma-separated raw keys; the entry "jwt" means "the key derived from the current
+   * JWT_SECRET", which is what installs without SOC_AUDIT_KEY used.
+   */
+  socAuditPreviousKeys: (process.env.SOC_AUDIT_PREVIOUS_KEYS || "").split(",").map((s) => s.trim()).filter(Boolean),
+  orchestratorAutoMode: (process.env.ORCHESTRATOR_AUTO_MODE || "off") as "off" | "shadow",
+  retentionAuditMonths: Math.max(0, Math.floor(Number(process.env.RETENTION_AUDIT_MONTHS ?? 24)) || 0),
+  /** Audit P2-16: delivered alert emails (recipient + alert text) are kept this many days, then deleted. 0 = keep. */
+  /** Audit A-4: pull connections polled at the same time by one instance (1–50). */
+  integrationPollConcurrency: Math.max(1, Math.min(50, Math.floor(Number(process.env.INTEGRATION_POLL_CONCURRENCY ?? 8)) || 8)),
+  notifyRetentionDays: Math.max(0, Math.floor(Number(process.env.NOTIFY_RETENTION_DAYS ?? 30)) || 0),
   notifyPollSeconds: Math.max(1, Number(process.env.NOTIFY_POLL_SECONDS || 15)),
   // The realtime "new alert" frame goes through the same outbox, so a Redis
   // outage delays it instead of dropping it. A dashboard frame is only worth
@@ -426,6 +511,13 @@ export const loopbackBind = ["127.0.0.1", "::1", "localhost"].includes(config.bi
 const explicitDevOrTest =
   process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test";
 
+if (config.orchestratorAutoMode !== "off" && config.orchestratorAutoMode !== "shadow") {
+  throw new Error("Refusing to start: ORCHESTRATOR_AUTO_MODE must be \"off\" or \"shadow\"");
+}
+if (config.policyEngineMode !== "off" && config.policyEngineMode !== "shadow") {
+  throw new Error("Refusing to start: POLICY_ENGINE_MODE must be \"off\" or \"shadow\" (enforcement is not available yet)");
+}
+
 // A malformed keyring is wrong in every mode: it would either fail every MFA
 // login or, worse, be "fixed" by someone generating a new key and orphaning
 // every stored secret.
@@ -510,6 +602,29 @@ export interface SafetyInputs {
   databaseUrl: string;
 }
 
+/** F-06: the SOC audit chain key must be its own secret in production (deriving it from JWT_SECRET ties audit integrity to session rotation). */
+export function socAuditKeyProblems(c: { socAuditKey: string; socAuditPreviousKeys: string[]; jwtSecret: string }): string[] {
+  const p: string[] = [];
+  if (!c.socAuditKey) {
+    p.push("SOC_AUDIT_KEY is required in production (openssl rand -hex 32). Upgrading an install that never set it: set SOC_AUDIT_KEY and SOC_AUDIT_PREVIOUS_KEYS=jwt so the existing chain still verifies");
+  } else if (isWeakJwtSecret(c.socAuditKey)) p.push("SOC_AUDIT_KEY must be a long random value (32+ chars), not a placeholder");
+  else if (c.socAuditKey === c.jwtSecret) p.push("SOC_AUDIT_KEY must be its own value, not JWT_SECRET");
+  if (c.socAuditKey && c.socAuditPreviousKeys.includes(c.socAuditKey)) p.push("SOC_AUDIT_PREVIOUS_KEYS must not contain the current SOC_AUDIT_KEY");
+  return p;
+}
+
+/** F-03: what is wrong with the payment hash keys for production. Pure, for the boot check and its tests. */
+export function paymentHashKeyProblems(c: { paymentHashKey: string; paymentHashPreviousKeys: string[]; jwtSecret: string; webhookSecret: string }): string[] {
+  const p: string[] = [];
+  if (!c.paymentHashKey) p.push("PAYMENT_HASH_KEY is required in production (openssl rand -hex 32): it protects the bank account numbers the payment check recognises");
+  else if (isWeakJwtSecret(c.paymentHashKey)) p.push("PAYMENT_HASH_KEY must be a long random value (32+ chars), not a placeholder");
+  else if (c.paymentHashKey === c.jwtSecret || (c.webhookSecret && c.paymentHashKey === c.webhookSecret)) {
+    p.push("PAYMENT_HASH_KEY must be its own value, not JWT_SECRET or SECURITY_EVENT_WEBHOOK_SECRET (rotating those would silently change every payment hash)");
+  }
+  if (c.paymentHashPreviousKeys.includes(c.paymentHashKey) && c.paymentHashKey) p.push("PAYMENT_HASH_PREVIOUS_KEYS must not contain the current PAYMENT_HASH_KEY");
+  return p;
+}
+
 export function unsafeConfigProblems(input: SafetyInputs): string[] {
   const problems: string[] = [];
 
@@ -571,6 +686,9 @@ export function settingProblems(env: Record<string, string | undefined>): string
   if (!currencies.every((c) => /^[A-Z]{3}$/.test(c))) problems.push("SUPPORTED_CURRENCIES must be ISO 4217 codes separated by commas (e.g. USD,EUR)");
   const currency = (env.DEFAULT_CURRENCY || "USD").trim().toUpperCase();
   if (!currencies.includes(currency)) problems.push(`DEFAULT_CURRENCY (${currency.slice(0, 8)}) must be one of SUPPORTED_CURRENCIES`);
+  if (env.DB_RLS !== undefined && env.DB_RLS !== "" && !["off", "enforce"].includes(env.DB_RLS.toLowerCase())) {
+    problems.push(`DB_RLS must be "off" or "enforce" (got "${env.DB_RLS.slice(0, 40)}")`);
+  }
   const mode = env.DEPLOYMENT_MODE;
   if (mode !== undefined && mode !== "" && mode !== "self-hosted" && mode !== "saas") {
     problems.push(`DEPLOYMENT_MODE must be "self-hosted" or "saas" (got "${mode.slice(0, 40)}")`);
@@ -623,6 +741,8 @@ if (isProduction) {
   if (isWeakJwtSecret(config.jwtSecret)) {
     problems.push("JWT_SECRET must be a long random value (32+ chars), not a placeholder");
   }
+  problems.push(...paymentHashKeyProblems(config));
+  problems.push(...socAuditKeyProblems(config));
   if (config.webhookEncryptionKey && config.webhookEncryptionKey.length < 32) {
     problems.push("WEBHOOK_ENCRYPTION_KEY must be 32+ random characters (openssl rand -hex 32)");
   }

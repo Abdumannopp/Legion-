@@ -12,6 +12,9 @@ import { createHmac } from "node:crypto";
 import { clip } from "../ai-safety.js";
 import { config } from "../config.js";
 import * as outbox from "../outbox.js";
+import { inTenant, queryOne, transaction } from "../db/pool.js";
+import { enqueueIntegrationMessages } from "../integration-notify.js";
+import * as store from "../store.js";
 import { correlate } from "../campaigns.js";
 import { respondToCampaigns } from "../blocklist.js";
 import type { Alert } from "../types.js";
@@ -39,7 +42,35 @@ export function cleanFinding(f: Finding): Finding {
   };
 }
 
-export interface IngestReport { ingested: string[]; duplicates: string[]; campaigns?: string[] }
+export interface IngestReport { ingested: string[]; duplicates: string[]; campaigns?: string[]; /** Duplicates whose source raised the severity (audit A-9). */ escalated?: string[] }
+
+const RANK = { low: 0, medium: 1, high: 2, critical: 3 } as const;
+
+/**
+ * Audit A-9: a vendor alert Legion already stored came again with a HIGHER severity (Defender, GuardDuty,
+ * CrowdStrike… re-send an item when they update it). The Legion alert is raised to match, a dated note is
+ * added to its text, and the change is audited. Severity is never lowered and status is never changed by a
+ * source: closing or downgrading stays a person's decision. Outbound connections are told about the raise.
+ */
+async function escalateIfHigher(tenantId: string, id: string, f: Finding): Promise<boolean> {
+  const row = await inTenant(tenantId, () => queryOne<{ severity: keyof typeof RANK }>(
+    `UPDATE alerts SET severity = $3,
+            summary = left(summary || E'\n\n' || $4, 4000)
+      WHERE tenant_id = $1 AND id = $2
+        AND (CASE severity WHEN 'low' THEN 0 WHEN 'medium' THEN 1 WHEN 'high' THEN 2 ELSE 3 END) < $5
+      RETURNING severity`,
+    [tenantId, id, f.severity, `[${new Date().toISOString()}] The source raised the severity to ${f.severity}.`, RANK[f.severity]],
+  ));
+  if (!row) return false;
+  // Chat, paging and ticket connections hear of the raise: one whose threshold the alert did not reach before
+  // (PagerDuty at "critical", the alert arrived as "medium") must not stay silent. Best effort, after the raise.
+  await inTenant(tenantId, async () => {
+    const alert = await store.getAlert(tenantId, id);
+    if (alert) await transaction((client) => enqueueIntegrationMessages(client, alert, { raised: true }));
+  }).then(() => outbox.kick()).catch((e) => console.error("Legion: could not queue the severity-raise notifications:", e instanceof Error ? e.message : "unknown error"));
+  await store.audit({ tenant_id: tenantId, user_id: null, user_email: null, action: "alert.severity_raised_by_source", resource_type: "alert", resource_id: id, detail: `raised to ${f.severity} by the source`, ip_address: null }).catch(() => { /* the alert change stands; audit is best effort here */ });
+  return true;
+}
 
 export async function ingestFindings(
   tenantId: string, source: string, findings: Finding[], opts: { realtime?: (alert: Alert) => unknown } = {},
@@ -60,6 +91,7 @@ export async function ingestFindings(
     }, { asset: f.asset ?? null, realtime: opts.realtime });
     (alert ? report.ingested : report.duplicates).push(id);
     if (alert) stored.push(alert);
+    else if (f.severity !== "low" && await escalateIfHigher(tenantId, id, f).catch(() => false)) (report.escalated ??= []).push(id);
   }
   // Campaign detection and the automatic response run AFTER the alerts are
   // committed, and never undo or fail ingestion: a sensor must not retry (and

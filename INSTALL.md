@@ -79,15 +79,43 @@ Only bind `0.0.0.0` on a trusted internal network with its own firewall, and
 understand that it also exposes the first-run page: until the first
 administrator exists, whoever reaches it first becomes the administrator.
 
+**Docker installs publish on `127.0.0.1` too.** `docker-compose.yml` publishes
+the API (8000) and the dashboard (3000) on loopback only, because Docker's port
+publishing goes around the host firewall (`ufw` rules do not apply to it). To
+let a Wazuh manager or browsers on another machine in, put the reverse proxy in
+front, or set `LEGION_PUBLISH_ADDRESS` in `.env` to an internal address on a
+network you trust (`0.0.0.0` exposes it on every interface). Postgres and Redis
+are never published.
+
 ### Database privileges
 
 `npm run setup` creates a role for Legion that is **not** the Postgres
 superuser: it owns Legion's own database and nothing else — it cannot read
 or write files on the server, create other roles, create other databases, or
-reach any database beyond its own. In production mode the API refuses to
-start if it is ever connected as a role with superuser, `CREATEROLE`,
-`CREATEDB`, `BYPASSRLS` or `REPLICATION` privileges (`DB_ALLOW_PRIVILEGED_ROLE=true`
-overrides this).
+reach any database beyond its own. The Docker install (`install.sh`,
+`start-docker.ps1`) goes further: a one-shot `db-provision` step creates the
+role `legion_app` (no superuser, `CREATEROLE`, `CREATEDB`, `BYPASSRLS` or
+`REPLICATION`, no file or program access) and the API connects only as that
+role; the Postgres admin password never reaches the API. An existing Docker
+installation is moved to it the next time you run `./install.sh`.
+
+**The API's role does not own the schema (Docker installs).** The tables,
+triggers and functions belong to `legion_owner`, a role that cannot log in.
+`db-provision` applies every migration as that owner and then gives
+`legion_app` data privileges only (read, insert, update, delete). So even with
+the API fully compromised, its database connection cannot `ALTER`, `DROP` or
+`TRUNCATE` a table, disable the audit log's append-only trigger, or delete
+audit history younger than 30 days: retention and workspace deletion run as
+fixed functions inside the database (`0008_bounded_erasure.sql`) that enforce
+those limits and always leave a record. At start the API checks that the
+schema is the one it expects and refuses to start otherwise — after an
+upgrade, `db-provision` (run by `./install.sh` / `docker compose up`) migrates
+first. `DB_ROLE_SPLIT=off` in `.env` returns to the single-role model.
+
+The API refuses to start if it is connected as a role with superuser,
+`CREATEROLE`, `CREATEDB`, `BYPASSRLS` or `REPLICATION` privileges — in every
+mode except an explicit `NODE_ENV=development`. `DB_ALLOW_PRIVILEGED_ROLE=true`
+overrides this, and is logged as a warning at every start.
 
 `ops/verify-backup.sh`, which restores a backup into a throwaway database to
 prove it works, needs a connection that **can** create a database — pass one
@@ -107,10 +135,12 @@ APP_DB_USER=legion_app APP_DB_PASSWORD=$(openssl rand -hex 24) \
 then point `DATABASE_URL` in `.env` at that role instead. It's idempotent and
 safe to re-run: it re-checks (and strips) any privilege that drifted since
 the last run, and on an existing installation transfers ownership of Legion's
-tables to the new role automatically. In production mode, the API refuses to
-start if it is ever connected as a role with superuser, `CREATEROLE`,
-`CREATEDB`, `BYPASSRLS` or `REPLICATION` privileges, unless you explicitly
-set `DB_ALLOW_PRIVILEGED_ROLE=true`.
+tables to the new role automatically.
+
+Add `DB_ROLE_SPLIT=on` to that command for the owner/runtime split described
+above (the schema then belongs to `legion_owner`). With the split, the API no
+longer migrates at start: run the same command again after every upgrade,
+before starting the new version.
 
 ### On Windows
 

@@ -88,7 +88,7 @@ Paddle Dashboard → **Developer Tools**:
 |---|---|
 | API key (`pdl_...`) | Authentication → API keys |
 | Client token | Authentication → Client-side tokens |
-| Price ID (`pri_...`) | Catalog → Prices |
+| Price IDs (`pri_...`), one per plan and period, and per add-on | Catalog → Prices (see [SAAS.md](SAAS.md) and [PRICING.md](PRICING.md)) |
 | Webhook secret (`pdl_ntfset_...`) | Notifications → when creating a new destination |
 
 ## 2.2 Server settings
@@ -108,7 +108,6 @@ PADDLE_ENVIRONMENT=sandbox
 ```env
 NEXT_PUBLIC_PADDLE_CLIENT_TOKEN=test_...
 NEXT_PUBLIC_PADDLE_ENVIRONMENT=sandbox
-NEXT_PUBLIC_PADDLE_PRICE_ID=pri_...
 ```
 
 `PADDLE_ENVIRONMENT` and `NEXT_PUBLIC_PADDLE_ENVIRONMENT` **must match**.

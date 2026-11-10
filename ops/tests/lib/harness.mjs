@@ -72,10 +72,11 @@ export async function sql(admin, db, text, params = []) {
 /** A fresh database and the API's own (non-superuser) role, via the real provision-cli. */
 export async function freshDatabase(admin, prefix) {
   const id = randomBytes(4).toString("hex");
-  const db = `${prefix}_${id}`, role = `${prefix}_app_${id}`, password = randomBytes(24).toString("hex");
+  const db = `${prefix}_${id}`, role = `${prefix}_app_${id}`, owner = `${prefix}_own_${id}`, password = randomBytes(24).toString("hex");
   await sql(admin, "postgres", `CREATE DATABASE "${db}"`);
   const r = spawnSync("node", [join(REPO, "server", "dist", "db", "provision-cli.js")], {
-    env: { PATH: process.env.PATH, DATABASE_ADMIN_URL: dbUrl(admin, db), APP_DB_USER: role, APP_DB_PASSWORD: password }, encoding: "utf8",
+    // F-02: as the pilot runs — the schema belongs to a separate owner role, migrated here.
+    env: { PATH: process.env.PATH, DATABASE_ADMIN_URL: dbUrl(admin, db), APP_DB_USER: role, APP_DB_PASSWORD: password, DB_ROLE_SPLIT: "on", DB_OWNER_ROLE: owner }, encoding: "utf8",
   });
   if (r.status !== 0) throw new Error(`provision failed: ${r.stderr || r.stdout}`);
   return {
@@ -84,6 +85,7 @@ export async function freshDatabase(admin, prefix) {
       await sql(admin, "postgres", "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1", [db]).catch(() => {});
       await sql(admin, "postgres", `DROP DATABASE IF EXISTS "${db}"`).catch(() => {});
       await sql(admin, "postgres", `DROP ROLE IF EXISTS "${role}"`).catch(() => {});
+      await sql(admin, "postgres", `DROP ROLE IF EXISTS "${owner}"`).catch(() => {});
     },
   };
 }
@@ -91,9 +93,28 @@ export async function freshDatabase(admin, prefix) {
 // --- the API --------------------------------------------------------------------
 
 /** Starts server/dist/index.js with `env`; resolves once /health says the database is up. */
+/**
+ * F-04: with DB_RLS=enforce, any code path that reached a row-level-security table without a
+ * workspace context — a request, a worker, a monitor — logs it. A black-box check would not see a
+ * background job fail, so the run fails here instead.
+ */
+const RLS_PROBLEM = /DB_RLS=enforce: a query on \w+|violates row-level security policy/g;
+function checkRls(name, text) {
+  if ((process.env.DB_RLS ?? "").toLowerCase() !== "enforce") return;
+  const hits = [...new Set(text.match(RLS_PROBLEM) ?? [])];
+  if (!hits.length) return;
+  console.error(`\nDB_RLS=enforce: the ${name} process logged ${hits.length} kind(s) of missing workspace context:\n  ${hits.join("\n  ")}`);
+  const one = new RegExp(RLS_PROBLEM.source);   // no /g: .test() must not carry lastIndex between lines
+  for (const line of text.split("\n").filter((l) => one.test(l)).slice(0, 10)) console.error("  | " + line.slice(0, 300));
+  rlsFailed = true;
+}
+let rlsFailed = false;
+// The test scripts end with process.exit(failures ? 1 : 0); a missing context still fails the run.
+process.on("exit", () => { if (rlsFailed) process.exitCode = 1; });
+
 export async function startApi(env, { name = "api", port } = {}) {
   const logs = [];
-  const proc = spawn("node", ["dist/index.js"], { cwd: join(REPO, "server"), env: { PATH: process.env.PATH, PORT: String(port), ...env } });
+  const proc = spawn("node", ["dist/index.js"], { cwd: join(REPO, "server"), env: { PATH: process.env.PATH, PORT: String(port), ...(process.env.DB_RLS ? { DB_RLS: process.env.DB_RLS } : {}), ...env } });
   proc.stdout.on("data", (d) => logs.push(String(d)));
   proc.stderr.on("data", (d) => logs.push(String(d)));
   let exited = null;
@@ -108,9 +129,11 @@ export async function startApi(env, { name = "api", port } = {}) {
     name, port, base, proc, logs, log: () => logs.join(""), up: Boolean(up),
     get exited() { return exited; },
     async stop(signal = "SIGTERM") {
-      if (exited) return;
-      proc.kill(signal);
-      await until(async () => exited, 15_000, 100);
+      if (!exited) {
+        proc.kill(signal);
+        await until(async () => exited, 15_000, 100);
+      }
+      checkRls(name, logs.join(""));
     },
   };
 }

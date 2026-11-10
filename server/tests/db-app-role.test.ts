@@ -9,7 +9,7 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { databaseRoleDecision, privilegedRoleProblems, provisionAppRole } from "../src/db/provision.js";
+import { databaseRoleDecision, privilegedRoleProblems, provisionAppRole, refusePrivilegedRole } from "../src/db/provision.js";
 
 const ADMIN_URL = process.env.DATABASE_URL!;
 const SCHEMA = readFileSync(join(__dirname, "..", "src", "db", "schema.sql"), "utf8");
@@ -175,5 +175,18 @@ describe("boot decision", () => {
   it("names each dangerous attribute", () => {
     expect(privilegedRoleProblems(su)).toHaveLength(5);
     expect(privilegedRoleProblems({ ...app, rolbypassrls: true })[0]).toMatch(/BYPASSRLS/);
+  });
+});
+
+describe("F-01: a privileged role is refused unless NODE_ENV=development says it is a laptop", () => {
+  const su = { rolname: "legion", rolsuper: true, rolcreaterole: true, rolcreatedb: true, rolbypassrls: true, rolreplication: true };
+  it("unset NODE_ENV (the default Docker install) refuses, as production does", () => {
+    for (const env of [undefined, "", "production", "staging"]) {
+      expect(databaseRoleDecision(su, { production: refusePrivilegedRole(env), allowPrivileged: false }).action).toBe("refuse");
+    }
+  });
+  it("only an explicit development environment, or the explicit override, is allowed (and warned)", () => {
+    expect(databaseRoleDecision(su, { production: refusePrivilegedRole("development"), allowPrivileged: false }).action).toBe("warn");
+    expect(databaseRoleDecision(su, { production: refusePrivilegedRole(undefined), allowPrivileged: true }).action).toBe("warn");
   });
 });

@@ -6,7 +6,6 @@
 import { initializePaddle, Paddle } from "@paddle/paddle-js";
 import type { Locale } from "@/lib/i18n/core";
 import { translations } from "@/lib/i18n/translations";
-import { formatMoney } from "@/lib/i18n/format";
 
 export const CHECKOUT_COMPLETED = "legion:checkout-completed";
 
@@ -41,11 +40,16 @@ async function getPaddle(): Promise<Paddle | undefined> {
   return initPromise;
 }
 
-/** Opens the Paddle.js checkout overlay for a given price.
+/** Opens the Paddle.js checkout overlay for the items the server chose.
  *
  * `checkoutToken` is minted by the authenticated backend and binds the
- * checkout to the current tenant without trusting a browser-supplied ID. */
-export async function openCheckout(priceId: string, checkoutToken: string, email: string | undefined, locale: Locale) {
+ * checkout to the current tenant without trusting a browser-supplied ID.
+ * `items` come from POST /billing/checkout-context (a plan and its add-ons);
+ * a bare price id is the older single-plan call. */
+export async function openCheckout(
+  items: string | Array<{ priceId: string; quantity: number }>,
+  checkoutToken: string, email: string | undefined, locale: Locale,
+) {
   const paddle = await getPaddle();
   if (!paddle) {
     throw new Error(translations[locale].billing.paddleNotConfigured);
@@ -53,7 +57,7 @@ export async function openCheckout(priceId: string, checkoutToken: string, email
 
   paddle.Checkout.open({
     settings: { locale: "en" },
-    items: [{ priceId, quantity: 1 }],
+    items: typeof items === "string" ? [{ priceId: items, quantity: 1 }] : items,
     customData: { checkout_token: checkoutToken },
     customer: email ? { email } : undefined,
   });
@@ -62,36 +66,3 @@ export async function openCheckout(priceId: string, checkoutToken: string, email
 export function isPaddleConfigured(): boolean {
   return Boolean(CLIENT_TOKEN);
 }
-
-export interface PriceLabel {
-  /** Localized, tax-inclusive where Paddle shows tax, e.g. "$49.00". */
-  amount: string;
-  /** "month", "year", "3 months"… or null for one-off prices. */
-  per: string | null;
-}
-
-/** The plan's price as Paddle would charge this visitor (currency and tax
- *  follow their location). Null when Paddle is not configured or unreachable. */
-export async function getPriceLabel(priceId: string, locale: Locale = "en"): Promise<PriceLabel | null> {
-  if (!priceId) return null;
-  const paddle = await getPaddle();
-  if (!paddle) return null;
-  try {
-    const preview = await paddle.PricePreview({ items: [{ priceId, quantity: 1 }] });
-    const line = preview.data.details.lineItems[0];
-    if (!line) return null;
-    const cycle = line.price.billingCycle;
-    const per = cycle ? (cycle.frequency === 1 ? cycle.interval : `${cycle.frequency} ${cycle.interval}s`) : null;
-    // Paddle picks the currency (and tax) for the visitor's location; the
-    // number itself is written the way the visitor's language writes money.
-    const minor = Number(line.totals.total);
-    const amount = Number.isFinite(minor) && preview.data.currencyCode
-      ? formatMoney(minor, preview.data.currencyCode, locale)
-      : line.formattedTotals.total;
-    return { amount, per };
-  } catch {
-    return null;
-  }
-}
-
-export const PADDLE_PRICE_ID = process.env.NEXT_PUBLIC_PADDLE_PRICE_ID || "";

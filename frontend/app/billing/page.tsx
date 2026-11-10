@@ -8,23 +8,28 @@ import {
   getSubscription,
   openBillingPortal,
   getCheckoutContext,
+  getEntitlements,
+  getPlans,
   getMe,
   isLoggedIn,
   ApiError,
   Subscription,
   CurrentUser,
+  PlanCatalog,
+  PlanEntitlements,
 } from "@/lib/api";
-import { openCheckout, isPaddleConfigured, CHECKOUT_COMPLETED, getPriceLabel, PriceLabel } from "@/lib/paddle";
+import { openCheckout, isPaddleConfigured, CHECKOUT_COMPLETED } from "@/lib/paddle";
+import { ADDONS, PLANS, type AddonId, type PlanId } from "@/lib/plans";
+import { PeriodToggle, planPrice, type BillingPeriod } from "@/components/site/PricingCard";
+import Link from "next/link";
 import { palette } from "@/lib/theme";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 import { formatDate } from "@/lib/i18n/format";
 import ErrorNotice from "@/components/ErrorNotice";
-import type { BillingInterval } from "@/lib/i18n/ns/billing";
 
-// A single paid plan for now — swap in real Paddle price IDs from
-// Paddle > Catalog > Prices once you've created them, or add more
-// entries here for multiple tiers.
-const PRICE_ID = process.env.NEXT_PUBLIC_PADDLE_PRICE_ID || "";
+// Paddle prices are chosen by the server (PADDLE_PLAN_PRICES / PADDLE_ADDON_PRICES): the
+// browser sends a plan, a period and add-ons, never a price.
+const BUYABLE: PlanId[] = ["starter", "professional", "business"];
 
 const STATUS_COLOR: Record<Subscription["status"], string> = {
   trialing: palette.warning,
@@ -34,17 +39,15 @@ const STATUS_COLOR: Record<Subscription["status"], string> = {
   canceled: palette.inkMuted,
 };
 
-/** Paddle describes the period as "month" or "3 months"; split it for translation. */
-function parseInterval(per: string): { count: number; unit: BillingInterval } | null {
-  const m = /^(?:(\d+) )?(day|week|month|year)s?$/.exec(per);
-  return m ? { count: m[1] ? Number(m[1]) : 1, unit: m[2] as BillingInterval } : null;
-}
-
 export default function BillingPage() {
   const router = useRouter();
   const { t, locale } = useLanguage();
   const [me, setMe] = useState<CurrentUser | null>(null);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
+  const [entitlements, setEntitlements] = useState<PlanEntitlements | null>(null);
+  const [catalog, setCatalog] = useState<PlanCatalog | null>(null);
+  const [period, setPeriod] = useState<BillingPeriod>("month");
+  const [addons, setAddons] = useState<AddonId[]>([]);
   const [loading, setLoading] = useState(true);
   const [checkoutBusy, setCheckoutBusy] = useState(false);
   const [portalBusy, setPortalBusy] = useState(false);
@@ -53,9 +56,11 @@ export default function BillingPage() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [meData, subData] = await Promise.all([getMe(), getSubscription()]);
+      const [meData, subData, ent, plans] = await Promise.all([getMe(), getSubscription(), getEntitlements().catch(() => null), getPlans().catch(() => null)]);
       setMe(meData);
       setSubscription(subData);
+      setEntitlements(ent);
+      setCatalog(plans);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         router.push("/login");
@@ -81,8 +86,6 @@ export default function BillingPage() {
   // Read at the moment the timeout hits, so the message is in the current language.
   const notConfirmedRef = useRef(t.billing.notConfirmed);
   useEffect(() => { notConfirmedRef.current = t.billing.notConfirmed; }, [t]);
-  const [price, setPrice] = useState<PriceLabel | null>(null);
-  useEffect(() => { getPriceLabel(PRICE_ID, locale).then(setPrice); }, [locale]);
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | undefined;
     const onCompleted = () => {
@@ -106,14 +109,14 @@ export default function BillingPage() {
     return () => { window.removeEventListener(CHECKOUT_COMPLETED, onCompleted); if (timer) clearInterval(timer); };
   }, []);
 
-  async function handleUpgrade() {
-    if (!me || !PRICE_ID) return;
+  async function handleChoose(plan: PlanId) {
+    if (!me) return;
     setCheckoutBusy(true);
     setError(null);
     try {
-      // The server picks the price for this workspace's billing currency when it has one.
-      const { checkout_token, price_id } = await getCheckoutContext();
-      await openCheckout(price_id || PRICE_ID, checkout_token, me.email, locale);
+      // The server turns the plan, period and add-ons into Paddle prices and binds the checkout to this workspace.
+      const ctx = await getCheckoutContext({ plan, interval: period, addons: period === "month" ? addons : [] });
+      await openCheckout(ctx.items ?? ctx.price_id ?? "", ctx.checkout_token, me.email, locale);
     } catch (err) {
       setError(err instanceof ApiError ? err : new Error(t.billing.checkoutError));
     } finally {
@@ -133,11 +136,6 @@ export default function BillingPage() {
       setPortalBusy(false);
     }
   }
-
-  const perLabel = (per: string) => {
-    const parsed = parseInterval(per);
-    return parsed ? t.billing.interval(parsed.count, parsed.unit) : per;
-  };
 
   const isActive = subscription?.status === "active" || subscription?.status === "trialing";
   // No subscription yet: the plan is the workspace's free trial.
@@ -236,38 +234,84 @@ export default function BillingPage() {
                 {me && me.role !== "admin" && (
                   <p className="text-ink-faint text-xs mt-3">{t.billing.adminOnlyNote}</p>
                 )}
+                {entitlements && entitlements.source !== "self-hosted" && (
+                  <div className="mt-4 pt-4 border-t border-line" data-testid="plan-usage">
+                    <p className="text-ink text-sm font-medium" data-testid="plan-name">
+                      {t.billing.planName(PLANS[entitlements.plan].name, entitlements.source === "trial")}
+                      {entitlements.addons.length > 0 && (
+                        <span className="text-ink-muted font-normal"> + {entitlements.addons.map((a) => t.pricing.addons.names[a]).join(", ")}</span>
+                      )}
+                    </p>
+                    {t.billing.planSource[entitlements.source] && (
+                      <p className="text-ink-muted text-xs mt-1">{t.billing.planSource[entitlements.source]}</p>
+                    )}
+                    <p className="text-ink-faint text-[11px] uppercase tracking-wide mt-4">{t.billing.usage.title}</p>
+                    <dl className="mt-2 grid grid-cols-[1fr_auto] gap-x-6 gap-y-1.5 text-sm">
+                      <dt className="text-ink-muted">{t.billing.usage.endpoints}</dt>
+                      <dd className={entitlements.usage.endpoints.over ? "text-warning font-medium" : "text-ink"}>
+                        {t.billing.usage.of(entitlements.usage.endpoints.used, entitlements.usage.endpoints.limit)}
+                      </dd>
+                      <dt className="text-ink-muted">{t.billing.usage.admins}</dt>
+                      <dd className={entitlements.usage.admins.over ? "text-warning font-medium" : "text-ink"}>
+                        {t.billing.usage.of(entitlements.usage.admins.used, entitlements.usage.admins.limit)}
+                      </dd>
+                    </dl>
+                    {entitlements.usage.endpoints.over && <p className="text-warning text-xs mt-3">{t.billing.usage.overEndpoints}</p>}
+                    {entitlements.usage.admins.over && <p className="text-warning text-xs mt-2">{t.billing.usage.overAdmins}</p>}
+                  </div>
+                )}
+                {isActive && <p className="text-ink-faint text-xs mt-4">{t.billing.changePlan}</p>}
               </div>
 
-              {!isActive && (
+              {!isActive && me?.role === "admin" && (
                 <div className="rounded-xl border border-brand-hover/40 bg-brand/5 p-5">
-                  <h2 className="text-ink font-medium text-sm mb-1">
-                    {t.billing.subscribeTitle}
-                  </h2>
-                  {price && (
-                    <p className="text-ink text-lg font-semibold mb-3">
-                      {price.amount}
-                      {price.per && <span className="text-ink-muted text-sm font-normal"> / {perLabel(price.per)}</span>}
-                    </p>
+                  <h2 className="text-ink font-medium text-sm mb-3">{t.billing.subscribeTitle}</h2>
+                  <div className="mb-4"><PeriodToggle value={period} onChange={setPeriod} /></div>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    {BUYABLE.map((id) => {
+                      const price = planPrice(id, period);
+                      const buyable = catalog?.plans.find((p) => p.id === id)?.buy[period] ?? false;
+                      return (
+                        <div key={id} data-testid={`choose-${id}`} className={`rounded-lg border p-4 flex flex-col ${id === "professional" ? "border-brand-hover/60" : "border-line"} bg-surface`}>
+                          <p className="text-ink font-medium text-sm">{PLANS[id].name}</p>
+                          <p className="text-ink text-lg font-semibold mt-1">
+                            {price.amount}<span className="text-ink-muted text-xs font-normal"> {price.sub === "year" ? t.pricing.perYear : t.pricing.perMonth}</span>
+                          </p>
+                          <ul className="flex flex-col gap-1 my-3 text-xs text-ink-soft flex-1">
+                            <li className="flex gap-1.5"><CheckCircle2 size={12} color={palette.brandBright} className="mt-0.5 shrink-0" />{t.pricing.headline.endpoints(PLANS[id].entitlements.endpoints)}</li>
+                            <li className="flex gap-1.5"><CheckCircle2 size={12} color={palette.brandBright} className="mt-0.5 shrink-0" />{t.pricing.headline.admins(PLANS[id].entitlements.admins)}</li>
+                            <li className="flex gap-1.5"><CheckCircle2 size={12} color={palette.brandBright} className="mt-0.5 shrink-0" />{t.pricing.headline.history(PLANS[id].entitlements.retentionDays)}</li>
+                          </ul>
+                          <button
+                            onClick={() => handleChoose(id)}
+                            disabled={checkoutBusy || !buyable || !isPaddleConfigured()}
+                            title={buyable ? undefined : t.billing.notAvailable}
+                            className="inline-flex items-center justify-center gap-2 bg-brand hover:bg-brand-hover text-white text-sm font-medium rounded-lg px-3 py-2 transition-colors disabled:opacity-50"
+                          >
+                            {checkoutBusy && <Loader2 size={14} className="animate-spin" />}
+                            {t.billing.choosePlan(PLANS[id].name)}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {period === "month" && (
+                    <div className="mt-4">
+                      <p className="text-ink-faint text-[11px] uppercase tracking-wide mb-2">{t.billing.addonsTitle}</p>
+                      <div className="flex flex-col gap-1.5">
+                        {Object.values(ADDONS).filter((a) => catalog?.addons.find((x) => x.id === a.id)?.buy).map((a) => (
+                          <label key={a.id} className="flex items-center gap-2 text-sm text-ink-soft">
+                            <input type="checkbox" checked={addons.includes(a.id)}
+                              onChange={(e) => setAddons((cur) => (e.target.checked ? [...cur, a.id] : cur.filter((x) => x !== a.id)))} />
+                            {t.pricing.addons.names[a.id]} <span className="text-ink-muted">+${a.monthlyUsd} {t.pricing.addons.perMonth}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
                   )}
-                  <ul className="flex flex-col gap-1.5 mb-4">
-                    {t.site.planFeatures.map((feature: string) => (
-                      <li
-                        key={feature}
-                        className="flex items-center gap-2 text-sm text-ink-soft"
-                      >
-                        <CheckCircle2 size={14} color={palette.brandBright} />
-                        {feature}
-                      </li>
-                    ))}
-                  </ul>
-                  <button
-                    onClick={handleUpgrade}
-                    disabled={checkoutBusy || !PRICE_ID}
-                    className="inline-flex items-center gap-2 bg-brand hover:bg-brand-hover text-white text-sm font-medium rounded-lg px-4 py-2 transition-colors disabled:opacity-50"
-                  >
-                    {checkoutBusy && <Loader2 size={14} className="animate-spin" />}
-                    {t.billing.subscribeNow}
-                  </button>
+                  <p className="text-ink-faint text-xs mt-4">
+                    {t.pricing.taxNote} <Link href="/pricing#compare" className="text-brand-bright">{t.pricing.seeComparison}</Link> · <Link href="/support" className="text-brand-bright">{t.billing.contactUs}</Link>
+                  </p>
                 </div>
               )}
             </div>

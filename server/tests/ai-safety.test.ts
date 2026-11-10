@@ -73,6 +73,22 @@ describe("secrets are removed from anything that leaves", () => {
   });
 });
 
+describe("payment data never reaches the model, in any data mode", () => {
+  it("removes check-digit-valid card numbers and IBANs, with or without separators", () => {
+    const text = "refund to card 4111 1111 1111 1111 and 5500-0000-0000-0004; wire to DE89 3704 0044 0532 0130 00 or GB82WEST12345698765432";
+    const r = redactSecrets(text);
+    expect(r.text).not.toMatch(/4111|5500|DE89|GB82/);
+    expect(r.text.match(/\[REDACTED:card_number\]/g)).toHaveLength(2);
+    expect(r.text.match(/\[REDACTED:iban\]/g)).toHaveLength(2);
+    expect(r.count).toBe(4);
+  });
+
+  it("leaves ordinary long numbers the analyst needs: ids, counts, timestamps, numbers that fail the check digit", () => {
+    const text = "event 1730851200123 port 4433 bytes 1234567890123456 hash d41d8cd98f00b204e9800998ecf8427e IBAN-like DE00 0000 0000 0000 0000 00";
+    expect(redactSecrets(text).text).toBe(text);
+  });
+});
+
 describe("structured fields cannot carry instructions", () => {
   it("accepts what they legitimately are", () => {
     expect(safeIdentifier("198.51.100.7", "ip")).toBe("198.51.100.7");

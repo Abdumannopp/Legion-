@@ -9,7 +9,7 @@ import {
 } from "@/lib/api";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 
-const ORDER: LegionAgentName[] = ["Sentinel", "Hunter", "Guardian", "Oracle", "Executor"];
+const ORDER: LegionAgentName[] = ["Sentinel", "Hunter", "Guardian", "Oracle", "Vanguard"];
 
 /**
  * Which of Legion's skills this AI agent may use. Choosing a skill grants no
