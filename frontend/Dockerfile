@@ -1,7 +1,7 @@
 # Legion dashboard (Next.js, standalone output). Build context is the
 # REPOSITORY ROOT (see docker-compose.yml), because this is an npm workspace.
 
-FROM node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202 AS build
+FROM node:26-alpine@sha256:8996bb5821d62a8fd9bb27c1cb07462f3fdce6e47d640c6a881ead0b064ce216 AS build
 WORKDIR /app
 COPY . .
 RUN npm ci
@@ -15,7 +15,7 @@ ARG NEXT_PUBLIC_TURNSTILE_SITE_KEY
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build -w frontend
 
-FROM node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202
+FROM node:26-alpine@sha256:8996bb5821d62a8fd9bb27c1cb07462f3fdce6e47d640c6a881ead0b064ce216
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
 # Listen on all interfaces inside the container (Docker maps the port out).
 ENV HOSTNAME=0.0.0.0 PORT=3000
