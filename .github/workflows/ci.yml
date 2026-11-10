@@ -25,7 +25,7 @@ jobs:
     env:
       DATABASE_URL: postgresql://legion:legion-ops@localhost:55434/legion_ops
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Fails if anyone adds continue-on-error or unhooks the security gate.
       - name: CI security gate is intact
         run: node .github/scripts/check-ci-gate.mjs
@@ -56,7 +56,7 @@ jobs:
     name: Docker stack builds, starts and answers (install.sh)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Legion the way DOCKER-WINDOWS.md describes
         run: bash install.sh
       - name: The API and the dashboard answer
@@ -108,7 +108,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -266,7 +266,7 @@ jobs:
     name: Image vulnerability scan (shipped and base images)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build the images the pilot ships, pull the ones it runs
         run: |
           set -euo pipefail
@@ -326,7 +326,7 @@ jobs:
     name: Secret scanning (gitleaks, full history)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Scan
@@ -345,7 +345,7 @@ jobs:
     name: Static analysis (Semgrep)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -364,7 +364,7 @@ jobs:
     name: Known vulnerabilities in the lockfile
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -397,7 +397,7 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql://legion:legion-test@localhost:55432/legion_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -428,7 +428,7 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql://legion:legion-ci@localhost:5432/legion_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The application sources were not part of the initial upload. Fail
       # loudly rather than report a green build that tested nothing.
       - name: Application sources present
@@ -560,7 +560,7 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql://legion:legion-sec@localhost:55433/legion_sec
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -612,7 +612,7 @@ jobs:
     needs: [deploy-scripts, dependencies, agent-identity, app, security-assessment, pilot-stack, image-scan, docker, secrets, sast]
     if: always()
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Every required job passed
         env:
           NEEDS: ${{ toJSON(needs) }}
@@ -625,7 +625,7 @@ jobs:
     needs: [release-gate]
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Source package of the tested commit
         run: git archive --format=zip --prefix=legion/ -o "legion-${GITHUB_REF_NAME}.zip" HEAD
       - uses: actions/download-artifact@v4
