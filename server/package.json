@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@legion/agent-identity": "file:../packages/agent-identity",
-    "@types/nodemailer": "^8.0.1",
+    "@types/nodemailer": "^8.0.2",
     "bcryptjs": "^3.0.2",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
@@ -33,7 +33,7 @@
     "nodemailer": "^10.3.1",
     "otpauth": "^9.5.1",
     "pg": "^8.23.0",
-    "rate-limit-redis": "^6.0.1",
+    "rate-limit-redis": "^6.0.2",
     "redis": "^6.2.1",
     "ws": "^8.18.3",
     "zod": "^4.1.12"
@@ -48,7 +48,7 @@
     "@types/supertest": "^7.2.1",
     "@types/ws": "^8.18.1",
     "supertest": "^7.2.2",
-    "tsx": "^4.20.6",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
   },
