@@ -6,7 +6,7 @@
 # scan). Legion never needs it: the container runs as the `postgres` user (uid 70) from the start
 # (docker-compose.pilot.yml `user:`), so the entrypoint never switches user, and the container needs
 # no capabilities at all. Removing the binary removes the finding instead of excusing it.
-FROM postgres:16.15-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139
+FROM postgres:18.6-alpine@sha256:123b17998ccaf47e53b502e8c6a1e79afd8f579c6f3eec83c563da026f957395
 RUN rm -f /usr/local/bin/gosu /usr/local/bin/su-exec \
  && test "$(id -u postgres)" = 70
 USER postgres
