@@ -1,7 +1,7 @@
 # Legion API. Build context is the REPOSITORY ROOT (see docker-compose.yml):
 # the server depends on the workspace package packages/agent-identity.
 
-FROM node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202 AS build
+FROM node:26-alpine@sha256:8996bb5821d62a8fd9bb27c1cb07462f3fdce6e47d640c6a881ead0b064ce216 AS build
 WORKDIR /app
 COPY . .
 # The root postinstall builds packages/agent-identity.
@@ -10,7 +10,7 @@ RUN npm run build -w server
 # Keep only what the server needs at run time.
 RUN npm prune --omit=dev
 
-FROM node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202
+FROM node:26-alpine@sha256:8996bb5821d62a8fd9bb27c1cb07462f3fdce6e47d640c6a881ead0b064ce216
 # NODE_ENV is deliberately NOT set to "production" here: that mode demands HTTPS,
 # SMTP and a public origin, which a laptop evaluation does not have. Internet-facing
 # servers run the systemd setup in DEPLOY-ONLINE.md, which does set it.
