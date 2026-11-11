@@ -304,7 +304,10 @@ async function initialize() {
     ['inbox_token_hash', 'TEXT'],
     ['inbox_allowed_senders', 'TEXT'],
     // Encrypted JSON (see lib/secrets.js): this company's own Twilio account.
-    ['messaging_config', 'TEXT']
+    ['messaging_config', 'TEXT'],
+    // Encrypted JSON: the mailbox VEYRA reads orders from (IMAP). The state (position, last check) is plain JSON.
+    ['imap_config', 'TEXT'],
+    ['imap_state', 'TEXT']
   ]);
 
   // Emails (and other messages) that arrived for a company, waiting to become loads.
@@ -386,6 +389,39 @@ async function initialize() {
     )
   `);
   await run('CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_dedupe ON documents (shipment_id, sha256)');
+
+  // Prices the company knows from the market (a broker's list, a freight exchange): PULSE compares with them.
+  await run(`
+    CREATE TABLE IF NOT EXISTS market_rates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+      origin TEXT NOT NULL,
+      destination TEXT NOT NULL,
+      equipment TEXT NOT NULL DEFAULT '',
+      rate REAL NOT NULL,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await run('CREATE UNIQUE INDEX IF NOT EXISTS idx_market_rates_lane ON market_rates (tenant_id, lower(origin), lower(destination), equipment)');
+
+  // Map lookups are cached: a place name is looked up once, a road route once.
+  await run(`
+    CREATE TABLE IF NOT EXISTS geo_places (
+      place_key TEXT PRIMARY KEY,
+      lat REAL,
+      lng REAL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await run(`
+    CREATE TABLE IF NOT EXISTS geo_routes (
+      route_key TEXT PRIMARY KEY,
+      distance_km REAL NOT NULL,
+      duration_h REAL NOT NULL,
+      points_json TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
 
   const seedUsers = [
     { name: 'Alex Carter', email: 'admin@veyra.ai', password: 'admin123', role: 'admin', platform: 1 },
@@ -500,7 +536,8 @@ async function checkIntegrity() {
 async function getTenant(tenantId) {
   const row = await get(
     `SELECT id, name, gps_token_hash AS gpsTokenHash, inbox_token_hash AS inboxTokenHash,
-       inbox_allowed_senders AS inboxAllowedSenders, messaging_config AS messagingConfig, created_at AS createdAt
+       inbox_allowed_senders AS inboxAllowedSenders, messaging_config AS messagingConfig,
+       imap_config AS imapConfig, imap_state AS imapState, created_at AS createdAt
      FROM tenants WHERE id = ?`,
     [assertTenant(tenantId)]
   );
@@ -514,7 +551,15 @@ async function getTenant(tenantId) {
   }
   // The decrypted Twilio settings stay on the server; callers outside messaging never expose them.
   const messagingSettings = row.messagingConfig ? secrets.decrypt(row.messagingConfig) : null;
-  return { ...row, allowedSenders, messagingSettings };
+  const imapSettings = row.imapConfig ? secrets.decrypt(row.imapConfig) : null;
+  let imapState = null;
+  try {
+    imapState = row.imapState ? JSON.parse(row.imapState) : null;
+  } catch (_) {
+    imapState = null;
+  }
+  const { imapConfig, ...rest } = row;
+  return { ...rest, allowedSenders, messagingSettings, imapSettings, imapState };
 }
 
 async function listTenants() {
@@ -568,6 +613,20 @@ async function setTenantInboxAllowedSenders(tenantId, senders) {
 }
 
 // settings = { sid, token, smsFrom, whatsappFrom } or null to remove. Stored encrypted.
+// Saving (or removing) the mailbox also forgets the reading position: a new mailbox starts from now.
+async function setTenantImapSettings(tenantId, settings) {
+  await run('UPDATE tenants SET imap_config = ?, imap_state = NULL WHERE id = ?', [settings ? secrets.encrypt(settings) : null, assertTenant(tenantId)]);
+}
+
+async function setTenantImapState(tenantId, state) {
+  await run('UPDATE tenants SET imap_state = ? WHERE id = ?', [JSON.stringify(state), assertTenant(tenantId)]);
+}
+
+// System job (mailbox poller): companies that have a mailbox connected.
+async function listTenantIdsWithImap() {
+  return (await all('SELECT id FROM tenants WHERE imap_config IS NOT NULL ORDER BY id')).map((row) => row.id);
+}
+
 async function setTenantMessagingSettings(tenantId, settings) {
   await run('UPDATE tenants SET messaging_config = ? WHERE id = ?', [settings ? secrets.encrypt(settings) : null, assertTenant(tenantId)]);
 }
@@ -1667,6 +1726,52 @@ async function listOpenTasksByKeyPrefix(tenantId, prefix) {
   );
 }
 
+/* ---------------- market prices (PULSE) ---------------- */
+
+const mapMarketRate = (row) => ({ id: row.id, origin: row.origin, destination: row.destination, equipment: row.equipment || null, rate: Number(row.rate), updatedAt: row.updated_at });
+
+async function listMarketRates(tenantId) {
+  return (await all('SELECT * FROM market_rates WHERE tenant_id = ? ORDER BY lower(origin), lower(destination), equipment LIMIT 2000', [assertTenant(tenantId)])).map(mapMarketRate);
+}
+
+// Adds or updates one lane price. Returns 'created' or 'updated'.
+async function upsertMarketRate(tenantId, { origin, destination, equipment = '', rate }) {
+  assertTenant(tenantId);
+  const existing = await get('SELECT id FROM market_rates WHERE tenant_id = ? AND lower(origin) = lower(?) AND lower(destination) = lower(?) AND equipment = ?', [tenantId, origin, destination, equipment]);
+  if (existing) {
+    await run('UPDATE market_rates SET rate = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ?', [rate, existing.id, tenantId]);
+    return 'updated';
+  }
+  await run('INSERT INTO market_rates (tenant_id, origin, destination, equipment, rate) VALUES (?, ?, ?, ?, ?)', [tenantId, origin, destination, equipment, rate]);
+  return 'created';
+}
+
+async function deleteMarketRate(tenantId, id) {
+  const result = await run('DELETE FROM market_rates WHERE id = ? AND tenant_id = ?', [id, assertTenant(tenantId)]);
+  return result.changes === 1;
+}
+
+/* ---------------- map cache ---------------- */
+
+async function getGeoPlace(key) {
+  const row = await get('SELECT lat, lng FROM geo_places WHERE place_key = ?', [key]);
+  return row ? { lat: row.lat, lng: row.lng } : undefined;
+}
+
+// lat / lng null = "looked up, not found" (so an unknown place is not asked again and again).
+async function setGeoPlace(key, lat, lng) {
+  await run('INSERT OR REPLACE INTO geo_places (place_key, lat, lng) VALUES (?, ?, ?)', [key, lat, lng]);
+}
+
+async function getGeoRoute(key) {
+  const row = await get('SELECT distance_km, duration_h, points_json FROM geo_routes WHERE route_key = ?', [key]);
+  return row ? { distanceKm: row.distance_km, durationHours: row.duration_h, points: JSON.parse(row.points_json) } : null;
+}
+
+async function setGeoRoute(key, { distanceKm, durationHours, points }) {
+  await run('INSERT OR REPLACE INTO geo_routes (route_key, distance_km, duration_h, points_json) VALUES (?, ?, ?, ?)', [key, distanceKm, durationHours, JSON.stringify(points)]);
+}
+
 /* ---------------- ROUTE, PULSE and SENTINEL data ---------------- */
 
 const EVENT_TIME = (status) => `(SELECT ${status === 'Delivered' ? 'MAX' : 'MIN'}(created_at) FROM shipment_events
@@ -1710,7 +1815,14 @@ async function getPulseData(tenantId, shipmentId) {
      ORDER BY id DESC LIMIT 200`,
     [tenantId, shipmentId, shipment.origin, shipment.destination]
   );
-  return { shipment, history };
+  const market = await all(
+    `SELECT equipment, rate, updated_at AS updatedAt FROM market_rates
+     WHERE tenant_id = ? AND lower(origin) = lower(?) AND lower(destination) = lower(?) AND (equipment = ? OR equipment = '')`,
+    [tenantId, shipment.origin, shipment.destination, shipment.equipment || '']
+  );
+  // A price for this trailer type beats one for any trailer.
+  const marketRate = market.find((row) => row.equipment) || market[0] || null;
+  return { shipment, history, marketRate: marketRate ? { rate: Number(marketRate.rate), equipment: marketRate.equipment || null, updatedAt: marketRate.updatedAt } : null };
 }
 
 // Loads that are still open, with what SENTINEL checks. tenantId null = every company (system job only).
@@ -1721,6 +1833,9 @@ async function listSentinelLoads(tenantId) {
     `SELECT id, tenant_id AS tenantId, customer, origin, destination, pickup, delivery, status, carrier_id AS carrierId,
        driver_phone AS driverPhone, truck_plate AS truckPlate, eta, ${LAST_SIGN_OF_LIFE} AS lastSignOfLife,
        (SELECT phone FROM carriers WHERE carriers.id = shipments.carrier_id) AS carrierPhone,
+       (SELECT lat FROM tracking_updates WHERE tracking_updates.shipment_id = shipments.id AND source = 'gps' AND lat IS NOT NULL ORDER BY id DESC LIMIT 1) AS lastLat,
+       (SELECT lng FROM tracking_updates WHERE tracking_updates.shipment_id = shipments.id AND source = 'gps' AND lat IS NOT NULL ORDER BY id DESC LIMIT 1) AS lastLng,
+       (SELECT created_at FROM tracking_updates WHERE tracking_updates.shipment_id = shipments.id AND source = 'gps' AND lat IS NOT NULL ORDER BY id DESC LIMIT 1) AS lastGpsAt,
        (SELECT COUNT(*) FROM messages WHERE messages.shipment_id = shipments.id
           AND messages.delivery_status IN ('failed', 'undelivered') AND messages.created_at >= datetime('now', '-2 days')) AS failedMessages
      FROM shipments WHERE status NOT IN ('Delivered', 'Cancelled') ${scoped ? 'AND tenant_id = ?' : ''}
@@ -1818,6 +1933,12 @@ async function updateDocumentExtraction(tenantId, id, { status, extracted, compa
   );
 }
 
+async function setDocumentType(tenantId, shipmentId, id, type) {
+  assertTenant(tenantId);
+  const result = await run('UPDATE documents SET doc_type = ? WHERE id = ? AND shipment_id = ? AND tenant_id = ?', [type, id, shipmentId, tenantId]);
+  return result.changes === 1;
+}
+
 async function deleteDocument(tenantId, shipmentId, id) {
   assertTenant(tenantId);
   const result = await run('DELETE FROM documents WHERE id = ? AND shipment_id = ? AND tenant_id = ?', [id, shipmentId, tenantId]);
@@ -1843,11 +1964,22 @@ module.exports = {
   findTenantByInboxTokenHash,
   setTenantInboxAllowedSenders,
   setTenantMessagingSettings,
+  setTenantImapSettings,
+  setTenantImapState,
+  listTenantIdsWithImap,
   createInboxItem,
   addInboxAttachment,
   listInboxAttachments,
   getInboxAttachmentFile,
   deleteInboxAttachments,
+  setDocumentType,
+  listMarketRates,
+  upsertMarketRate,
+  deleteMarketRate,
+  getGeoPlace,
+  setGeoPlace,
+  getGeoRoute,
+  setGeoRoute,
   moveInboxAttachmentsToShipment,
   findShipmentIdsByReference,
   findMessageByCallbackTokenHash,

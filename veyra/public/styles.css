@@ -1388,3 +1388,8 @@ td:first-child { color: #fff; font-weight: 500; }
 .file-chip { padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); font-size: 12.5px; color: inherit; text-decoration: none; overflow-wrap: anywhere; }
 .file-chip:hover, .file-chip:focus-visible { text-decoration: underline; }
 .detail-timeline-item.message-failed strong { color: var(--amber); }
+
+.market-rate-list { display: grid; gap: 6px; }
+.market-rate-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.market-rate-row span { overflow-wrap: anywhere; }
+.doc-type-select { max-width: 150px; }

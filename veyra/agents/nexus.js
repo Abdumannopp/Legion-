@@ -17,6 +17,7 @@ const relayAgent = require('./relay');
 const vaultAgent = require('./vault');
 const pulseAgent = require('./pulse');
 const sentinelAgent = require('./sentinel');
+const geo = require('../integrations/geo');
 
 const defaults = {
   flow: { weightUnit: 'kg', currency: 'USD', equipment: [], maxRate: 10000000, maxWeight: 1000000 },
@@ -293,11 +294,11 @@ async function sweep() {
 // One task per load per kind of risk. When the risk is gone (a truck was booked, the load moved on),
 // its task closes by itself. A task a person dismissed does not come back.
 async function sentinelSweep(now = Date.now()) {
-  const loads = await db.listSentinelLoads(null);
+  const loads = await geo.annotateOffRoute(await db.listSentinelLoads(null), { fetchMissing: true, now });
   const tenantOf = new Map(loads.map((load) => [load.id, load.tenantId]));
   const active = new Set();
   let created = 0;
-  for (const risk of sentinelAgent.assess(loads, { now, staleHours: settings.staleHours })) {
+  for (const risk of sentinelAgent.assess(loads, { now, staleHours: settings.staleHours, offRouteKm: geo.offRouteKm() })) {
     if (!sentinelAgent.TASK_RISKS.includes(risk.type)) continue;
     const shipmentId = Number(risk.shipmentId.slice(4));
     const tenantId = tenantOf.get(shipmentId);

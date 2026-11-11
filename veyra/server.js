@@ -34,10 +34,17 @@ const {
   findTenantByInboxTokenHash,
   setTenantInboxAllowedSenders,
   setTenantMessagingSettings,
+  setTenantImapSettings,
+  setTenantImapState,
+  listTenantIdsWithImap,
   createInboxItem,
   addInboxAttachment,
   getInboxAttachmentFile,
   deleteInboxAttachments,
+  setDocumentType,
+  listMarketRates,
+  upsertMarketRate,
+  deleteMarketRate,
   moveInboxAttachmentsToShipment,
   findShipmentIdsByReference,
   findMessageByCallbackTokenHash,
@@ -102,8 +109,11 @@ const routeAgent = require('./agents/route');
 const pulseAgent = require('./agents/pulse');
 const sentinelAgent = require('./agents/sentinel');
 const nexus = require('./agents/nexus');
-const { parseInbound, senderAllowed, mentionedShipmentIds, guessDocumentType } = require('./lib/inbound-email');
+const { parseInbound, senderAllowed, mentionedShipmentIds, guessDocumentType, stripHtml } = require('./lib/inbound-email');
 const messaging = require('./integrations/messaging');
+const geo = require('./integrations/geo');
+const imap = require('./integrations/imap');
+const { parseEmail } = require('./lib/mime');
 
 const REGISTRATION_INVITE_CODE = process.env.REGISTRATION_INVITE_CODE || '';
 const MAX_LEN = {
@@ -1267,7 +1277,6 @@ app.post(`${INBOX_WEBHOOK_PREFIX}:token`, (req, res, next) => {
   }
 }, parseInboxBody, async (req, res) => {
   try {
-    const tenant = req.inboxTenant;
     let message;
     try {
       message = parseInbound(req.body, req.headers['content-type'], DOC_MAX_BYTES);
@@ -1275,54 +1284,62 @@ app.post(`${INBOX_WEBHOOK_PREFIX}:token`, (req, res, next) => {
       // Providers retry on errors, so an unusable message is acknowledged, not rejected.
       return res.json({ success: true, ignored: 'unreadable' });
     }
-    // Keep real documents only: the type comes from the file's first bytes, never from its name.
-    const files = [];
-    let filesSkipped = 0;
-    for (const attachment of message.attachments) {
-      const mime = attachment.content.length <= DOC_MAX_BYTES ? detectMime(attachment.content) : null;
-      const logo = mime && mime !== 'application/pdf' && attachment.content.length < INBOX_MIN_IMAGE_BYTES;
-      if (logo) continue;
-      if (!mime || files.length >= INBOX_MAX_ATTACHMENTS) {
-        filesSkipped += 1;
-        continue;
-      }
-      files.push({ filename: safeFilename(attachment.filename, mime), mime, content: attachment.content });
-    }
-    if (!message.text && !files.length) return res.json({ success: true, ignored: 'empty' });
-    if ((await countInboxItemsToday(tenant.id)) >= INBOX_DAILY_LIMIT) {
-      return res.status(429).json({ success: false, message: 'Daily limit of incoming messages reached.' });
-    }
-    const settings = await getTenant(tenant.id);
-    const allowed = senderAllowed(message.from, settings.allowedSenders);
-    const { item, duplicate } = await createInboxItem(tenant.id, {
-      externalId: message.messageId || null,
-      from: message.from,
-      subject: message.subject,
-      body: message.text,
-      status: allowed ? 'new' : 'blocked'
-    });
-    if (duplicate) return res.json({ success: true, duplicate: true });
-    // Files from senders who are not allowed are not kept at all.
-    if (!allowed) return res.status(201).json({ success: true, id: item.id, accepted: false });
-    for (const file of files) await addInboxAttachment(tenant.id, item.id, file);
-
-    // An email with files that names one of this company's loads: the files go straight to that load.
-    const shipmentId = files.length ? await matchShipmentForEmail(tenant.id, message) : null;
-    if (shipmentId) {
-      const shipment = await getShipment(tenant.id, shipmentId);
-      const moved = await attachEmailFilesToShipment(tenant.id, item.id, shipment, { context: `${message.subject} ${message.text}` });
-      if (moved.documentIds.length || !moved.skipped) {
-        await updateInboxItem(tenant.id, item.id, { status: 'attached', shipmentId });
-        nexus.emit('inbox.attached', { tenantId: tenant.id, inboxId: item.id, shipmentId, documentIds: moved.documentIds, skipped: moved.skipped, from: message.from });
-        return res.status(201).json({ success: true, id: item.id, accepted: true, attachedTo: `SHP-${shipmentId}`, documents: moved.documentIds.length, filesSkipped });
-      }
-    }
-    nexus.emit('inbox.received', { tenantId: tenant.id, inboxId: item.id });
-    return res.status(201).json({ success: true, id: item.id, accepted: true, files: files.length, filesSkipped });
+    const outcome = await ingestEmail(req.inboxTenant, message);
+    return res.status(outcome.status).json(outcome.body);
   } catch (error) {
     return sendError(res, error, 'Message could not be stored.', 'inbox webhook');
   }
 });
+
+// Everything that happens to an incoming email, whether it was posted to the inbox address or read from a
+// company's mailbox over IMAP: keep real documents, store the email, put files on the load it names, or
+// hand it to NEXUS. Returns { status, body }.
+async function ingestEmail(tenant, message) {
+  // Keep real documents only: the type comes from the file's first bytes, never from its name.
+  const files = [];
+  let filesSkipped = 0;
+  for (const attachment of message.attachments || []) {
+    const mime = attachment.content.length <= DOC_MAX_BYTES ? detectMime(attachment.content) : null;
+    const logo = mime && mime !== 'application/pdf' && attachment.content.length < INBOX_MIN_IMAGE_BYTES;
+    if (logo) continue;
+    if (!mime || files.length >= INBOX_MAX_ATTACHMENTS) {
+      filesSkipped += 1;
+      continue;
+    }
+    files.push({ filename: safeFilename(attachment.filename, mime), mime, content: attachment.content });
+  }
+  if (!message.text && !files.length) return { status: 200, body: { success: true, ignored: 'empty' } };
+  if ((await countInboxItemsToday(tenant.id)) >= INBOX_DAILY_LIMIT) {
+    return { status: 429, body: { success: false, message: 'Daily limit of incoming messages reached.' } };
+  }
+  const settings = await getTenant(tenant.id);
+  const allowed = senderAllowed(message.from, settings.allowedSenders);
+  const { item, duplicate } = await createInboxItem(tenant.id, {
+    externalId: message.messageId || null,
+    from: message.from,
+    subject: message.subject,
+    body: message.text,
+    status: allowed ? 'new' : 'blocked'
+  });
+  if (duplicate) return { status: 200, body: { success: true, duplicate: true } };
+  // Files from senders who are not allowed are not kept at all.
+  if (!allowed) return { status: 201, body: { success: true, id: item.id, accepted: false } };
+  for (const file of files) await addInboxAttachment(tenant.id, item.id, file);
+
+  // An email with files that names one of this company's loads: the files go straight to that load.
+  const shipmentId = files.length ? await matchShipmentForEmail(tenant.id, message) : null;
+  if (shipmentId) {
+    const shipment = await getShipment(tenant.id, shipmentId);
+    const moved = await attachEmailFilesToShipment(tenant.id, item.id, shipment, { context: `${message.subject} ${message.text}` });
+    if (moved.documentIds.length || !moved.skipped) {
+      await updateInboxItem(tenant.id, item.id, { status: 'attached', shipmentId });
+      nexus.emit('inbox.attached', { tenantId: tenant.id, inboxId: item.id, shipmentId, documentIds: moved.documentIds, skipped: moved.skipped, from: message.from });
+      return { status: 201, body: { success: true, id: item.id, accepted: true, attachedTo: `SHP-${shipmentId}`, documents: moved.documentIds.length, filesSkipped } };
+    }
+  }
+  nexus.emit('inbox.received', { tenantId: tenant.id, inboxId: item.id });
+  return { status: 201, body: { success: true, id: item.id, accepted: true, files: files.length, filesSkipped } };
+}
 
 // A file that came with an email (before it is on a load). Always a download.
 app.get('/api/inbox/:id/attachments/:fileId/file', authMiddleware, requirePermission('shipments:create'), async (req, res) => {
@@ -1337,6 +1354,148 @@ app.get('/api/inbox/:id/attachments/:fileId/file', authMiddleware, requirePermis
     return res.send(file.content);
   } catch (error) {
     return sendError(res, error, 'File unavailable.', 'inbox file');
+  }
+});
+
+/* =========================================================
+   MAILBOX (IMAP): VEYRA reads a company's order mailbox itself
+   ========================================================= */
+const IMAP_POLL_MINUTES = readPositiveInteger(process.env.IMAP_POLL_MINUTES, 5);
+const MAILBOX_BATCH = 20;
+const mailboxBusy = new Set();
+
+// What the browser may know: where it reads, when it last looked, whether that worked. Never the password.
+function mailboxStatus(tenant) {
+  const settings = tenant?.imapSettings;
+  return {
+    configured: Boolean(settings),
+    host: settings?.host || null,
+    user: settings?.user || null,
+    mailbox: settings?.mailbox || null,
+    lastCheckedAt: tenant?.imapState?.checkedAt || null,
+    lastError: tenant?.imapState?.error || null,
+    lastImported: tenant?.imapState?.imported ?? null,
+    pollMinutes: IMAP_POLL_MINUTES
+  };
+}
+
+// Reads new messages of one company's mailbox and runs each through the same steps as an emailed inbox address.
+// A message the daily limit turns away is left for the next round, not lost.
+async function pollMailbox(tenantId) {
+  if (mailboxBusy.has(tenantId)) return { busy: true };
+  mailboxBusy.add(tenantId);
+  try {
+    const tenant = await getTenant(tenantId);
+    if (!tenant?.imapSettings) return { configured: false };
+    const previous = tenant.imapState;
+    const position = Number.isInteger(previous?.lastUid) ? { uidValidity: previous.uidValidity, lastUid: previous.lastUid } : null;
+    try {
+      const result = await imap.fetchNew(tenant.imapSettings, position, { maxMessages: MAILBOX_BATCH, maxBytes: INBOX_MAX_BYTES });
+      let imported = 0;
+      let lastUid = result.state.lastUid;
+      for (const entry of result.messages) {
+        let message;
+        try {
+          const parsed = parseEmail(entry.raw);
+          message = {
+            from: parsed.from,
+            subject: parsed.subject,
+            text: (parsed.text || stripHtml(parsed.html)).trim(),
+            messageId: parsed.messageId || `imap-${result.state.uidValidity}-${entry.uid}`,
+            attachments: parsed.attachments.map((file) => ({ filename: file.filename, content: file.content }))
+          };
+        } catch (_) {
+          continue;
+        }
+        const outcome = await ingestEmail({ id: tenantId }, message);
+        if (outcome.status === 429) {
+          // Stay just before this message: the next round starts here.
+          lastUid = Math.min(lastUid, entry.uid - 1);
+          break;
+        }
+        if (outcome.body.id) imported += 1;
+      }
+      await setTenantImapState(tenantId, { uidValidity: result.state.uidValidity, lastUid, checkedAt: new Date().toISOString(), error: null, imported });
+      return { configured: true, imported, skipped: result.skipped };
+    } catch (error) {
+      await setTenantImapState(tenantId, {
+        uidValidity: previous?.uidValidity ?? null, lastUid: previous?.lastUid ?? null, checkedAt: new Date().toISOString(), error: String(error.message).slice(0, 200), imported: 0
+      });
+      return { configured: true, error: String(error.message).slice(0, 200) };
+    }
+  } finally {
+    mailboxBusy.delete(tenantId);
+  }
+}
+
+let mailboxTimer = null;
+function startMailboxPoller() {
+  if (mailboxTimer) return;
+  const round = async () => {
+    try {
+      for (const tenantId of await listTenantIdsWithImap()) await pollMailbox(tenantId);
+    } catch (error) {
+      console.error('[mailbox] round failed:', error.message);
+    }
+  };
+  mailboxTimer = setInterval(round, IMAP_POLL_MINUTES * 60 * 1000);
+  mailboxTimer.unref();
+  setTimeout(round, 20000).unref();
+}
+
+// The company's mailbox. Checked by logging in before it is saved; the password is stored encrypted and never returned.
+// Leave the password empty to keep the saved one when only the other fields change.
+app.put('/api/settings/imap', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  const { host, port, user, password, mailbox } = req.body || {};
+  const hostName = typeof host === 'string' ? host.trim().toLowerCase() : '';
+  const portNumber = port === undefined || port === '' || port === null ? 993 : Number(port);
+  const userName = typeof user === 'string' ? user.trim() : '';
+  const folder = typeof mailbox === 'string' && mailbox.trim() ? mailbox.trim() : 'INBOX';
+  if (!/^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$/.test(hostName) || !hostName.includes('.') && hostName !== 'localhost') {
+    return res.status(400).json({ success: false, message: 'Enter the mail server name, for example imap.gmail.com.' });
+  }
+  if (!Number.isInteger(portNumber) || portNumber < 1 || portNumber > 65535) return res.status(400).json({ success: false, message: 'The port must be a number (usually 993).' });
+  if (!userName || userName.length > 254 || folder.length > 100 || /[\r\n\0]/.test(userName + folder)) {
+    return res.status(400).json({ success: false, message: 'Enter the mailbox user name (usually the full email address).' });
+  }
+  try {
+    const tenant = await getTenant(req.user.tenantId);
+    let secret = typeof password === 'string' ? password : '';
+    if (!secret && tenant.imapSettings?.host === hostName && tenant.imapSettings?.user === userName) secret = tenant.imapSettings.password;
+    if (!secret || secret.length > 500 || /[\r\n\0]/.test(secret)) {
+      return res.status(400).json({ success: false, message: 'Enter the mailbox password (for Gmail and Outlook, an app password).' });
+    }
+    const settings = { host: hostName, port: portNumber, user: userName, password: secret, mailbox: folder };
+    const check = await imap.checkAccess(settings);
+    if (!check.ok) return res.status(400).json({ success: false, message: `The mailbox could not be opened: ${check.reason}` });
+    await setTenantImapSettings(req.user.tenantId, settings);
+    // Remember the current end of the mailbox now, so only emails that arrive from this moment are read.
+    pollMailbox(req.user.tenantId).catch(() => {});
+    return res.json({ success: true, mailbox: mailboxStatus({ imapSettings: settings, imapState: null }) });
+  } catch (error) {
+    return sendError(res, error, 'Mailbox settings could not be saved.', 'imap settings');
+  }
+});
+
+app.delete('/api/settings/imap', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    await setTenantImapSettings(req.user.tenantId, null);
+    return res.json({ success: true });
+  } catch (error) {
+    return sendError(res, error, 'Mailbox could not be removed.', 'imap remove');
+  }
+});
+
+// "Check now": do not wait for the next round.
+app.post('/api/settings/imap/check', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  try {
+    const result = await pollMailbox(req.user.tenantId);
+    if (result.configured === false) return res.status(400).json({ success: false, message: 'No mailbox is connected.' });
+    if (result.busy) return res.status(409).json({ success: false, message: 'The mailbox is being checked right now. Try again in a moment.' });
+    if (result.error) return res.status(502).json({ success: false, message: `The mailbox could not be read: ${result.error}` });
+    return res.json({ success: true, imported: result.imported, skipped: result.skipped });
+  } catch (error) {
+    return sendError(res, error, 'Mailbox could not be checked.', 'imap check');
   }
 });
 
@@ -1507,6 +1666,85 @@ app.delete('/api/shipments/:id/documents/:docId', authMiddleware, requirePermiss
   }
 });
 
+// A person says what a file really is (the name and the email can only be guessed).
+app.patch('/api/shipments/:id/documents/:docId', authMiddleware, requirePermission('shipments:document'), async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  const docId = Number(req.params.docId);
+  const type = req.body?.type;
+  if (!shipmentId || !Number.isInteger(docId) || docId <= 0 || !vaultAgent.DOC_TYPES.includes(type)) {
+    return res.status(400).json({ success: false, message: `A valid document and a type (${vaultAgent.DOC_TYPES.join(', ')}) are required.` });
+  }
+  try {
+    const document = await getDocument(req.user.tenantId, shipmentId, docId);
+    if (!document) return res.status(404).json({ success: false, message: 'Document not found.' });
+    if (document.type === type) return res.json({ success: true, document });
+    await setDocumentType(req.user.tenantId, shipmentId, docId, type);
+    // Old differences belong to the old type; a CMR / proof of delivery is read again, anything else is not.
+    await resolveTasksByKey(req.user.tenantId, `doc:${docId}`, { status: 'dismissed', userId: req.user.id });
+    await updateDocumentExtraction(req.user.tenantId, docId, { status: 'pending' });
+    nexus.emit('document.uploaded', { tenantId: req.user.tenantId, shipmentId, documentId: docId });
+    return res.json({ success: true, document: await getDocument(req.user.tenantId, shipmentId, docId) });
+  } catch (error) {
+    return sendError(res, error, 'Document could not be changed.', 'document type');
+  }
+});
+
+/* =========================================================
+   MARKET PRICES (what PULSE compares with)
+   ========================================================= */
+app.get('/api/market-rates', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  try {
+    res.json({ success: true, rates: await listMarketRates(req.user.tenantId) });
+  } catch (error) {
+    return sendError(res, error, 'Market prices unavailable.', 'market rates');
+  }
+});
+
+// One line per lane: "Origin; Destination; Equipment (optional); Price". Each line is checked on its own;
+// good lines are saved, bad lines are reported back with their number.
+app.post('/api/market-rates', authMiddleware, requirePermission('carriers:write'), async (req, res) => {
+  const text = req.body?.lines;
+  if (typeof text !== 'string' || !text.trim() || text.length > 100000) {
+    return res.status(400).json({ success: false, message: 'Paste one lane per line: Origin; Destination; Equipment (optional); Price.' });
+  }
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length > 500) return res.status(400).json({ success: false, message: 'At most 500 lines at once.' });
+  const errors = [];
+  let created = 0;
+  let updated = 0;
+  try {
+    for (const [index, line] of lines.entries()) {
+      const parts = line.split(/[;\t]/).map((part) => part.trim());
+      const [origin, destination] = parts;
+      const rawRate = parts.length >= 4 ? parts[3] : parts[2];
+      const equipment = parts.length >= 4 ? parts[2] : '';
+      const rate = parseMoney(String(rawRate || '').replace(/\s/g, '').replace(',', '.'));
+      if (parts.length < 3 || parts.length > 4 || !origin || !destination || origin.length > MAX_LEN.origin || destination.length > MAX_LEN.destination) {
+        errors.push({ line: index + 1, message: 'Use: Origin; Destination; Equipment (optional); Price.' });
+      } else if (equipment && !EQUIPMENT.includes(equipment)) {
+        errors.push({ line: index + 1, message: `Equipment must be one of: ${EQUIPMENT.join(', ')}.` });
+      } else if (rate === null) {
+        errors.push({ line: index + 1, message: `The price must be between 0.01 and ${MAX_RATE.toLocaleString('en-US')}.` });
+      } else if ((await upsertMarketRate(req.user.tenantId, { origin, destination, equipment, rate })) === 'created') created += 1;
+      else updated += 1;
+    }
+    return res.json({ success: true, created, updated, errors });
+  } catch (error) {
+    return sendError(res, error, 'Market prices could not be saved.', 'market rates save');
+  }
+});
+
+app.delete('/api/market-rates/:id', authMiddleware, requirePermission('carriers:write'), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ success: false, message: 'Valid ID is required.' });
+  try {
+    if (!(await deleteMarketRate(req.user.tenantId, id))) return res.status(404).json({ success: false, message: 'Not found.' });
+    return res.json({ success: true });
+  } catch (error) {
+    return sendError(res, error, 'Market price could not be deleted.', 'market rate delete');
+  }
+});
+
 /* =========================================================
    AI AGENTS
    ========================================================= */
@@ -1552,7 +1790,14 @@ app.get('/api/agents/route/:id', authMiddleware, requirePermission('shipments:re
   const shipmentId = parseShipmentId(req.params.id);
   if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
   try {
-    return res.json({ success: true, ...routeAgent.planRoute(await getRouteData(req.user.tenantId, shipmentId)) });
+    const data = await getRouteData(req.user.tenantId, shipmentId);
+    // The map is a bonus: when it is off or fails, the advice still comes from the company's own history.
+    try {
+      data.map = await geo.route(data.shipment.origin, data.shipment.destination);
+    } catch (error) {
+      console.error('[route] map unavailable:', error.message);
+    }
+    return res.json({ success: true, ...routeAgent.planRoute(data) });
   } catch (error) {
     return sendError(res, error, 'Route advice unavailable.', 'route');
   }
@@ -1578,7 +1823,8 @@ app.get('/api/agents/pulse/:id', authMiddleware, requirePermission('shipments:re
 // SENTINEL: every open load of this company that is at risk right now, worst first.
 app.get('/api/agents/sentinel', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
   try {
-    const risks = sentinelAgent.assess(await listSentinelLoads(req.user.tenantId), { staleHours: STALE_TRACKING_HOURS });
+    const loads = await geo.annotateOffRoute(await listSentinelLoads(req.user.tenantId));
+    const risks = sentinelAgent.assess(loads, { staleHours: STALE_TRACKING_HOURS, offRouteKm: geo.offRouteKm() });
     return res.json({ success: true, risks: risks.slice(0, 200), total: risks.length });
   } catch (error) {
     return sendError(res, error, 'Risk check unavailable.', 'sentinel');
@@ -1802,6 +2048,8 @@ app.get('/api/integrations/status', authMiddleware, requirePermission('users:rea
       inbox: { configured: Boolean(tenant?.inboxTokenHash), pathPrefix: INBOX_WEBHOOK_PREFIX, allowedSenders: tenant?.allowedSenders || [], dailyLimit: INBOX_DAILY_LIMIT,
         maxMb: INBOX_MAX_BYTES / (1024 * 1024), maxFiles: INBOX_MAX_ATTACHMENTS },
       documents: { reads: aiGateway.isEnabled(), maxMb: DOC_MAX_BYTES / (1024 * 1024) },
+      map: { enabled: geo.enabled(), offRouteKm: geo.offRouteKm() },
+      mailbox: mailboxStatus(tenant),
       nexus: { enabled: process.env.NEXUS_ENABLED !== 'false', staleHours: STALE_TRACKING_HOURS, aiDailyLimit: AI_DAILY_LIMIT_PER_TENANT }
     });
   } catch (error) {
@@ -2024,6 +2272,7 @@ function startServer() {
       const server = app.listen(PORT, HOST, () => {
         console.log(`VEYRA API running at http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT} (${isProduction ? 'production' : 'development'}, ${WEIGHT_UNIT}, ${CURRENCY}, sign-up: ${REGISTRATION_MODE}, AI: ${aiGateway.isEnabled() ? 'on' : 'off'}, messaging: ${messaging.channelsOf(messaging.envConfig()).join('+') || 'per company only'}, NEXUS: ${process.env.NEXUS_ENABLED === 'false' ? 'off' : 'on'})`);
         nexus.startSweeper();
+        startMailboxPoller();
         if (!isProduction) {
           console.warn('[VEYRA] Development mode: demo accounts with public passwords exist. Never expose this server to the internet.');
         }

@@ -9,9 +9,9 @@ const DAY = 24 * 60 * 60 * 1000;
 const SEVERITY_ORDER = { high: 0, medium: 1, low: 2 };
 // Risks that get their own task in Inbox & tasks. Silent trucks, exceptions and failed messages
 // already get a task from NEXUS, so they are listed here but not duplicated.
-const TASK_RISKS = ['no_carrier', 'late_pickup', 'late_delivery', 'eta_after_delivery', 'missing_driver'];
+const TASK_RISKS = ['no_carrier', 'late_pickup', 'late_delivery', 'eta_after_delivery', 'missing_driver', 'off_route'];
 
-function assessLoad(load, { now = Date.now(), staleHours = 12 } = {}) {
+function assessLoad(load, { now = Date.now(), staleHours = 12, offRouteKm = 60 } = {}) {
   const today = Math.floor(now / DAY) * DAY;
   const pickup = parseDay(load.pickup);
   const delivery = parseDay(load.delivery);
@@ -47,6 +47,11 @@ function assessLoad(load, { now = Date.now(), staleHours = 12 } = {}) {
   const lastSeen = parseDbTime(load.lastSignOfLife);
   if (['Dispatched', 'In Transit'].includes(load.status) && lastSeen !== null && now - lastSeen > staleHours * 60 * 60 * 1000) {
     add('silent', 'medium', `${label}: no location update for ${Math.floor((now - lastSeen) / (60 * 60 * 1000))} h`, 'Ask the driver where the truck is.');
+  }
+  // Only known when the map service is on and the truck sent a fresh GPS position (see integrations/geo.js).
+  if (load.status === 'In Transit' && Number.isFinite(load.offRouteKm) && load.offRouteKm > offRouteKm) {
+    add('off_route', 'medium', `${label}: the truck is about ${load.offRouteKm} km away from the road to ${load.destination}`,
+      'Call the driver. It may be a detour, a rest stop or a wrong turn.');
   }
   if (load.status === 'Exception') {
     add('exception', 'high', `${label} is in Exception`, 'Solve the problem, then move the load on.');

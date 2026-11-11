@@ -5,6 +5,8 @@
 // It only advises. Nothing is changed on the load.
 const MIN_SAMPLES = 3;
 const HOUR = 60 * 60 * 1000;
+// Driving time from the map x this = a realistic trip with rests (an assumption, shown as such).
+const REST_FACTOR = 1.35;
 
 // SQLite stores UTC as "YYYY-MM-DD HH:MM:SS".
 function parseDbTime(value) {
@@ -58,23 +60,30 @@ function planRoute(data) {
   const allowedHours = pickupDay !== null && deliveryDay !== null ? (deliveryDay - pickupDay) / HOUR + 24 : null;
   const deadline = deliveryDay === null ? null : deliveryDay + 24 * HOUR;
 
+  // With a map, the road gives a first estimate when the company has no history on the lane yet:
+  // driving time plus a rest allowance (drivers must rest; borders and loading take time too).
+  const map = data.map || null;
+  const mapHours = map ? round1(map.durationHours * REST_FACTOR) : null;
+  const expected = typical !== null ? typical : mapHours;
+  const expectedBasis = typical !== null ? 'this lane usually takes' : 'by road it takes about';
+
   let schedule = { verdict: 'unknown', text: `Not enough history on this lane yet (${durations.length} of ${MIN_SAMPLES} delivered loads needed).` };
-  if (typical !== null && allowedHours !== null) {
-    schedule = allowedHours < typical
-      ? { verdict: 'tight', text: `The dates allow ${humanDuration(allowedHours)}, but this lane usually takes ${humanDuration(typical)}. Agree a later delivery date or expect a delay.` }
-      : { verdict: 'ok', text: `The dates allow ${humanDuration(allowedHours)}; this lane usually takes ${humanDuration(typical)}.` };
+  if (expected !== null && allowedHours !== null) {
+    schedule = allowedHours < expected
+      ? { verdict: 'tight', text: `The dates allow ${humanDuration(allowedHours)}, but ${expectedBasis} ${humanDuration(expected)}. Agree a later delivery date or expect a delay.` }
+      : { verdict: 'ok', text: `The dates allow ${humanDuration(allowedHours)}; ${expectedBasis} ${humanDuration(expected)}.` };
   }
 
   // Estimated arrival: from the moment the truck left, otherwise from the planned pickup day.
   let arrival = null;
-  if (typical !== null && !['Delivered', 'Cancelled'].includes(shipment.status)) {
+  if (expected !== null && !['Delivered', 'Cancelled'].includes(shipment.status)) {
     const started = parseDbTime(data.startedAt);
     const from = started !== null ? started : (pickupDay !== null ? pickupDay + 8 * HOUR : null);
     if (from !== null) {
-      const at = from + typical * HOUR;
+      const at = from + expected * HOUR;
       arrival = {
         at: new Date(at).toISOString(),
-        basis: started !== null ? 'from the time the truck left' : 'from the planned pickup day',
+        basis: `${started !== null ? 'from the time the truck left' : 'from the planned pickup day'}${typical === null ? ', estimated from the map' : ''}`,
         late: deadline !== null && at > deadline
       };
     }
@@ -102,7 +111,13 @@ function planRoute(data) {
     .filter((item) => item && !seen.has(item.carrierId) && seen.add(item.carrierId))
     .slice(0, 3);
 
-  return { lane, schedule, arrival, returnTrucks };
+  return {
+    lane,
+    map: map ? { distanceKm: map.distanceKm, drivingHours: map.durationHours, withRestsHours: mapHours } : null,
+    schedule,
+    arrival,
+    returnTrucks
+  };
 }
 
 module.exports = { planRoute, MIN_SAMPLES, parseDay, parseDbTime, median };

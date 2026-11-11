@@ -472,6 +472,32 @@
                     <button class="btn btn-primary small" type="submit">Save</button>
                   </div>
                 </form>
+                <form class="settings-form hidden" id="mailboxForm" autocomplete="off">
+                  <strong>Order mailbox (IMAP)</strong>
+                  <small>VEYRA reads new emails of this mailbox itself, as if they were sent to your inbox address. Mail already in the mailbox is not imported, and nothing in it is changed or marked as read. Use an app password (Gmail, Outlook) and leave the password empty to keep the saved one.</small>
+                  <label>Mail server<input name="host" maxlength="253" placeholder="imap.gmail.com" required /></label>
+                  <label>Port<input name="port" type="number" min="1" max="65535" value="993" /></label>
+                  <label>User name<input name="user" maxlength="254" placeholder="orders@yourcompany.com" required /></label>
+                  <label>Password<input name="password" type="password" maxlength="500" autocomplete="new-password" /></label>
+                  <label>Folder<input name="mailbox" maxlength="100" value="INBOX" /></label>
+                  <div class="settings-form-footer">
+                    <p class="shipment-form-message" id="mailboxMessage" role="status"></p>
+                    <span class="message-actions">
+                      <button class="btn btn-ghost small hidden" type="button" id="mailboxRemove">Disconnect</button>
+                      <button class="btn btn-primary small" type="submit">Connect</button>
+                    </span>
+                  </div>
+                </form>
+                <form class="settings-form hidden" id="marketRatesForm" autocomplete="off">
+                  <strong>Market prices (for PULSE)</strong>
+                  <small>Prices from your broker or a freight exchange. One lane per line: Origin; Destination; Equipment (optional); Price. A line for the same lane replaces the old price.</small>
+                  <label>Lanes<textarea name="lines" rows="4" maxlength="100000" placeholder="Tashkent, UZ; Almaty, KZ; Tent / Curtainsider; 1800"></textarea></label>
+                  <div class="settings-form-footer">
+                    <p class="shipment-form-message" id="marketRatesMessage" role="status"></p>
+                    <button class="btn btn-primary small" type="submit">Save prices</button>
+                  </div>
+                  <div class="market-rate-list" id="marketRateList"></div>
+                </form>
               </div>
               <div class="admin-box hidden" id="companiesBox">
                 <div class="mini-head"><span><strong>Companies</strong><small>Each customer company sees only its own data</small></span><button class="btn btn-ghost small" type="button" id="addCompanyToggle" aria-expanded="false" aria-controls="addCompanyForm">Add company</button></div>

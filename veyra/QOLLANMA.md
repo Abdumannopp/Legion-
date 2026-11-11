@@ -166,11 +166,36 @@ ROUTE, PULSE va SENTINEL sun'iy intellekt kalitisiz ishlaydi: ular faqat
 sizning o'z yuklaringiz tarixiga qaraydi. Shuning uchun yo'nalishda kamida
 3 ta yetkazilgan yuk bo'lmaguncha ROUTE va PULSE "ma'lumot yetarli emas" deydi.
 
+## Pochta qutisini o'qish, xarita va bozor narxlari
+
+- **Pochta qutisi (IMAP).** "Integrations → Order mailbox" da pochta serveri
+  (masalan `imap.gmail.com`), foydalanuvchi nomi va parolni kiritasiz. Gmail va
+  Outlook uchun oddiy parol emas, "app password" (ilova paroli) kerak. VEYRA
+  ulashdan oldin kirib ko'radi; parol shifrlab saqlanadi va hech qachon
+  ko'rsatilmaydi. Keyin har 5 daqiqada yangi xatlarni o'zi o'qiydi, xuddi inbox
+  manziliga kelgandek (CMR yukka qo'shiladi, buyurtma vazifaga aylanadi).
+  Ulashdan oldingi eski xatlar olinmaydi; qutidagi hech narsa o'zgarmaydi va
+  "o'qilgan" deb belgilanmaydi. Shaxsiy (ichki) tarmoq manzillari xavfsizlik
+  uchun rad etiladi.
+- **Fayl turini almashtirish.** Hujjat kartasida tur ro'yxati bor: noto'g'ri
+  taxmin qilingan bo'lsa tanlab qo'yasiz, CMR/POD bo'lsa qaytadan o'qiladi.
+- **Xarita (masofa, yo'ldan chetga chiqish).** Sukut bo'yicha O'CHIRILGAN, chunki
+  yuk shaharlari nomlari OpenStreetMap xizmatlariga yuboriladi. Yoqish uchun
+  serverda `GEO_PROVIDER=osm`. Keyin ROUTE yuk oynasida yo'l masofasini va
+  haydash vaqtini ko'rsatadi (tarix bo'lmasa shundan taxmin qiladi), SENTINEL
+  esa GPS bor mashina yo'ldan 60 km (`OFF_ROUTE_KM`) dan uzoqlashsa ogohlantiradi.
+  Ommaviy xizmatlar yengil foydalanish uchun; har bir yo'nalish bir marta
+  so'raladi va saqlanadi.
+- **Bozor narxlari.** "Integrations → Market prices" da brokeringiz yoki yuk
+  birjasidagi narxlarni qo'lda kiritasiz (har qatorda: `Yo'nalish boshi; oxiri;
+  mashina turi (ixtiyoriy); narx`). PULSE ularni o'z tarixingiz bilan birga
+  ko'rsatadi va narx bozordan 30% dan qimmat bo'lsa ogohlantiradi.
+
 ## Hali yo'q narsalar
 
-- Sizning serveringizda email qutisini to'g'ridan-to'g'ri o'qish (IMAP).
-- Xarita bo'yicha masofa va yo'ldan chetga chiqishni aniqlash (ROUTE va
-  SENTINEL xarita xizmatidan foydalanmaydi).
-- Tashqi bozor narxlari (PULSE faqat sizning o'z yuklaringizni biladi).
-- Xatdagi fayl turi noto'g'ri taxmin qilinsa, uni almashtirish tugmasi
-  (hozircha faylni o'chirib, to'g'ri tur bilan qayta yuklaysiz).
+- Bozor narxlarini internetdan avtomatik olish (ochiq va ishonchli bepul manba
+  yo'q; hozircha qo'lda kiritiladi).
+- Pochtani IMAP'siz o'qish (Gmail/Outlook API orqali ulash).
+- Xaritada yo'l tirbandligi va chegara kutish vaqtini hisobga olish.
+- IMAP va xarita qismi haqiqiy pochta serveri va OpenStreetMap bilan hali
+  sinalmagan: faqat soxta server bilan tekshirilgan.

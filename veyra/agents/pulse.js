@@ -47,7 +47,15 @@ function analyzePrices(data, { rate = null, customerRate = null, formatMoney = (
     suggestionBasis = `typical customer price on ${customer.loads} past loads`;
   }
 
+  const marketRate = data.marketRate || null;
+  const market = marketRate ? { rate: marketRate.rate, equipment: marketRate.equipment, updatedAt: marketRate.updatedAt } : null;
+  // Without enough own history, a known market price is the next best suggestion for the carrier side.
   const flags = [];
+  if (paid && market) {
+    const difference = (paid - market.rate) / market.rate;
+    if (difference > UNUSUAL_SHARE) flags.push({ code: 'above_market', level: 'warn', text: `The carrier price ${formatMoney(paid)} is ${Math.round(difference * 100)}% above the market price you entered (${formatMoney(market.rate)}).` });
+    else if (difference < -UNUSUAL_SHARE) flags.push({ code: 'below_market', level: 'info', text: `The carrier price ${formatMoney(paid)} is ${Math.round(-difference * 100)}% below the market price you entered (${formatMoney(market.rate)}).` });
+  }
   if (paid && carrier) {
     const difference = (paid - carrier.typical) / carrier.typical;
     if (difference > UNUSUAL_SHARE) flags.push({ code: 'carrier_high', level: 'warn', text: `The carrier price ${formatMoney(paid)} is ${Math.round(difference * 100)}% above the usual ${formatMoney(carrier.typical)} on this lane.` });
@@ -74,7 +82,8 @@ function analyzePrices(data, { rate = null, customerRate = null, formatMoney = (
     suggestionBasis,
     margin,
     flags,
-    enoughHistory: Boolean(carrier || customer)
+    market,
+    enoughHistory: Boolean(carrier || customer || market)
   };
 }
 

@@ -915,6 +915,13 @@ async function loadIntegrationsPanel() {
           : 'Add OPENROUTER_API_KEY to the server settings to read orders and documents with AI.'),
       integrationRow('NEXUS (orchestrator)', status.nexus.enabled,
         status.nexus.enabled ? 'Prepares tasks from emails, bookings and quiet trucks. It never sends, books or changes anything on its own.' : 'Off (NEXUS_ENABLED=false).'),
+      integrationRow('Order mailbox (IMAP)', status.mailbox.configured,
+        status.mailbox.configured
+          ? `${status.mailbox.user} on ${status.mailbox.host} · ${status.mailbox.lastError ? `last check failed: ${status.mailbox.lastError}` : (status.mailbox.lastCheckedAt ? `checked ${formatTimestamp(status.mailbox.lastCheckedAt)}, ${status.mailbox.lastImported || 0} new` : 'not checked yet')} · every ${status.mailbox.pollMinutes} min`
+          : 'Connect a mailbox and VEYRA reads orders from it by itself. No forwarding set-up needed.',
+        admin ? button(status.mailbox.configured ? 'Change' : 'Connect', () => toggleMailboxForm(status.mailbox)) : null),
+      integrationRow('Map (distance, off-route)', status.map.enabled,
+        status.map.enabled ? `OpenStreetMap services · a truck more than ${status.map.offRouteKm} km from the road is flagged (needs GPS)` : 'Off. Set GEO_PROVIDER=osm on the server to add road distance and off-route warnings. Place names of loads are then sent to OpenStreetMap services.'),
       integrationRow('SCOUT, ROUTE, PULSE, SENTINEL', true, 'Built in, no key needed: carrier ranking, schedule check, price check and risk watch, all from your own loads.'),
       integrationRow('SMS / WhatsApp (RELAY)', messagingChannels.length > 0,
         messagingChannels.length
@@ -928,6 +935,12 @@ async function loadIntegrationsPanel() {
         status.gps.configured ? `Connected · positions every ${status.gps.minIntervalMinutes} min are saved` : 'Create a token and give it to your GPS provider.',
         admin ? button(status.gps.configured ? 'New GPS token' : 'Create GPS token', createGpsToken) : null)
     );
+    document.getElementById('mailboxRemove')?.classList.toggle('hidden', !status.mailbox.configured);
+    const marketForm = document.getElementById('marketRatesForm');
+    if (marketForm) {
+      marketForm.classList.toggle('hidden', !hasPermission('carriers:write'));
+      if (hasPermission('carriers:write')) loadMarketRates();
+    }
     const inboxForm = document.getElementById('inboxSettingsForm');
     if (inboxForm) {
       inboxForm.classList.toggle('hidden', !admin || !status.inbox.configured);
@@ -937,6 +950,42 @@ async function loadIntegrationsPanel() {
     if (removeButton) removeButton.classList.toggle('hidden', status.messaging.source !== 'company');
   } catch (error) {
     list.replaceChildren(createTextElement('p', 'muted', `Integrations unavailable: ${error.message}`));
+  }
+}
+
+async function loadMarketRates() {
+  const list = document.getElementById('marketRateList');
+  if (!list) return;
+  try {
+    const response = await fetch('/api/market-rates', { headers: getAuthHeaders() });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || 'Unavailable');
+    const rows = result.rates.map((rate) => {
+      const row = createTextElement('div', 'market-rate-row');
+      const remove = createTextElement('button', 'btn btn-ghost small', 'Remove');
+      remove.type = 'button';
+      remove.addEventListener('click', async () => {
+        await fetch(`/api/market-rates/${Number(rate.id)}`, { method: 'DELETE', headers: getAuthHeaders() });
+        loadMarketRates();
+      });
+      row.append(createTextElement('span', '', `${rate.origin} → ${rate.destination}${rate.equipment ? ` · ${rate.equipment}` : ''}`), createTextElement('strong', '', formatMoney(rate.rate)), remove);
+      return row;
+    });
+    list.replaceChildren(...(rows.length ? rows : [createTextElement('p', 'muted', 'No market prices yet.')]));
+  } catch (error) {
+    list.replaceChildren(createTextElement('p', 'muted', `Market prices unavailable: ${error.message}`));
+  }
+}
+
+function toggleMailboxForm(mailbox) {
+  const form = document.getElementById('mailboxForm');
+  if (!form) return;
+  const open = form.classList.toggle('hidden') === false;
+  if (open) {
+    form.elements.host.value = mailbox.host || '';
+    form.elements.user.value = mailbox.user || '';
+    form.elements.mailbox.value = mailbox.mailbox || 'INBOX';
+    form.elements.host.focus();
   }
 }
 
@@ -1016,6 +1065,54 @@ function bindIntegrationForms() {
       loadIntegrationsPanel();
     } catch (error) {
       notify(error.message, 'error');
+    }
+  });
+
+  const mailboxForm = document.getElementById('mailboxForm');
+  const mailboxMessage = document.getElementById('mailboxMessage');
+  mailboxForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    mailboxMessage.textContent = 'Checking the mailbox…';
+    const form = mailboxForm.elements;
+    try {
+      const response = await fetch('/api/settings/imap', {
+        method: 'PUT', headers: getAuthHeaders(),
+        body: JSON.stringify({ host: form.host.value, port: form.port.value, user: form.user.value, password: form.password.value, mailbox: form.mailbox.value })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Could not save');
+      form.password.value = '';
+      mailboxMessage.textContent = '';
+      mailboxForm.classList.add('hidden');
+      notify('Mailbox connected. New emails from now on are read.', 'ok');
+      loadIntegrationsPanel();
+    } catch (error) {
+      mailboxMessage.textContent = error.message;
+    }
+  });
+  document.getElementById('mailboxRemove')?.addEventListener('click', async () => {
+    if (!window.confirm('Disconnect the mailbox? VEYRA stops reading it.')) return;
+    await fetch('/api/settings/imap', { method: 'DELETE', headers: getAuthHeaders() });
+    mailboxForm.classList.add('hidden');
+    loadIntegrationsPanel();
+  });
+
+  const marketForm = document.getElementById('marketRatesForm');
+  const marketMessage = document.getElementById('marketRatesMessage');
+  marketForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    marketMessage.textContent = '';
+    try {
+      const response = await fetch('/api/market-rates', { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ lines: marketForm.elements.lines.value }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Could not save');
+      const problems = (result.errors || []).map((entry) => `line ${entry.line}: ${entry.message}`);
+      marketMessage.textContent = problems.length ? `Saved ${result.created + result.updated}. Not saved — ${problems.slice(0, 3).join(' ')}` : '';
+      if (!problems.length) marketForm.elements.lines.value = '';
+      notify(`${result.created} added, ${result.updated} updated.`, problems.length ? 'info' : 'ok');
+      loadMarketRates();
+    } catch (error) {
+      marketMessage.textContent = error.message;
     }
   });
 
@@ -1378,6 +1475,28 @@ function documentCard(shipmentId, doc, canRead, canDelete) {
     href: `/api/shipments/${encodeURIComponent(shipmentId)}/documents/${Number(doc.id)}/file`
   });
   buttons.append(download);
+  if (hasPermission('shipments:document')) {
+    // A file's type is only guessed when it comes by email: a person can correct it.
+    const typeSelect = createTextElement('select', 'doc-type-select');
+    typeSelect.setAttribute('aria-label', 'Document type');
+    Object.entries(DOC_TYPE_LABELS).forEach(([value, label]) => {
+      const option = createTextElement('option', '', label);
+      option.value = value;
+      typeSelect.append(option);
+    });
+    typeSelect.value = doc.type;
+    typeSelect.addEventListener('change', async () => {
+      typeSelect.disabled = true;
+      try {
+        const response = await fetch(`/api/shipments/${encodeURIComponent(shipmentId)}/documents/${Number(doc.id)}`, { method: 'PATCH', headers: getAuthHeaders(), body: JSON.stringify({ type: typeSelect.value }) });
+        if (!response.ok) throw new Error((await response.json()).message || 'Could not change the type');
+      } catch (error) {
+        notify(error.message, 'error');
+      }
+      loadDocuments(shipmentId);
+    });
+    buttons.append(typeSelect);
+  }
   if (canRead && ['skipped', 'failed'].includes(doc.extractionStatus) && ['cmr', 'pod'].includes(doc.type)) {
     const read = createTextElement('button', 'btn btn-ghost small', 'Read with AI');
     read.type = 'button';
@@ -1696,7 +1815,8 @@ async function loadShipmentAdvice(shipment) {
     const blocks = [];
     if (routeResponse.ok) {
       const route = await routeResponse.json();
-      const lines = [[route.schedule.text, route.schedule.verdict === 'tight' ? 'warn-line' : (route.schedule.verdict === 'unknown' ? 'muted' : '')]];
+      const lines = route.map ? [[`By road: ${route.map.distanceKm} km, ${route.map.drivingHours} h of driving (about ${route.map.withRestsHours} h with rests).`]] : [];
+      lines.push([route.schedule.text, route.schedule.verdict === 'tight' ? 'warn-line' : (route.schedule.verdict === 'unknown' ? 'muted' : '')]);
       if (route.arrival) {
         lines.push([`Probable arrival: ${formatTimestamp(route.arrival.at)} (${route.arrival.basis})${route.arrival.late ? ' — after the promised delivery day' : ''}.`, route.arrival.late ? 'warn-line' : '']);
       }
