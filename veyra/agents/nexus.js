@@ -15,6 +15,8 @@ const flowAgent = require('./flow');
 const scoutAgent = require('./scout');
 const relayAgent = require('./relay');
 const vaultAgent = require('./vault');
+const pulseAgent = require('./pulse');
+const sentinelAgent = require('./sentinel');
 
 const defaults = {
   flow: { weightUnit: 'kg', currency: 'USD', equipment: [], maxRate: 10000000, maxWeight: 1000000 },
@@ -64,6 +66,8 @@ async function handle(event, context) {
     case 'shipment.status': return onShipmentStatus(context);
     case 'shipment.dispatched': return onShipmentDispatched(context);
     case 'document.uploaded': return onDocumentUploaded(context);
+    case 'inbox.attached': return onInboxAttached(context);
+    case 'message.failed': return onMessageFailed(context);
     default: return undefined;
   }
 }
@@ -74,7 +78,10 @@ async function onInboxReceived({ tenantId, inboxId }) {
   if (!item) return;
   let parsed = item.parsed;
   let note = null;
-  if (item.status === 'new') {
+  const files = (item.attachments || []).map((file) => ({ id: file.id, filename: file.filename, size: file.size }));
+  if (item.status === 'new' && !item.body.trim()) {
+    note = 'This email has only files, no text. Attach them to a load, or create a new load.';
+  } else if (item.status === 'new') {
     const ai = await aiAvailable(tenantId);
     if (!ai.ok) {
       note = ai.reason;
@@ -97,7 +104,46 @@ async function onInboxReceived({ tenantId, inboxId }) {
     title,
     inboxId,
     dedupeKey: `inbox:${inboxId}`,
-    payload: { from: item.from, subject: item.subject, preview: item.body.slice(0, 300), parsed, note }
+    payload: { from: item.from, subject: item.subject, preview: item.body.slice(0, 300), parsed, note, files }
+  });
+}
+
+/* ---------- an email's files were put on a load ---------- */
+// The email named a load (SHP-12 or its reference), so its files went straight to that load's documents.
+// A person is told, and each file is read like any uploaded document.
+async function onInboxAttached({ tenantId, inboxId, shipmentId, documentIds = [], skipped = 0, from = '' }) {
+  if (documentIds.length || skipped) {
+    const count = documentIds.length;
+    await db.createTask(tenantId, {
+      kind: 'attention',
+      title: count
+        ? `${count} file${count === 1 ? '' : 's'} from an email ${count === 1 ? 'was' : 'were'} added to SHP-${shipmentId}`
+        : `Files from an email could not be added to SHP-${shipmentId}`,
+      shipmentId,
+      inboxId,
+      dedupeKey: `inbox:${inboxId}`,
+      payload: {
+        text: `${from ? `From ${from}. ` : ''}${count ? 'Open the load to see the documents.' : ''}${skipped ? ` ${skipped} file${skipped === 1 ? '' : 's'} did not fit: the load already has the maximum number of documents.` : ''}`.trim()
+      }
+    });
+  }
+  for (const documentId of documentIds) await onDocumentUploaded({ tenantId, shipmentId, documentId });
+}
+
+/* ---------- the provider reported that a message did not arrive ---------- */
+async function onMessageFailed({ tenantId, messageId, shipmentId, recipient, to, errorCode }) {
+  const shipment = await db.getShipment(tenantId, shipmentId);
+  if (!shipment || ['Delivered', 'Cancelled'].includes(shipment.status)) return;
+  await db.createTask(tenantId, {
+    kind: 'attention',
+    title: `The message to the ${recipient} of SHP-${shipmentId} was not delivered`,
+    shipmentId,
+    dedupeKey: `msgfail:${messageId}`,
+    payload: {
+      text: `The number ${to} did not receive it${errorCode ? ` (provider code ${errorCode})` : ''}. Check the number on the load and call instead.`,
+      carrierPhone: shipment.carrierPhone || null,
+      driverPhone: shipment.driver_phone || null
+    }
   });
 }
 
@@ -148,6 +194,18 @@ async function onShipmentDispatched({ tenantId, shipmentId }) {
   if (!shipment) return;
   for (const [recipient, purpose] of [['carrier', 'booking_confirmation'], ['customer', 'booking_confirmation'], ['driver', 'pickup_details']]) {
     await draftMessageTask(tenantId, shipment, recipient, purpose, `msg:${shipmentId}:${recipient}:booking`);
+  }
+  // PULSE: a price far from what this lane usually costs, or a load that loses money, is worth a second look.
+  const prices = pulseAgent.analyzePrices(await db.getPulseData(tenantId, shipmentId), { formatMoney: settings.formatMoney });
+  const warnings = prices.flags.filter((flag) => flag.level === 'warn');
+  if (warnings.length) {
+    await db.createTask(tenantId, {
+      kind: 'attention',
+      title: `Check the prices on SHP-${shipmentId} · ${shipment.origin} → ${shipment.destination}`,
+      shipmentId,
+      dedupeKey: `pulse:${shipmentId}`,
+      payload: { text: warnings.map((flag) => flag.text).join(' '), carrierPhone: shipment.carrierPhone || null }
+    });
   }
 }
 
@@ -231,11 +289,43 @@ async function sweep() {
   return created;
 }
 
+/* ---------- SENTINEL: loads that are about to go wrong (periodic) ---------- */
+// One task per load per kind of risk. When the risk is gone (a truck was booked, the load moved on),
+// its task closes by itself. A task a person dismissed does not come back.
+async function sentinelSweep(now = Date.now()) {
+  const loads = await db.listSentinelLoads(null);
+  const tenantOf = new Map(loads.map((load) => [load.id, load.tenantId]));
+  const active = new Set();
+  let created = 0;
+  for (const risk of sentinelAgent.assess(loads, { now, staleHours: settings.staleHours })) {
+    if (!sentinelAgent.TASK_RISKS.includes(risk.type)) continue;
+    const shipmentId = Number(risk.shipmentId.slice(4));
+    const tenantId = tenantOf.get(shipmentId);
+    // A new ETA that is late again is a new warning; everything else is raised once per load.
+    const key = `risk:${shipmentId}:${risk.type}${risk.detail ? `:${risk.detail}` : ''}`;
+    active.add(`${tenantId}|${key}`);
+    const result = await db.createTask(tenantId, {
+      kind: 'attention',
+      title: risk.title,
+      shipmentId,
+      dedupeKey: key,
+      payload: { text: risk.advice, carrierPhone: risk.carrierPhone, driverPhone: risk.driverPhone, severity: risk.severity }
+    });
+    if (result.created) created += 1;
+  }
+  for (const task of await db.listOpenTasksByKeyPrefix(null, 'risk:')) {
+    if (!active.has(`${task.tenantId}|${task.dedupeKey}`)) await db.resolveTask(task.tenantId, task.id, { status: 'done' });
+  }
+  return created;
+}
+
 let sweepTimer = null;
 
 function startSweeper(intervalMinutes = 10) {
   if (!enabled() || sweepTimer) return;
-  const run = () => sweep().catch((error) => console.error('[NEXUS] sweep failed:', error.message));
+  const run = () => sweep()
+    .then(() => sentinelSweep())
+    .catch((error) => console.error('[NEXUS] sweep failed:', error.message));
   sweepTimer = setInterval(run, intervalMinutes * 60 * 1000);
   sweepTimer.unref();
   setTimeout(run, 15000).unref();
@@ -246,4 +336,4 @@ function stopSweeper() {
   sweepTimer = null;
 }
 
-module.exports = { configure, emit, idle, sweep, startSweeper, stopSweeper };
+module.exports = { configure, emit, idle, sweep, sentinelSweep, startSweeper, stopSweeper };

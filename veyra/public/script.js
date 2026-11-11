@@ -915,14 +915,14 @@ async function loadIntegrationsPanel() {
           : 'Add OPENROUTER_API_KEY to the server settings to read orders and documents with AI.'),
       integrationRow('NEXUS (orchestrator)', status.nexus.enabled,
         status.nexus.enabled ? 'Prepares tasks from emails, bookings and quiet trucks. It never sends, books or changes anything on its own.' : 'Off (NEXUS_ENABLED=false).'),
-      integrationRow('SCOUT carrier ranking', true, 'Built in, no key needed.'),
+      integrationRow('SCOUT, ROUTE, PULSE, SENTINEL', true, 'Built in, no key needed: carrier ranking, schedule check, price check and risk watch, all from your own loads.'),
       integrationRow('SMS / WhatsApp (RELAY)', messagingChannels.length > 0,
         messagingChannels.length
-          ? `${messagingChannels.join(' + ').toUpperCase()} through ${messagingSourceText[status.messaging.source] || 'Twilio'}${status.messaging.accountHint ? ` (${status.messaging.accountHint})` : ''}`
+          ? `${messagingChannels.join(' + ').toUpperCase()} through ${messagingSourceText[status.messaging.source] || 'Twilio'}${status.messaging.accountHint ? ` (${status.messaging.accountHint})` : ''} · delivery reports (delivered / read): ${status.messaging.deliveryReports ? 'on' : 'off — set PUBLIC_URL on the server'}`
           : 'Drafts work and can be copied. To send from VEYRA, connect your Twilio account.',
         admin ? button(status.messaging.source === 'company' ? 'Change' : 'Connect Twilio', () => toggleMessagingForm(status.messaging)) : null),
       integrationRow('Email inbox', status.inbox.configured,
-        status.inbox.configured ? `Orders emailed to your inbox address become tasks · ${status.inbox.allowedSenders.length ? `${status.inbox.allowedSenders.length} allowed sender(s)` : 'any sender allowed'}` : 'Create an address and point your email provider at it.',
+        status.inbox.configured ? `Orders emailed to your inbox address become tasks; attached files (up to ${status.inbox.maxFiles} per email) go to the load · ${status.inbox.allowedSenders.length ? `${status.inbox.allowedSenders.length} allowed sender(s)` : 'any sender allowed'}` : 'Create an address and point your email provider at it.',
         admin ? button(status.inbox.configured ? 'New address' : 'Create address', createInboxAddress) : null),
       integrationRow('GPS tracking', status.gps.configured,
         status.gps.configured ? `Connected · positions every ${status.gps.minIntervalMinutes} min are saved` : 'Create a token and give it to your GPS provider.',
@@ -1588,10 +1588,17 @@ async function renderMessageList(shipmentId) {
       const item = createTextElement('div', `detail-timeline-item message-${entry.status}`);
       const content = document.createElement('div');
       const channel = entry.channel === 'whatsapp' ? 'WhatsApp' : 'SMS';
+      // The provider's delivery report, when there is one, says more than "sent".
+      const delivery = { delivered: 'delivered ✓✓', read: 'read ✓✓', failed: 'not delivered', undelivered: 'not delivered', sent: 'sent ✓', sending: 'sending…', queued: 'sending…' }[entry.deliveryStatus];
+      const state = entry.status !== 'sent' ? 'not sent' : (delivery || 'sent ✓');
+      const failed = ['failed', 'undelivered'].includes(entry.deliveryStatus);
+      if (failed) item.classList.add('message-failed');
+      if (['delivered', 'read'].includes(entry.deliveryStatus)) item.classList.add(`message-${entry.deliveryStatus}`);
       content.append(
-        createTextElement('strong', '', `${channel} to ${entry.recipientType} · ${entry.status === 'sent' ? 'sent' : 'not delivered'}`),
+        createTextElement('strong', '', `${channel} to ${entry.recipientType} · ${state}`),
         createTextElement('p', '', entry.body),
         entry.error ? createTextElement('p', 'warn-line', entry.error) : '',
+        failed ? createTextElement('p', 'warn-line', `The number did not receive this message${entry.errorCode ? ` (provider code ${entry.errorCode})` : ''}. Check the number and call instead.`) : '',
         createTextElement('time', '', `${formatTimestamp(entry.createdAt)} · ${entry.toPhone}${entry.sentBy ? ` · ${entry.sentBy}` : ''}`)
       );
       item.append(createTextElement('span', 'timeline-marker'), content);
@@ -1653,6 +1660,54 @@ function bindShipmentDetails() {
     }
     submit.disabled = false;
   });
+}
+
+/* ---------- ROUTE and PULSE: advice from the company's own past loads ---------- */
+function adviceBlock(title, lines) {
+  const block = createTextElement('div', 'advice-item');
+  block.append(createTextElement('strong', '', title));
+  lines.forEach(([text, className]) => block.append(createTextElement('p', className || '', text)));
+  return block;
+}
+
+function pulseLines(pulse) {
+  const lines = [];
+  if (pulse.carrier) lines.push([`Carriers on this lane: usually ${formatMoney(pulse.carrier.typical)} (${formatMoney(pulse.carrier.lowest)} – ${formatMoney(pulse.carrier.highest)}, ${pulse.carrier.loads} loads, ${pulse.basis}).`]);
+  if (pulse.customer) lines.push([`Customers on this lane: usually ${formatMoney(pulse.customer.typical)}.`]);
+  if (pulse.suggestedCustomerPrice) lines.push([`Suggested customer price: ${formatMoney(pulse.suggestedCustomerPrice)} — ${pulse.suggestionBasis}.`]);
+  (pulse.flags || []).forEach((flag) => lines.push([flag.text, flag.level === 'warn' ? 'warn-line' : 'muted']));
+  if (!lines.length) lines.push(['Not enough past loads on this lane to compare prices yet (3 needed).', 'muted']);
+  return lines;
+}
+window.VeyraPulseLines = pulseLines;
+window.VeyraAdviceBlock = adviceBlock;
+
+async function loadShipmentAdvice(shipment) {
+  const box = document.getElementById('shipmentAdvice');
+  if (!box) return;
+  box.replaceChildren();
+  try {
+    const id = encodeURIComponent(shipment.id);
+    const [routeResponse, pulseResponse] = await Promise.all([
+      fetch(`/api/agents/route/${id}`, { headers: getAuthHeaders() }),
+      fetch(`/api/agents/pulse/${id}`, { headers: getAuthHeaders() })
+    ]);
+    if (detailsShipmentId !== shipment.id) return;
+    const blocks = [];
+    if (routeResponse.ok) {
+      const route = await routeResponse.json();
+      const lines = [[route.schedule.text, route.schedule.verdict === 'tight' ? 'warn-line' : (route.schedule.verdict === 'unknown' ? 'muted' : '')]];
+      if (route.arrival) {
+        lines.push([`Probable arrival: ${formatTimestamp(route.arrival.at)} (${route.arrival.basis})${route.arrival.late ? ' — after the promised delivery day' : ''}.`, route.arrival.late ? 'warn-line' : '']);
+      }
+      (route.returnTrucks || []).forEach((truck) => lines.push([`Return truck: ${truck.name}${truck.phone ? `, ${truck.phone}` : ''}. ${truck.note}`]));
+      blocks.push(adviceBlock('ROUTE · schedule', lines));
+    }
+    if (pulseResponse.ok) blocks.push(adviceBlock('PULSE · prices', pulseLines(await pulseResponse.json())));
+    box.replaceChildren(...blocks);
+  } catch (_) {
+    box.replaceChildren();
+  }
 }
 
 async function openShipmentDetails(shipmentId) {
@@ -1767,6 +1822,7 @@ async function openShipmentDetails(shipmentId) {
     }
     renderMessageList(shipment.id);
     loadDocuments(shipment.id);
+    loadShipmentAdvice(shipment);
     modal.classList.remove('hidden');
   } catch (error) {
     notify(error.message, 'error');

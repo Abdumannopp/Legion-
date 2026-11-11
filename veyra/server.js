@@ -35,6 +35,16 @@ const {
   setTenantInboxAllowedSenders,
   setTenantMessagingSettings,
   createInboxItem,
+  addInboxAttachment,
+  getInboxAttachmentFile,
+  deleteInboxAttachments,
+  moveInboxAttachmentsToShipment,
+  findShipmentIdsByReference,
+  findMessageByCallbackTokenHash,
+  recordMessageDelivery,
+  getRouteData,
+  getPulseData,
+  listSentinelLoads,
   getInboxItem,
   listInboxItems,
   countInboxItemsToday,
@@ -88,7 +98,11 @@ const flowAgent = require('./agents/flow');
 const scoutAgent = require('./agents/scout');
 const relayAgent = require('./agents/relay');
 const vaultAgent = require('./agents/vault');
+const routeAgent = require('./agents/route');
+const pulseAgent = require('./agents/pulse');
+const sentinelAgent = require('./agents/sentinel');
 const nexus = require('./agents/nexus');
+const { parseInbound, senderAllowed, mentionedShipmentIds, guessDocumentType } = require('./lib/inbound-email');
 const messaging = require('./integrations/messaging');
 
 const REGISTRATION_INVITE_CODE = process.env.REGISTRATION_INVITE_CODE || '';
@@ -136,6 +150,24 @@ const AI_DAILY_LIMIT_PER_TENANT = readPositiveInteger(process.env.AI_DAILY_LIMIT
 const DOC_MAX_BYTES = readPositiveInteger(process.env.DOC_MAX_MB, 8) * 1024 * 1024;
 const DOC_MAX_PER_SHIPMENT = readPositiveInteger(process.env.DOC_MAX_PER_SHIPMENT, 20);
 const DOC_MIME_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
+// Emails with files: the whole email may be this large, and at most this many files are kept.
+const INBOX_MAX_BYTES = readPositiveInteger(process.env.INBOX_MAX_MB, 15) * 1024 * 1024;
+const INBOX_MAX_ATTACHMENTS = readPositiveInteger(process.env.INBOX_MAX_ATTACHMENTS, 5);
+// Small pictures in an email are almost always signature logos, not documents.
+const INBOX_MIN_IMAGE_BYTES = 10 * 1024;
+const TWILIO_STATUS_PREFIX = '/api/integrations/twilio/status/';
+// The public https address of this server. Twilio reports "delivered / read / failed" to it.
+// Render and Railway tell the app its address; elsewhere set PUBLIC_URL. Without it, delivery reports are off.
+const PUBLIC_URL = (() => {
+  const raw = process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL
+    || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '');
+  try {
+    const url = new URL(raw);
+    return url.protocol === 'https:' ? url.origin : null;
+  } catch (_) {
+    return null;
+  }
+})();
 // Open self-sign-up is a demo convenience. In production nobody can create an account
 // unless an invite code is configured or open registration is switched on explicitly.
 const REGISTRATION_MODE = REGISTRATION_INVITE_CODE
@@ -226,12 +258,16 @@ app.use(cors({
 // GPS providers send batches of positions, so their endpoint accepts larger bodies.
 const smallJson = express.json({ limit: '50kb' });
 const gpsJson = express.json({ limit: '1mb' });
-// Email providers post JSON or a form; both can be large (quoted threads), so the inbox webhook has its own limits.
-const inboxJson = express.json({ limit: '1mb' });
+// Email providers post JSON, a form, or a multipart form with files. These bodies can be large, so they are
+// read only inside the inbox route, after the address was checked (see parseInboxBody).
+const inboxMultipart = express.raw({ limit: INBOX_MAX_BYTES, type: (req) => /^multipart\/form-data/i.test(String(req.headers['content-type'] || '')) });
+const inboxJson = express.json({ limit: INBOX_MAX_BYTES });
 const inboxForm = express.urlencoded({ extended: false, limit: '1mb' });
+const parseInboxBody = (req, res, next) => inboxMultipart(req, res, (multipartError) => (multipartError ? next(multipartError)
+  : inboxJson(req, res, (jsonError) => (jsonError ? next(jsonError) : inboxForm(req, res, next)))));
 app.use((req, res, next) => {
   if (req.path === GPS_WEBHOOK_PATH) return gpsJson(req, res, next);
-  if (req.path.startsWith(INBOX_WEBHOOK_PREFIX)) return inboxJson(req, res, (error) => (error ? next(error) : inboxForm(req, res, next)));
+  if (req.path.startsWith(INBOX_WEBHOOK_PREFIX) || req.path.startsWith(TWILIO_STATUS_PREFIX)) return next();
   return smallJson(req, res, next);
 });
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -431,6 +467,14 @@ const inboxIpLimiter = createRateLimiter({
   message: 'Too many requests.'
 });
 
+// Twilio sends several reports per message, all from its own addresses.
+const twilioStatusLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: readPositiveInteger(process.env.TWILIO_STATUS_RATE_LIMIT_PER_MINUTE, 1200),
+  keyGenerator: (req) => `twilio-status:${getClientIp(req)}`,
+  message: 'Too many requests.'
+});
+
 const documentLimiter = createRateLimiter({
   windowMs: 60 * 60 * 1000,
   max: readPositiveInteger(process.env.DOC_RATE_LIMIT_PER_HOUR, 60),
@@ -484,7 +528,8 @@ const registerLimiter = async (req, res, next) => {
 };
 
 // The GPS webhook has its own token and limiter (providers send many requests from one address).
-app.use('/api', (req, res, next) => (req.path === '/integrations/gps' || req.path.startsWith('/integrations/inbox/') ? next() : normalApiLimiter(req, res, next)));
+app.use('/api', (req, res, next) => (req.path === '/integrations/gps' || req.path.startsWith('/integrations/inbox/') || req.path.startsWith('/integrations/twilio/')
+  ? next() : normalApiLimiter(req, res, next)));
 
 const authRateLimiters = { login: loginLimiter, register: registerLimiter };
 
@@ -930,14 +975,23 @@ app.post('/api/shipments', authMiddleware, requirePermission('shipments:create')
       tenantId: req.user.tenantId
     });
 
+    let documentsAttached = 0;
     if (inboxId !== null) {
-      await updateInboxItem(req.user.tenantId, inboxId, { status: 'converted', shipmentId: parseShipmentId(shipment.id) });
+      const newId = parseShipmentId(shipment.id);
+      await updateInboxItem(req.user.tenantId, inboxId, { status: 'converted', shipmentId: newId });
       await resolveTasksByKey(req.user.tenantId, `inbox:${inboxId}`, { userId: req.user.id });
+      // Files that came with the email go with the load.
+      const moved = await moveInboxAttachmentsToShipment(req.user.tenantId, inboxId, newId, {
+        uploadedBy: req.user.id, typeFor: (filename) => guessDocumentType(filename) || 'other', maxPerShipment: DOC_MAX_PER_SHIPMENT
+      });
+      documentsAttached = moved.documentIds.length;
+      moved.documentIds.forEach((documentId) => nexus.emit('document.uploaded', { tenantId: req.user.tenantId, shipmentId: newId, documentId }));
     }
 
     return res.status(201).json({
       success: true,
-      shipment
+      shipment,
+      documentsAttached
     });
   } catch (error) {
     console.error('[create shipment] failed:', error.message);
@@ -1057,8 +1111,13 @@ async function deliverMessage(req, shipment, { recipient, channel, body }) {
   if (!to) throw httpError(400, `There is no ${recipient} phone number on this load.`);
   const tenant = await getTenant(req.user.tenantId);
   const { config } = messaging.resolveConfig(tenant, DEFAULT_TENANT_ID);
-  const result = await messaging.send(config, { channel, to, body });
+  // A one-time secret in the report address ties Twilio's delivery report to this message.
+  const callbackToken = PUBLIC_URL ? crypto.randomBytes(24).toString('hex') : null;
+  const result = await messaging.send(config, {
+    channel, to, body, statusCallback: callbackToken ? `${PUBLIC_URL}${TWILIO_STATUS_PREFIX}${callbackToken}` : null
+  });
   const saved = await createMessage(req.user.tenantId, {
+    callbackTokenHash: callbackToken && result.status === 'sent' ? rateLimitKey(callbackToken) : null,
     shipmentId: shipment.id,
     channel,
     recipientType: recipient,
@@ -1143,6 +1202,7 @@ app.post('/api/inbox/:id/dismiss', authMiddleware, requirePermission('shipments:
   try {
     if (!(await updateInboxItem(req.user.tenantId, itemId, { status: 'dismissed' }))) return res.status(404).json({ success: false, message: 'Message not found.' });
     await resolveTasksByKey(req.user.tenantId, `inbox:${itemId}`, { status: 'dismissed', userId: req.user.id });
+    await deleteInboxAttachments(req.user.tenantId, itemId);
     return res.json({ success: true });
   } catch (error) {
     return sendError(res, error, 'Message could not be dismissed.', 'inbox dismiss');
@@ -1169,55 +1229,66 @@ function flowSettings() {
   return { weightUnit: WEIGHT_UNIT, currency: CURRENCY, equipment: EQUIPMENT, maxRate: MAX_RATE, maxWeight: MAX_WEIGHT };
 }
 
-const stripHtml = (html) => String(html)
-  .replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
-  .replace(/<br\s*\/?>/gi, '\n')
-  .replace(/<\/(p|div|tr|li|h\d)>/gi, '\n')
-  .replace(/<[^>]+>/g, ' ')
-  .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
-  .replace(/[ \t]+/g, ' ').replace(/\n\s*\n\s*\n+/g, '\n\n').trim();
-
-const firstText = (...values) => values.find((value) => typeof value === 'string' && value.trim()) || '';
-
-// Understands the shapes email providers send (Postmark, Mailgun, SendGrid-style JSON, generic).
-function normalizeInbound(body) {
-  const b = body && typeof body === 'object' ? body : {};
-  const from = firstText(b.from, b.From, b.sender, b.FromFull?.Email, b.fromEmail);
-  const text = firstText(b.text, b.TextBody, b['stripped-text'], b['body-plain'], b.body, stripHtml(firstText(b.html, b.HtmlBody, b['body-html'])));
-  return {
-    from: from.trim(),
-    subject: firstText(b.subject, b.Subject).trim(),
-    text: text.trim(),
-    messageId: firstText(b.messageId, b.MessageID, b['Message-Id'], b['message-id']).trim().slice(0, 300)
-  };
+// Which load is an email about? Its number (SHP-12) or, failing that, the load's own reference in the text.
+// Only an unambiguous match counts.
+async function matchShipmentForEmail(tenantId, message) {
+  const text = `${message.subject}\n${message.text}`;
+  const found = [];
+  for (const id of mentionedShipmentIds(text)) {
+    if (await getShipment(tenantId, id)) found.push(id);
+  }
+  if (found.length === 1) return found[0];
+  if (found.length > 1) return null;
+  const words = (text.slice(0, 2000).match(/[A-Za-z0-9][A-Za-z0-9\-_/]{3,39}/g) || []).filter((word) => /\d/.test(word));
+  const byReference = await findShipmentIdsByReference(tenantId, words);
+  return byReference.length === 1 ? byReference[0] : null;
 }
 
-function senderAddress(from) {
-  const match = /<([^>]+)>/.exec(from);
-  return (match ? match[1] : from).trim().toLowerCase();
-}
-
-// An empty allow-list accepts everyone; otherwise the sender or its domain must be listed.
-function senderAllowed(from, allowedSenders) {
-  if (!allowedSenders.length) return true;
-  const address = senderAddress(from);
-  const domain = address.includes('@') ? address.split('@').pop() : '';
-  return allowedSenders.some((entry) => {
-    const allowed = entry.toLowerCase().replace(/^@/, '');
-    return allowed === address || (domain && allowed === domain);
+// Moves an email's files to a load. A file whose name or email does not say what it is counts as a CMR
+// (proof of delivery once the load is delivered), because that is what people send about a running load.
+async function attachEmailFilesToShipment(tenantId, inboxId, shipment, { context = '', uploadedBy = null } = {}) {
+  const fallback = shipment.status === 'Delivered' ? 'pod' : 'cmr';
+  return moveInboxAttachmentsToShipment(tenantId, inboxId, shipment.id, {
+    uploadedBy, typeFor: (filename) => guessDocumentType(filename, context) || fallback, maxPerShipment: DOC_MAX_PER_SHIPMENT
   });
 }
 
 app.post(`${INBOX_WEBHOOK_PREFIX}:token`, (req, res, next) => {
   req.inboxTokenHash = rateLimitKey(String(req.params.token));
   return inboxIpLimiter(req, res, (error) => (error ? next(error) : inboxLimiter(req, res, next)));
-}, async (req, res) => {
+}, async (req, res, next) => {
+  // The address is checked before the (possibly large) body is read.
   try {
-    const tenant = await findTenantByInboxTokenHash(req.inboxTokenHash);
-    if (!tenant) return res.status(404).json({ success: false, message: 'Unknown inbox address.' });
-    const message = normalizeInbound(req.body);
-    // Providers retry on errors, so an unusable message is acknowledged, not rejected.
-    if (!message.text) return res.json({ success: true, ignored: 'empty' });
+    req.inboxTenant = await findTenantByInboxTokenHash(req.inboxTokenHash);
+    if (!req.inboxTenant) return res.status(404).json({ success: false, message: 'Unknown inbox address.' });
+    return next();
+  } catch (error) {
+    return sendError(res, error, 'Message could not be stored.', 'inbox webhook');
+  }
+}, parseInboxBody, async (req, res) => {
+  try {
+    const tenant = req.inboxTenant;
+    let message;
+    try {
+      message = parseInbound(req.body, req.headers['content-type'], DOC_MAX_BYTES);
+    } catch (_) {
+      // Providers retry on errors, so an unusable message is acknowledged, not rejected.
+      return res.json({ success: true, ignored: 'unreadable' });
+    }
+    // Keep real documents only: the type comes from the file's first bytes, never from its name.
+    const files = [];
+    let filesSkipped = 0;
+    for (const attachment of message.attachments) {
+      const mime = attachment.content.length <= DOC_MAX_BYTES ? detectMime(attachment.content) : null;
+      const logo = mime && mime !== 'application/pdf' && attachment.content.length < INBOX_MIN_IMAGE_BYTES;
+      if (logo) continue;
+      if (!mime || files.length >= INBOX_MAX_ATTACHMENTS) {
+        filesSkipped += 1;
+        continue;
+      }
+      files.push({ filename: safeFilename(attachment.filename, mime), mime, content: attachment.content });
+    }
+    if (!message.text && !files.length) return res.json({ success: true, ignored: 'empty' });
     if ((await countInboxItemsToday(tenant.id)) >= INBOX_DAILY_LIMIT) {
       return res.status(429).json({ success: false, message: 'Daily limit of incoming messages reached.' });
     }
@@ -1231,10 +1302,98 @@ app.post(`${INBOX_WEBHOOK_PREFIX}:token`, (req, res, next) => {
       status: allowed ? 'new' : 'blocked'
     });
     if (duplicate) return res.json({ success: true, duplicate: true });
-    if (allowed) nexus.emit('inbox.received', { tenantId: tenant.id, inboxId: item.id });
-    return res.status(201).json({ success: true, id: item.id, accepted: allowed });
+    // Files from senders who are not allowed are not kept at all.
+    if (!allowed) return res.status(201).json({ success: true, id: item.id, accepted: false });
+    for (const file of files) await addInboxAttachment(tenant.id, item.id, file);
+
+    // An email with files that names one of this company's loads: the files go straight to that load.
+    const shipmentId = files.length ? await matchShipmentForEmail(tenant.id, message) : null;
+    if (shipmentId) {
+      const shipment = await getShipment(tenant.id, shipmentId);
+      const moved = await attachEmailFilesToShipment(tenant.id, item.id, shipment, { context: `${message.subject} ${message.text}` });
+      if (moved.documentIds.length || !moved.skipped) {
+        await updateInboxItem(tenant.id, item.id, { status: 'attached', shipmentId });
+        nexus.emit('inbox.attached', { tenantId: tenant.id, inboxId: item.id, shipmentId, documentIds: moved.documentIds, skipped: moved.skipped, from: message.from });
+        return res.status(201).json({ success: true, id: item.id, accepted: true, attachedTo: `SHP-${shipmentId}`, documents: moved.documentIds.length, filesSkipped });
+      }
+    }
+    nexus.emit('inbox.received', { tenantId: tenant.id, inboxId: item.id });
+    return res.status(201).json({ success: true, id: item.id, accepted: true, files: files.length, filesSkipped });
   } catch (error) {
     return sendError(res, error, 'Message could not be stored.', 'inbox webhook');
+  }
+});
+
+// A file that came with an email (before it is on a load). Always a download.
+app.get('/api/inbox/:id/attachments/:fileId/file', authMiddleware, requirePermission('shipments:create'), async (req, res) => {
+  const itemId = Number(req.params.id);
+  const fileId = Number(req.params.fileId);
+  if (!Number.isInteger(itemId) || itemId <= 0 || !Number.isInteger(fileId) || fileId <= 0) return res.status(400).json({ success: false, message: 'Valid IDs are required.' });
+  try {
+    const file = await getInboxAttachmentFile(req.user.tenantId, itemId, fileId);
+    if (!file) return res.status(404).json({ success: false, message: 'File not found.' });
+    res.attachment(file.filename);
+    res.type(file.mime);
+    return res.send(file.content);
+  } catch (error) {
+    return sendError(res, error, 'File unavailable.', 'inbox file');
+  }
+});
+
+// A person says which load an email's files belong to.
+app.post('/api/inbox/:id/attach', authMiddleware, requirePermission('shipments:document'), async (req, res) => {
+  const itemId = Number(req.params.id);
+  const shipmentId = parseShipmentId(req.body?.shipmentId);
+  if (!Number.isInteger(itemId) || itemId <= 0 || !shipmentId) return res.status(400).json({ success: false, message: 'An email and a load number (for example SHP-12) are required.' });
+  try {
+    const item = await getInboxItem(req.user.tenantId, itemId);
+    if (!item || item.status === 'blocked') return res.status(404).json({ success: false, message: 'Message not found.' });
+    if (!item.attachments.length) return res.status(400).json({ success: false, message: 'This email has no files.' });
+    const shipment = await getShipment(req.user.tenantId, shipmentId);
+    if (!shipment) return res.status(404).json({ success: false, message: 'Shipment not found.' });
+    const moved = await attachEmailFilesToShipment(req.user.tenantId, itemId, shipment, { context: `${item.subject || ''} ${item.body}`, uploadedBy: req.user.id });
+    if (!moved.documentIds.length && moved.skipped) {
+      return res.status(409).json({ success: false, message: `A load can have at most ${DOC_MAX_PER_SHIPMENT} documents.` });
+    }
+    await updateInboxItem(req.user.tenantId, itemId, { status: 'attached', shipmentId });
+    await resolveTasksByKey(req.user.tenantId, `inbox:${itemId}`, { userId: req.user.id });
+    moved.documentIds.forEach((documentId) => nexus.emit('document.uploaded', { tenantId: req.user.tenantId, shipmentId, documentId }));
+    return res.json({ success: true, shipmentId: `SHP-${shipmentId}`, documents: moved.documentIds.length, skipped: moved.skipped });
+  } catch (error) {
+    return sendError(res, error, 'Files could not be attached.', 'inbox attach');
+  }
+});
+
+/* =========================================================
+   DELIVERY REPORTS: Twilio tells us what happened to a sent message
+   ========================================================= */
+// The address holds a one-time secret for one message, and the request must carry a valid signature
+// made with that company's Twilio auth token. Both must be right.
+app.post(`${TWILIO_STATUS_PREFIX}:token`, twilioStatusLimiter, express.urlencoded({ extended: false, limit: '20kb' }), async (req, res) => {
+  try {
+    const token = String(req.params.token);
+    if (!PUBLIC_URL || !/^[a-f0-9]{48}$/.test(token)) return res.status(404).json({ success: false, message: 'Not found.' });
+    const message = await findMessageByCallbackTokenHash(rateLimitKey(token));
+    if (!message) return res.status(404).json({ success: false, message: 'Not found.' });
+    const { config } = messaging.resolveConfig(await getTenant(message.tenantId), DEFAULT_TENANT_ID);
+    const fields = req.body && typeof req.body === 'object' ? req.body : {};
+    if (!config || !messaging.validSignature(config.token, `${PUBLIC_URL}${TWILIO_STATUS_PREFIX}${token}`, fields, req.get('x-twilio-signature'))) {
+      return res.status(403).json({ success: false, message: 'Invalid signature.' });
+    }
+    const sid = fields.MessageSid || fields.SmsSid;
+    if (message.providerMessageId && sid && sid !== message.providerMessageId) {
+      return res.status(400).json({ success: false, message: 'Report does not match the message.' });
+    }
+    const outcome = await recordMessageDelivery(message.tenantId, message.id, { status: fields.MessageStatus || fields.SmsStatus, errorCode: fields.ErrorCode });
+    if (outcome.failedNow) {
+      nexus.emit('message.failed', {
+        tenantId: message.tenantId, messageId: message.id, shipmentId: message.shipmentId,
+        recipient: message.recipientType, to: message.toPhone, errorCode: /^\d{1,6}$/.test(String(fields.ErrorCode || '')) ? String(fields.ErrorCode) : null
+      });
+    }
+    return res.status(204).end();
+  } catch (error) {
+    return sendError(res, error, 'Report could not be stored.', 'twilio status');
   }
 });
 
@@ -1385,6 +1544,44 @@ app.get('/api/agents/scout/:id', authMiddleware, requirePermission('shipments:di
     });
   } catch (error) {
     return sendError(res, error, 'Carrier suggestions unavailable.', 'scout');
+  }
+});
+
+// ROUTE: is the schedule realistic, when will the truck probably arrive, which trucks end up near the pickup.
+app.get('/api/agents/route/:id', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
+  try {
+    return res.json({ success: true, ...routeAgent.planRoute(await getRouteData(req.user.tenantId, shipmentId)) });
+  } catch (error) {
+    return sendError(res, error, 'Route advice unavailable.', 'route');
+  }
+});
+
+// PULSE: what this lane usually costs, a suggested customer price, and whether the given prices are unusual.
+app.get('/api/agents/pulse/:id', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
+  const optionalMoney = (value) => (value === undefined || value === '' ? null : parseMoney(value));
+  const rate = optionalMoney(req.query.rate);
+  const customerRate = optionalMoney(req.query.customerRate);
+  if ((req.query.rate && rate === null) || (req.query.customerRate && customerRate === null)) {
+    return res.status(400).json({ success: false, message: 'Prices must be positive numbers.' });
+  }
+  try {
+    return res.json({ success: true, ...pulseAgent.analyzePrices(await getPulseData(req.user.tenantId, shipmentId), { rate, customerRate, formatMoney }) });
+  } catch (error) {
+    return sendError(res, error, 'Price advice unavailable.', 'pulse');
+  }
+});
+
+// SENTINEL: every open load of this company that is at risk right now, worst first.
+app.get('/api/agents/sentinel', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  try {
+    const risks = sentinelAgent.assess(await listSentinelLoads(req.user.tenantId), { staleHours: STALE_TRACKING_HOURS });
+    return res.json({ success: true, risks: risks.slice(0, 200), total: risks.length });
+  } catch (error) {
+    return sendError(res, error, 'Risk check unavailable.', 'sentinel');
   }
 });
 
@@ -1600,9 +1797,10 @@ app.get('/api/integrations/status', authMiddleware, requirePermission('users:rea
     res.json({
       success: true,
       ai: { enabled: aiGateway.isEnabled(), model: process.env.OPENROUTER_MODEL || null },
-      messaging: messaging.publicStatus(tenant, DEFAULT_TENANT_ID),
+      messaging: { ...messaging.publicStatus(tenant, DEFAULT_TENANT_ID), deliveryReports: Boolean(PUBLIC_URL) },
       gps: { configured: Boolean(tenant?.gpsTokenHash), webhookPath: GPS_WEBHOOK_PATH, minIntervalMinutes: GPS_MIN_INTERVAL_MINUTES },
-      inbox: { configured: Boolean(tenant?.inboxTokenHash), pathPrefix: INBOX_WEBHOOK_PREFIX, allowedSenders: tenant?.allowedSenders || [], dailyLimit: INBOX_DAILY_LIMIT },
+      inbox: { configured: Boolean(tenant?.inboxTokenHash), pathPrefix: INBOX_WEBHOOK_PREFIX, allowedSenders: tenant?.allowedSenders || [], dailyLimit: INBOX_DAILY_LIMIT,
+        maxMb: INBOX_MAX_BYTES / (1024 * 1024), maxFiles: INBOX_MAX_ATTACHMENTS },
       documents: { reads: aiGateway.isEnabled(), maxMb: DOC_MAX_BYTES / (1024 * 1024) },
       nexus: { enabled: process.env.NEXUS_ENABLED !== 'false', staleHours: STALE_TRACKING_HOURS, aiDailyLimit: AI_DAILY_LIMIT_PER_TENANT }
     });

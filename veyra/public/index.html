@@ -643,6 +643,7 @@
           <div><dt>Tracking number</dt><dd data-detail="tracking">-</dd></div>
           <div class="span-2"><dt>Last location / ETA</dt><dd data-detail="location">-</dd></div>
         </dl>
+        <div class="advice-box" id="shipmentAdvice" aria-live="polite"></div>
 
         <div class="detail-timeline-head"><strong>Location updates</strong><span>Newest first</span></div>
         <form class="tracking-form hidden" id="trackingForm">
@@ -780,6 +781,7 @@
           <label>Driver phone<input name="driverPhone" type="tel" maxlength="40" placeholder="Optional" /></label>
         </div>
         <p class="dispatch-margin muted" id="dispatchMargin" aria-live="polite"></p>
+        <div class="advice-box" id="dispatchPulse" aria-live="polite"></div>
         <div class="shipment-form-footer">
           <span>The carrier is marked <strong>Busy</strong> until the load is delivered or cancelled.</span>
           <button class="btn btn-primary" type="submit">Dispatch</button>

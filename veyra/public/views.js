@@ -417,6 +417,8 @@
       message.textContent = error.message;
     }
     renderScout(shipment);
+    document.getElementById('dispatchPulse')?.replaceChildren();
+    renderPulse();
   }
 
   // SCOUT: ranked carrier suggestions with reasons and a suggested rate. A person still decides.
@@ -441,6 +443,7 @@
             form.elements.carrierId.value = String(item.carrierId);
             if (item.suggestedRate && !form.elements.rate.value) form.elements.rate.value = String(item.suggestedRate);
             updateDispatchMargin();
+            schedulePulse();
             form.elements.rate.focus();
           }
         }, [
@@ -471,10 +474,35 @@
     line.classList.toggle('negative', margin < 0);
   }
 
+  // PULSE: is this price usual for the lane? Refreshed a moment after the dispatcher stops typing.
+  let pulseTimer = null;
+  function schedulePulse() {
+    clearTimeout(pulseTimer);
+    pulseTimer = setTimeout(renderPulse, 400);
+  }
+
+  async function renderPulse() {
+    const form = document.getElementById('dispatchForm');
+    const box = document.getElementById('dispatchPulse');
+    const target = dispatchTarget;
+    if (!form || !box || !target) return;
+    const query = new URLSearchParams();
+    if (Number(form.elements.rate.value) > 0) query.set('rate', form.elements.rate.value);
+    if (Number(form.elements.customerRate.value) > 0) query.set('customerRate', form.elements.customerRate.value);
+    try {
+      const pulse = await api(`/api/agents/pulse/${encodeURIComponent(target.id)}?${query}`);
+      if (dispatchTarget?.id !== target.id) return;
+      box.replaceChildren(window.VeyraAdviceBlock('PULSE · prices', window.VeyraPulseLines(pulse)));
+    } catch (_) {
+      box.replaceChildren();
+    }
+  }
+
   function bindDispatchModal() {
     const modal = document.getElementById('dispatchModal');
     const form = document.getElementById('dispatchForm');
     const close = () => modal?.classList.add('hidden');
+    form?.addEventListener('input', schedulePulse);
     document.getElementById('closeDispatch')?.addEventListener('click', close);
     modal?.addEventListener('click', (event) => { if (event.target === modal) close(); });
     document.addEventListener('keydown', (event) => { if (event.key === 'Escape') close(); });
@@ -869,12 +897,13 @@
     if (!can('shipments:read')) return gate(container, 'denied');
     if (!container.children.length) loading(container);
     try {
-      const [{ tasks }, inbox] = await Promise.all([
+      const [{ tasks }, inbox, sentinel] = await Promise.all([
         api('/api/tasks'),
-        can('shipments:create') ? api('/api/inbox') : Promise.resolve({ items: [] })
+        can('shipments:create') ? api('/api/inbox') : Promise.resolve({ items: [] }),
+        api('/api/agents/sentinel').catch(() => ({ risks: [] }))
       ]);
       if (state.view !== 'inbox') return;
-      state.inbox = { tasks, items: inbox.items };
+      state.inbox = { tasks, items: inbox.items, risks: sentinel.risks || [] };
     } catch (error) {
       return errorState(container, error.message, renderInbox);
     }
@@ -907,6 +936,9 @@
         body.append(el('p', { text: payload.preview || '' }));
         body.append(el('p', { class: 'warn-line', text: payload.note || 'Not read yet.' }));
       }
+      const files = (state.inbox?.items || []).find((entry) => entry.id === task.inboxId)?.attachments || [];
+      if (files.length) body.append(fileList(task.inboxId, files));
+      if (files.length && can('shipments:document')) actions.append(attachButton(task.inboxId));
       actions.append(
         el('button', {
           class: 'btn btn-primary small', type: 'button',
@@ -995,6 +1027,45 @@
     ]);
   }
 
+  // Files that came with an email: each is a download link.
+  function fileList(inboxId, files) {
+    return el('p', { class: 'file-list' }, [
+      el('span', { class: 'muted', text: `${files.length} file${files.length === 1 ? '' : 's'}: ` }),
+      ...files.map((file) => el('a', {
+        class: 'file-chip', href: `/api/inbox/${inboxId}/attachments/${file.id}/file`, download: file.filename,
+        text: `${file.filename} (${Math.max(1, Math.round(file.size / 1024))} KB)`
+      }))
+    ]);
+  }
+
+  function attachButton(inboxId) {
+    return el('button', {
+      class: 'btn btn-ghost small', type: 'button',
+      onclick: (event) => {
+        const answer = window.prompt('Which load do these files belong to? Type its number, for example SHP-12');
+        if (!answer) return;
+        const shipmentId = answer.trim().toUpperCase().replace(/^(\d+)$/, 'SHP-$1').replace(/\s+/g, '');
+        taskAction(event.currentTarget, `/api/inbox/${inboxId}/attach`, { shipmentId }, `Files added to ${shipmentId}.`);
+      }
+    }, 'Attach files to a load');
+  }
+
+  // SENTINEL: loads that are in trouble or about to be, worst first.
+  function riskPanel(risks) {
+    const label = { high: 'Urgent', medium: 'Soon', low: 'Note' };
+    return el('section', { class: 'card risk-panel' }, [
+      el('header', {}, [el('strong', { text: `SENTINEL · ${risks.length} risk${risks.length === 1 ? '' : 's'} on open loads` }), el('small', { class: 'muted', text: 'Checked now' })]),
+      el('ul', { class: 'risk-list' }, risks.slice(0, 12).map((risk) => el('li', { class: `risk-${risk.severity}` }, [
+        el('span', { class: 'risk-level', text: label[risk.severity] || risk.severity }),
+        el('div', {}, [
+          el('button', { class: 'link-button', type: 'button', onclick: () => openShipmentDetails(risk.shipmentId) }, risk.title),
+          el('small', { class: 'muted', text: `${risk.customer} · ${risk.lane} — ${risk.advice}` })
+        ])
+      ]))),
+      risks.length > 12 ? el('p', { class: 'muted', text: `…and ${risks.length - 12} more.` }) : null
+    ]);
+  }
+
   async function taskAction(button, url, body, doneText) {
     button.disabled = true;
     try {
@@ -1008,7 +1079,7 @@
   }
 
   function buildInboxLayout(container) {
-    const { tasks, items } = state.inbox;
+    const { tasks, items, risks = [] } = state.inbox;
     const blocked = items.filter((item) => item.status === 'blocked');
     const hasTaskEmail = (id) => tasks.some((task) => task.inboxId === id);
     const waiting = items.filter((item) => item.status !== 'blocked' && !hasTaskEmail(item.id));
@@ -1017,7 +1088,9 @@
       ? tasks.map(taskCard)
       : [el('div', { class: 'card empty-state wide' }, [el('p', { text: 'Nothing is waiting for you. New orders by email, bookings and late trucks will show up here.' })])];
 
-    const sections = [el('div', { class: 'task-list' }, taskList)];
+    const sections = [];
+    if (risks.length) sections.push(riskPanel(risks));
+    sections.push(el('div', { class: 'task-list' }, taskList));
     if (waiting.length) {
       sections.push(el('h3', { class: 'task-heading', text: 'Emails without a task' }), ...waiting.map((item) => emailCard(item)));
     }
@@ -1034,8 +1107,12 @@
   function emailCard(item, blocked = false) {
     return el('article', { class: 'card task-card' }, [
       el('header', {}, [el('strong', { text: item.subject || '(no subject)' }), el('small', { class: 'muted', text: item.from || '' })]),
-      el('div', { class: 'task-body' }, [el('p', { text: item.body.slice(0, 400) })]),
+      el('div', { class: 'task-body' }, [
+        el('p', { text: item.body.slice(0, 400) }),
+        !blocked && item.attachments?.length ? fileList(item.id, item.attachments) : null
+      ]),
       el('div', { class: 'task-actions' }, [
+        !blocked && item.attachments?.length && can('shipments:document') ? attachButton(item.id) : null,
         blocked ? null : el('button', {
           class: 'btn btn-primary small', type: 'button',
           onclick: () => window.openShipmentModal?.({}, { inboxId: item.id, emailText: `${item.subject ? `Subject: ${item.subject}\n\n` : ''}${item.body}` })

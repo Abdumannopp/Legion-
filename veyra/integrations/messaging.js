@@ -7,6 +7,7 @@
 //   sets MESSAGING_SHARED_ALL_TENANTS=true.
 // Not configured = sending is off; the app still drafts messages so a dispatcher can copy them.
 // Credentials never leave the server: not in responses, not in logs.
+const crypto = require('crypto');
 const { httpError } = require('../lib/validation');
 
 let transport = (url, init) => fetch(url, init);
@@ -83,7 +84,8 @@ async function verifyCredentials(config) {
   }
 }
 
-async function send(config, { channel, to, body }) {
+// statusCallback: an https address Twilio reports delivery to (delivered / read / failed). Optional.
+async function send(config, { channel, to, body, statusCallback = null }) {
   if (!channelsOf(config).includes(channel)) {
     throw httpError(503, `${channel === 'whatsapp' ? 'WhatsApp' : 'SMS'} sending is not configured. Copy the text and send it from your phone, or ask the administrator to add Twilio settings.`);
   }
@@ -94,6 +96,7 @@ async function send(config, { channel, to, body }) {
     From: channel === 'whatsapp' ? `whatsapp:${config.whatsappFrom}` : config.smsFrom,
     Body: body
   });
+  if (statusCallback) params.set('StatusCallback', statusCallback);
   let response;
   try {
     response = await transport(`https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(config.sid)}/Messages.json`, {
@@ -117,4 +120,19 @@ async function send(config, { channel, to, body }) {
   return { status: 'sent', provider: 'twilio', providerMessageId: data?.sid || null };
 }
 
-module.exports = { send, verifyCredentials, resolveConfig, publicStatus, channelsOf, envConfig, toE164, setTransport };
+// Twilio signs every report: base64(HMAC-SHA1(auth token, full URL + every form field name and value, sorted by name)).
+// Without a valid signature a report is not from this company's Twilio account.
+function validSignature(authToken, url, params, signature) {
+  if (!authToken || typeof signature !== 'string' || !signature) return false;
+  const data = Object.keys(params).sort().reduce((text, key) => text + key + String(params[key]), url);
+  const expected = crypto.createHmac('sha1', authToken).update(Buffer.from(data, 'utf8')).digest();
+  let given;
+  try {
+    given = Buffer.from(signature, 'base64');
+  } catch (_) {
+    return false;
+  }
+  return given.length === expected.length && crypto.timingSafeEqual(given, expected);
+}
+
+module.exports = { validSignature, send, verifyCredentials, resolveConfig, publicStatus, channelsOf, envConfig, toE164, setTransport };

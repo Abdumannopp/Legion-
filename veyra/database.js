@@ -291,6 +291,15 @@ async function initialize() {
     )
   `);
 
+  // Delivery reports from the provider (delivered / read / failed), matched by a per-message secret.
+  await ensureColumns('messages', [
+    ['delivery_status', 'TEXT'],
+    ['delivery_updated_at', 'TEXT'],
+    ['error_code', 'TEXT'],
+    ['callback_token_hash', 'TEXT']
+  ]);
+  await run('CREATE INDEX IF NOT EXISTS idx_messages_callback ON messages (callback_token_hash)');
+
   await ensureColumns('tenants', [
     ['inbox_token_hash', 'TEXT'],
     ['inbox_allowed_senders', 'TEXT'],
@@ -317,6 +326,23 @@ async function initialize() {
     )
   `);
   await run('CREATE UNIQUE INDEX IF NOT EXISTS idx_inbox_dedupe ON inbox_items (tenant_id, external_id) WHERE external_id IS NOT NULL');
+
+  // Files that came with an email. They wait here until the email becomes a load (or is matched to one),
+  // then they move to that load's documents.
+  await run(`
+    CREATE TABLE IF NOT EXISTS inbox_attachments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+      inbox_id INTEGER NOT NULL REFERENCES inbox_items(id),
+      filename TEXT NOT NULL,
+      mime TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      sha256 TEXT NOT NULL,
+      content BLOB NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await run('CREATE INDEX IF NOT EXISTS idx_inbox_attachments_item ON inbox_attachments (inbox_id)');
 
   // Work NEXUS prepared for a person: review an order, book a carrier, approve a message...
   // dedupe_key makes every event idempotent: the same event twice never creates a second task.
@@ -999,21 +1025,59 @@ async function listShipmentEvents(tenantId, id) {
 
 /* ---------------- messages (RELAY) ---------------- */
 
-async function createMessage(tenantId, { shipmentId, channel, recipientType, toPhone, body, status, provider, providerMessageId, error, createdBy }) {
+async function createMessage(tenantId, { shipmentId, channel, recipientType, toPhone, body, status, provider, providerMessageId, error, createdBy, callbackTokenHash }) {
   assertTenant(tenantId);
   const result = await run(
-    `INSERT INTO messages (tenant_id, shipment_id, channel, recipient_type, to_phone, body, status, provider, provider_message_id, error, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [tenantId, shipmentId, channel, recipientType, toPhone, body, status, provider || null, providerMessageId || null, error || null, createdBy || null]
+    `INSERT INTO messages (tenant_id, shipment_id, channel, recipient_type, to_phone, body, status, provider, provider_message_id, error, created_by, callback_token_hash)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [tenantId, shipmentId, channel, recipientType, toPhone, body, status, provider || null, providerMessageId || null, error || null, createdBy || null, callbackTokenHash || null]
   );
   return { id: result.id };
+}
+
+// Delivery reports only move forward: a late "sent" never overwrites "delivered".
+const DELIVERY_RANK = { queued: 0, accepted: 0, scheduled: 0, sending: 1, sent: 2, delivered: 3, read: 4 };
+const DELIVERY_FAILURES = ['failed', 'undelivered'];
+
+// System job (provider webhook): the message a delivery report belongs to, found by its secret.
+async function findMessageByCallbackTokenHash(tokenHash) {
+  if (!tokenHash) return null;
+  return get(
+    `SELECT id, tenant_id AS tenantId, shipment_id AS shipmentId, provider_message_id AS providerMessageId,
+       recipient_type AS recipientType, to_phone AS toPhone, channel, delivery_status AS deliveryStatus
+     FROM messages WHERE callback_token_hash = ?`,
+    [tokenHash]
+  );
+}
+
+// Returns { changed, status, failedNow }.
+async function recordMessageDelivery(tenantId, messageId, { status, errorCode }) {
+  assertTenant(tenantId);
+  const next = String(status || '').toLowerCase();
+  if (!(next in DELIVERY_RANK) && !DELIVERY_FAILURES.includes(next)) return { changed: false, status: null, failedNow: false };
+  return withTransaction(async (transaction) => {
+    const row = await transaction.get('SELECT delivery_status FROM messages WHERE id = ? AND tenant_id = ?', [messageId, tenantId]);
+    if (!row) return { changed: false, status: null, failedNow: false };
+    const current = row.delivery_status;
+    const failure = DELIVERY_FAILURES.includes(next);
+    const allowed = current === null || current === undefined
+      || (failure ? !DELIVERY_FAILURES.includes(current) && (DELIVERY_RANK[current] ?? 0) < DELIVERY_RANK.delivered
+        : !DELIVERY_FAILURES.includes(current) && DELIVERY_RANK[next] > (DELIVERY_RANK[current] ?? -1));
+    if (!allowed) return { changed: false, status: current, failedNow: false };
+    await transaction.run(
+      "UPDATE messages SET delivery_status = ?, delivery_updated_at = CURRENT_TIMESTAMP, error_code = ? WHERE id = ? AND tenant_id = ?",
+      [next, failure && errorCode ? String(errorCode).slice(0, 20) : null, messageId, tenantId]
+    );
+    return { changed: true, status: next, failedNow: failure };
+  });
 }
 
 async function listMessages(tenantId, shipmentId) {
   assertTenant(tenantId);
   return all(
     `SELECT messages.id, messages.channel, messages.recipient_type AS recipientType, messages.to_phone AS toPhone, messages.body,
-       messages.status, messages.error, messages.created_at AS createdAt, users.name AS sentBy
+       messages.status, messages.error, messages.delivery_status AS deliveryStatus, messages.delivery_updated_at AS deliveryUpdatedAt,
+       messages.error_code AS errorCode, messages.created_at AS createdAt, users.name AS sentBy
      FROM messages LEFT JOIN users ON users.id = messages.created_by
      WHERE messages.shipment_id = ? AND messages.tenant_id = ? ORDER BY messages.id DESC`,
     [shipmentId, tenantId]
@@ -1385,15 +1449,105 @@ async function createInboxItem(tenantId, { externalId, from, subject, body, stat
 
 async function getInboxItem(tenantId, id) {
   const row = await get('SELECT * FROM inbox_items WHERE id = ? AND tenant_id = ?', [id, assertTenant(tenantId)]);
-  return row ? mapInboxItem(row) : null;
+  if (!row) return null;
+  return { ...mapInboxItem(row), attachments: await listInboxAttachments(tenantId, id) };
+}
+
+/* ---------------- files that came with an email ---------------- */
+
+// Returns { id, duplicate }. The same file twice in one email is kept once.
+async function addInboxAttachment(tenantId, inboxId, { filename, mime, content }) {
+  assertTenant(tenantId);
+  const sha256 = require('crypto').createHash('sha256').update(content).digest('hex');
+  return withTransaction(async (transaction) => {
+    const item = await transaction.get('SELECT id FROM inbox_items WHERE id = ? AND tenant_id = ?', [inboxId, tenantId]);
+    if (!item) throw httpError(404, 'Message not found.');
+    const existing = await transaction.get('SELECT id FROM inbox_attachments WHERE inbox_id = ? AND sha256 = ?', [inboxId, sha256]);
+    if (existing) return { id: existing.id, duplicate: true };
+    const result = await transaction.run(
+      'INSERT INTO inbox_attachments (tenant_id, inbox_id, filename, mime, size, sha256, content) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [tenantId, inboxId, filename, mime, content.length, sha256, content]
+    );
+    return { id: result.id, duplicate: false };
+  });
+}
+
+async function listInboxAttachments(tenantId, inboxId) {
+  return all(
+    'SELECT id, filename, mime, size FROM inbox_attachments WHERE inbox_id = ? AND tenant_id = ? ORDER BY id',
+    [inboxId, assertTenant(tenantId)]
+  );
+}
+
+async function getInboxAttachmentFile(tenantId, inboxId, id) {
+  return get(
+    'SELECT id, filename, mime, content FROM inbox_attachments WHERE id = ? AND inbox_id = ? AND tenant_id = ?',
+    [id, inboxId, assertTenant(tenantId)]
+  );
+}
+
+async function deleteInboxAttachments(tenantId, inboxId) {
+  await run('DELETE FROM inbox_attachments WHERE inbox_id = ? AND tenant_id = ?', [inboxId, assertTenant(tenantId)]);
+}
+
+// Moves an email's files into a load's documents, in one transaction.
+// typeFor(filename) picks the document type. Returns { documentIds, skipped } (skipped: the load is full).
+async function moveInboxAttachmentsToShipment(tenantId, inboxId, shipmentId, { uploadedBy = null, typeFor = () => 'other', maxPerShipment = 20 } = {}) {
+  assertTenant(tenantId);
+  return withTransaction(async (transaction) => {
+    const shipment = await transaction.get('SELECT id FROM shipments WHERE id = ? AND tenant_id = ?', [shipmentId, tenantId]);
+    if (!shipment) throw httpError(404, 'Shipment not found.');
+    const files = await transaction.all('SELECT * FROM inbox_attachments WHERE inbox_id = ? AND tenant_id = ? ORDER BY id', [inboxId, tenantId]);
+    let count = Number((await transaction.get('SELECT COUNT(*) AS total FROM documents WHERE shipment_id = ?', [shipmentId]))?.total) || 0;
+    const documentIds = [];
+    let skipped = 0;
+    for (const file of files) {
+      const existing = await transaction.get('SELECT id FROM documents WHERE shipment_id = ? AND sha256 = ?', [shipmentId, file.sha256]);
+      if (!existing) {
+        if (count >= maxPerShipment) {
+          skipped += 1;
+          continue;
+        }
+        const result = await transaction.run(
+          'INSERT INTO documents (tenant_id, shipment_id, doc_type, filename, mime, size, sha256, content, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [tenantId, shipmentId, typeFor(file.filename), file.filename, file.mime, file.size, file.sha256, file.content, uploadedBy]
+        );
+        documentIds.push(result.id);
+        count += 1;
+      }
+      await transaction.run('DELETE FROM inbox_attachments WHERE id = ?', [file.id]);
+    }
+    return { documentIds, skipped };
+  });
+}
+
+// Loads of this company whose own reference number is one of the given words (used to match an email to a load).
+async function findShipmentIdsByReference(tenantId, references) {
+  assertTenant(tenantId);
+  const list = [...new Set(references.map((value) => String(value).toLowerCase()))].slice(0, 30);
+  if (!list.length) return [];
+  const rows = await all(
+    `SELECT id FROM shipments WHERE tenant_id = ? AND lower(reference) IN (${list.map(() => '?').join(', ')}) LIMIT 5`,
+    [tenantId, ...list]
+  );
+  return rows.map((row) => row.id);
 }
 
 async function listInboxItems(tenantId, { status, limit = 50 } = {}) {
   assertTenant(tenantId);
-  const where = status ? 'AND status = ?' : "AND status NOT IN ('converted', 'dismissed')";
+  const where = status ? 'AND status = ?' : "AND status NOT IN ('converted', 'dismissed', 'attached')";
   const params = status ? [tenantId, status, limit] : [tenantId, limit];
   const rows = await all(`SELECT * FROM inbox_items WHERE tenant_id = ? ${where} ORDER BY id DESC LIMIT ?`, params);
-  return rows.map(mapInboxItem);
+  if (!rows.length) return [];
+  const files = await all(
+    `SELECT id, inbox_id AS inboxId, filename, mime, size FROM inbox_attachments
+     WHERE tenant_id = ? AND inbox_id IN (${rows.map(() => '?').join(', ')}) ORDER BY id`,
+    [tenantId, ...rows.map((row) => row.id)]
+  );
+  return rows.map((row) => ({
+    ...mapInboxItem(row),
+    attachments: files.filter((file) => file.inboxId === row.id).map(({ inboxId, ...file }) => file)
+  }));
 }
 
 async function countInboxItemsToday(tenantId) {
@@ -1499,6 +1653,79 @@ async function listStaleLoadsAllTenants(staleHours) {
     `SELECT id, tenant_id AS tenantId, last_tracked_at AS lastTrackedAt FROM shipments
      WHERE status IN ('Dispatched', 'In Transit') AND ${LAST_SIGN_OF_LIFE} < datetime('now', ?)`,
     [`-${Number(staleHours)} hours`]
+  );
+}
+
+// Open tasks whose key starts with a prefix. tenantId null = every company (system jobs only).
+async function listOpenTasksByKeyPrefix(tenantId, prefix) {
+  const scoped = tenantId !== null;
+  if (scoped) assertTenant(tenantId);
+  return all(
+    `SELECT id, tenant_id AS tenantId, dedupe_key AS dedupeKey FROM nexus_tasks
+     WHERE status = 'open' AND substr(dedupe_key, 1, ?) = ? ${scoped ? 'AND tenant_id = ?' : ''}`,
+    scoped ? [prefix.length, prefix, tenantId] : [prefix.length, prefix]
+  );
+}
+
+/* ---------------- ROUTE, PULSE and SENTINEL data ---------------- */
+
+const EVENT_TIME = (status) => `(SELECT ${status === 'Delivered' ? 'MAX' : 'MIN'}(created_at) FROM shipment_events
+  WHERE shipment_events.shipment_id = shipments.id AND shipment_events.to_status = '${status}')`;
+
+// What ROUTE needs for one load: how long this lane took before, and trucks that end up near the pickup.
+async function getRouteData(tenantId, shipmentId) {
+  assertTenant(tenantId);
+  const shipment = await getShipment(tenantId, shipmentId);
+  if (!shipment) throw httpError(404, 'Shipment not found.');
+  const lane = [shipment.origin, shipment.destination];
+  const history = await all(
+    `SELECT ${EVENT_TIME('In Transit')} AS startedAt, ${EVENT_TIME('Delivered')} AS deliveredAt FROM shipments
+     WHERE tenant_id = ? AND id <> ? AND status = 'Delivered' AND lower(origin) = lower(?) AND lower(destination) = lower(?)
+     ORDER BY id DESC LIMIT 50`,
+    [tenantId, shipmentId, ...lane]
+  );
+  const started = await get(`SELECT ${EVENT_TIME('In Transit')} AS startedAt FROM shipments WHERE id = ? AND tenant_id = ?`, [shipmentId, tenantId]);
+  const nearby = await all(
+    `SELECT shipments.id, shipments.status, shipments.delivery, shipments.eta, shipments.origin, shipments.carrier_id AS carrierId,
+       carriers.name AS carrierName, carriers.phone AS carrierPhone, carriers.mode AS carrierMode, ${EVENT_TIME('Delivered')} AS deliveredAt
+     FROM shipments JOIN carriers ON carriers.id = shipments.carrier_id
+     WHERE shipments.tenant_id = ? AND shipments.id <> ? AND lower(shipments.destination) = lower(?) AND carriers.status <> 'Inactive'
+       AND (shipments.status IN ('Dispatched', 'In Transit')
+         OR (shipments.status = 'Delivered' AND ${EVENT_TIME('Delivered')} >= datetime('now', '-3 days')))
+     ORDER BY shipments.id DESC LIMIT 20`,
+    [tenantId, shipmentId, shipment.origin]
+  );
+  return { shipment, history, startedAt: started?.startedAt || null, nearby };
+}
+
+// What PULSE needs for one load: prices paid and charged on the same lane before.
+async function getPulseData(tenantId, shipmentId) {
+  assertTenant(tenantId);
+  const shipment = await getShipment(tenantId, shipmentId);
+  if (!shipment) throw httpError(404, 'Shipment not found.');
+  const history = await all(
+    `SELECT rate, customer_rate AS customerRate, equipment FROM shipments
+     WHERE tenant_id = ? AND id <> ? AND status <> 'Cancelled' AND lower(origin) = lower(?) AND lower(destination) = lower(?)
+       AND (rate IS NOT NULL OR customer_rate IS NOT NULL)
+     ORDER BY id DESC LIMIT 200`,
+    [tenantId, shipmentId, shipment.origin, shipment.destination]
+  );
+  return { shipment, history };
+}
+
+// Loads that are still open, with what SENTINEL checks. tenantId null = every company (system job only).
+async function listSentinelLoads(tenantId) {
+  const scoped = tenantId !== null;
+  if (scoped) assertTenant(tenantId);
+  return all(
+    `SELECT id, tenant_id AS tenantId, customer, origin, destination, pickup, delivery, status, carrier_id AS carrierId,
+       driver_phone AS driverPhone, truck_plate AS truckPlate, eta, ${LAST_SIGN_OF_LIFE} AS lastSignOfLife,
+       (SELECT phone FROM carriers WHERE carriers.id = shipments.carrier_id) AS carrierPhone,
+       (SELECT COUNT(*) FROM messages WHERE messages.shipment_id = shipments.id
+          AND messages.delivery_status IN ('failed', 'undelivered') AND messages.created_at >= datetime('now', '-2 days')) AS failedMessages
+     FROM shipments WHERE status NOT IN ('Delivered', 'Cancelled') ${scoped ? 'AND tenant_id = ?' : ''}
+     ORDER BY id DESC LIMIT 5000`,
+    scoped ? [tenantId] : []
   );
 }
 
@@ -1617,6 +1844,18 @@ module.exports = {
   setTenantInboxAllowedSenders,
   setTenantMessagingSettings,
   createInboxItem,
+  addInboxAttachment,
+  listInboxAttachments,
+  getInboxAttachmentFile,
+  deleteInboxAttachments,
+  moveInboxAttachmentsToShipment,
+  findShipmentIdsByReference,
+  findMessageByCallbackTokenHash,
+  recordMessageDelivery,
+  listOpenTasksByKeyPrefix,
+  getRouteData,
+  getPulseData,
+  listSentinelLoads,
   getInboxItem,
   listInboxItems,
   countInboxItemsToday,

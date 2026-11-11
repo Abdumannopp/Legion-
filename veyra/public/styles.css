@@ -1363,3 +1363,28 @@ td:first-child { color: #fff; font-weight: 500; }
 .document-card .data-table th, .document-card .data-table td { white-space: normal; overflow-wrap: anywhere; font-size: 12.5px; padding: 8px 8px; vertical-align: top; }
 .document-card .data-table th:nth-child(1), .document-card .data-table td:nth-child(1) { width: 17%; }
 .document-card .data-table th:nth-child(4), .document-card .data-table td:nth-child(4) { width: 30%; }
+
+/* ---------- ROUTE / PULSE advice, SENTINEL risks, email files ---------- */
+.advice-box { display: grid; gap: 10px; margin: 14px 0; }
+.advice-box:empty { display: none; }
+.advice-item { display: grid; gap: 4px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); min-width: 0; }
+.advice-item strong { font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.advice-item p { margin: 0; overflow-wrap: anywhere; }
+.advice-item p.warn-line { color: var(--amber); }
+.risk-panel { display: grid; gap: 10px; margin-bottom: 16px; }
+.risk-panel header { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: baseline; }
+.risk-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.risk-list li { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 10px; align-items: start; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); }
+.risk-list li > div { display: grid; gap: 2px; min-width: 0; }
+.risk-list small { overflow-wrap: anywhere; }
+.risk-level { font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding-top: 2px; }
+.risk-high { border-color: rgba(248, 113, 113, .55) !important; }
+.risk-high .risk-level { color: #f87171; }
+.risk-medium { border-color: rgba(251, 191, 36, .5) !important; }
+.risk-medium .risk-level { color: var(--amber); }
+.link-button { background: none; border: 0; padding: 0; margin: 0; font: inherit; font-weight: 600; color: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.link-button:hover, .link-button:focus-visible { text-decoration: underline; }
+.file-list { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0; }
+.file-chip { padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line); font-size: 12.5px; color: inherit; text-decoration: none; overflow-wrap: anywhere; }
+.file-chip:hover, .file-chip:focus-visible { text-decoration: underline; }
+.detail-timeline-item.message-failed strong { color: var(--amber); }

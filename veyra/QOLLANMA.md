@@ -132,12 +132,45 @@ filtrlar barcha yuklar bo'yicha ishlaydi. CSV eksport hammasini yuklab oladi.
   ogohlantirish: qog'ozni yuk bilan o'zingiz solishtirib, kerak bo'lsa
   tuzatasiz. Yozuv o'zi o'zgarmaydi.
 
+## Xatdagi fayllar, xabar holati va uchta yangi agent
+
+- **Xatga biriktirilgan fayllar (CMR).** Xat mavzusida yoki matnida yuk raqami
+  (masalan `SHP-12`) yoki yukning o'z raqami (reference) bo'lsa, fayl o'sha
+  yukning hujjatlariga o'zi qo'shiladi va VAULT uni o'qiydi. Yuk raqami
+  bo'lmasa, fayl xat bilan birga "Inbox & tasks" sahifasida kutadi: "Attach
+  files to a load" tugmasi bilan yukni ko'rsatasiz, yoki xatdan yangi yuk
+  yaratsangiz fayl o'sha yukka o'tadi. Faqat PDF, JPG, PNG, WebP qabul
+  qilinadi; bitta xatdan ko'pi bilan 5 ta fayl; imzodagi kichik logotiplar
+  tashlab yuboriladi. Ruxsat berilmagan jo'natuvchining fayllari saqlanmaydi.
+- **SendGrid va Mailgun.** Endi fayl biriktirilgan xatlar to'g'ridan-to'g'ri
+  qabul qilinadi (SendGrid Inbound Parse, Mailgun, Postmark, Zapier/Make).
+- **Xabar holati.** Yuk oynasidagi xabarlar ro'yxatida "sent ✓", "delivered ✓✓",
+  "read ✓✓" yoki "not delivered" ko'rinadi. "Read" faqat WhatsApp'da va
+  qabul qiluvchi o'qilganlik belgisini yoqqan bo'lsa keladi. Xabar yetib
+  bormasa, "qo'ng'iroq qiling" degan vazifa paydo bo'ladi. Buning uchun server
+  o'z internet manzilini bilishi kerak: Render va Railway'da bu o'zi ishlaydi,
+  boshqa joyda `PUBLIC_URL=https://sizning-manzil` ni yozing.
+- **ROUTE (marshrut).** Yuk oynasida: shu yo'nalish avval necha soat olgani,
+  va'da qilingan sana yetadimi, mashina taxminan qachon yetib borishi, va
+  yuklash shahriga yaqinda bo'shaydigan mashinalar (qaytish yuki uchun).
+- **PULSE (narx).** Yuk oynasida va mashina band qilish oynasida: shu
+  yo'nalishda odatda qancha to'langani, mijozga tavsiya narx, va narx
+  odatdagidan 30% dan ko'p farq qilsa yoki yuk zarar keltirsa ogohlantirish.
+- **SENTINEL (xavf).** "Inbox & tasks" sahifasi tepasida: mashina topilmagan
+  va yuklash bugun/ertaga; yuklash kuni o'tdi, mashina jo'namadi; yetkazish
+  kuni o'tdi; haydovchi aytgan vaqt va'dadan kech; haydovchi telefoni yoki
+  mashina raqami yo'q; mashina jim; xabar yetmadi. Xavf yo'qolsa vazifa o'zi
+  yopiladi.
+
+ROUTE, PULSE va SENTINEL sun'iy intellekt kalitisiz ishlaydi: ular faqat
+sizning o'z yuklaringiz tarixiga qaraydi. Shuning uchun yo'nalishda kamida
+3 ta yetkazilgan yuk bo'lmaguncha ROUTE va PULSE "ma'lumot yetarli emas" deydi.
+
 ## Hali yo'q narsalar
 
-- Email xizmatlaridan multipart (fayl biriktirilgan) xatlarni to'g'ridan-to'g'ri
-  qabul qilish (SendGrid Inbound Parse). Hozir Postmark, Mailgun (oddiy xatlar)
-  va Zapier/Make ishlaydi. Xatga biriktirilgan CMR avtomatik yukka qo'shilmaydi:
-  uni yuk oynasida o'zingiz yuklaysiz.
 - Sizning serveringizda email qutisini to'g'ridan-to'g'ri o'qish (IMAP).
-- Twilio xabarlarining yetkazilganlik holatini (delivered/read) qaytarib olish.
-- ROUTE, PULSE, SENTINEL agentlari (marshrut, narx tahlili, xavf aniqlash).
+- Xarita bo'yicha masofa va yo'ldan chetga chiqishni aniqlash (ROUTE va
+  SENTINEL xarita xizmatidan foydalanmaydi).
+- Tashqi bozor narxlari (PULSE faqat sizning o'z yuklaringizni biladi).
+- Xatdagi fayl turi noto'g'ri taxmin qilinsa, uni almashtirish tugmasi
+  (hozircha faylni o'chirib, to'g'ri tur bilan qayta yuklaysiz).
