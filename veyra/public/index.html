@@ -473,7 +473,9 @@
                   </div>
                 </form>
                 <form class="settings-form hidden" id="mailboxForm" autocomplete="off">
-                  <strong>Order mailbox (IMAP)</strong>
+                  <strong>Order mailbox</strong>
+                  <div class="mailbox-providers" id="mailboxProviders"></div>
+                  <small>Or connect with a mail server and an app password (IMAP):</small>
                   <small>VEYRA reads new emails of this mailbox itself, as if they were sent to your inbox address. Mail already in the mailbox is not imported, and nothing in it is changed or marked as read. Use an app password (Gmail, Outlook) and leave the password empty to keep the saved one.</small>
                   <label>Mail server<input name="host" maxlength="253" placeholder="imap.gmail.com" required /></label>
                   <label>Port<input name="port" type="number" min="1" max="65535" value="993" /></label>
@@ -487,6 +489,16 @@
                       <button class="btn btn-primary small" type="submit">Connect</button>
                     </span>
                   </div>
+                </form>
+                <form class="settings-form hidden" id="borderWaitsForm" autocomplete="off">
+                  <strong>Border waiting times (for ROUTE)</strong>
+                  <small>The usual wait at a border, in hours. One border per line: two country codes and hours, for example <em>UZ; KZ; 6</em>. Place names must end with the country code ("Tashkent, UZ"). Used when the lane has no history yet.</small>
+                  <label>Borders<textarea name="lines" rows="3" maxlength="20000" placeholder="UZ; KZ; 6"></textarea></label>
+                  <div class="settings-form-footer">
+                    <p class="shipment-form-message" id="borderWaitsMessage" role="status"></p>
+                    <button class="btn btn-primary small" type="submit">Save</button>
+                  </div>
+                  <div class="market-rate-list" id="borderWaitList"></div>
                 </form>
                 <form class="settings-form hidden" id="marketRatesForm" autocomplete="off">
                   <strong>Market prices (for PULSE)</strong>

@@ -21,6 +21,12 @@ function parseDay(value) {
   return Number.isNaN(time) ? null : time;
 }
 
+// "Tashkent, UZ" -> "UZ": the last part of a place name, when it is a two-letter country code.
+function countryOf(place) {
+  const last = String(place || '').split(',').pop().trim();
+  return /^[A-Za-z]{2}$/.test(last) && String(place).includes(',') ? last.toUpperCase() : null;
+}
+
 function median(values) {
   if (!values.length) return null;
   const sorted = [...values].sort((a, b) => a - b);
@@ -63,7 +69,13 @@ function planRoute(data) {
   // With a map, the road gives a first estimate when the company has no history on the lane yet:
   // driving time plus a rest allowance (drivers must rest; borders and loading take time too).
   const map = data.map || null;
-  const mapHours = map ? round1(map.durationHours * REST_FACTOR) : null;
+  // A border crossing the company entered (hours of waiting). Past loads already include it, a map estimate does not.
+  const border = data.border ? { pair: data.border.pair, hours: data.border.hours } : null;
+  const borderHours = typical === null && border ? border.hours : 0;
+  // Live traffic delay counts only for a truck that is on the road now: a delay today says little about next week.
+  const traffic = data.traffic || null;
+  const trafficHours = typical === null && traffic && ['Dispatched', 'In Transit'].includes(shipment.status) ? traffic.delayMinutes / 60 : 0;
+  const mapHours = map ? round1(map.durationHours * REST_FACTOR + borderHours + trafficHours) : null;
   const expected = typical !== null ? typical : mapHours;
   const expectedBasis = typical !== null ? 'this lane usually takes' : 'by road it takes about';
 
@@ -114,10 +126,12 @@ function planRoute(data) {
   return {
     lane,
     map: map ? { distanceKm: map.distanceKm, drivingHours: map.durationHours, withRestsHours: mapHours } : null,
+    border: border ? { ...border, counted: borderHours > 0 } : null,
+    traffic: traffic ? { delayMinutes: traffic.delayMinutes, travelHours: traffic.travelHours, counted: trafficHours > 0 } : null,
     schedule,
     arrival,
     returnTrucks
   };
 }
 
-module.exports = { planRoute, MIN_SAMPLES, parseDay, parseDbTime, median };
+module.exports = { countryOf, planRoute, MIN_SAMPLES, parseDay, parseDbTime, median };

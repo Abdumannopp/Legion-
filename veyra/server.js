@@ -43,6 +43,10 @@ const {
   deleteInboxAttachments,
   setDocumentType,
   listMarketRates,
+  listBorderWaits,
+  upsertBorderWait,
+  deleteBorderWait,
+  getBorderWait,
   upsertMarketRate,
   deleteMarketRate,
   moveInboxAttachmentsToShipment,
@@ -112,7 +116,9 @@ const nexus = require('./agents/nexus');
 const { parseInbound, senderAllowed, mentionedShipmentIds, guessDocumentType, stripHtml } = require('./lib/inbound-email');
 const messaging = require('./integrations/messaging');
 const geo = require('./integrations/geo');
+const traffic = require('./integrations/traffic');
 const imap = require('./integrations/imap');
+const mailapi = require('./integrations/mailapi');
 const { parseEmail } = require('./lib/mime');
 
 const REGISTRATION_INVITE_CODE = process.env.REGISTRATION_INVITE_CODE || '';
@@ -1367,11 +1373,15 @@ const mailboxBusy = new Set();
 // What the browser may know: where it reads, when it last looked, whether that worked. Never the password.
 function mailboxStatus(tenant) {
   const settings = tenant?.imapSettings;
+  const provider = settings?.provider || null;
   return {
     configured: Boolean(settings),
-    host: settings?.host || null,
-    user: settings?.user || null,
+    provider,
+    host: provider ? (mailapi.PROVIDERS[provider]?.label || provider) : (settings?.host || null),
+    user: settings?.email || settings?.user || null,
     mailbox: settings?.mailbox || null,
+    // Which "sign in with ..." buttons can be offered: the platform owner must have registered the app first.
+    providers: Object.fromEntries(Object.keys(mailapi.PROVIDERS).map((name) => [name, Boolean(PUBLIC_URL && mailapi.enabled(name))])),
     lastCheckedAt: tenant?.imapState?.checkedAt || null,
     lastError: tenant?.imapState?.error || null,
     lastImported: tenant?.imapState?.imported ?? null,
@@ -1388,11 +1398,16 @@ async function pollMailbox(tenantId) {
     const tenant = await getTenant(tenantId);
     if (!tenant?.imapSettings) return { configured: false };
     const previous = tenant.imapState;
-    const position = Number.isInteger(previous?.lastUid) ? { uidValidity: previous.uidValidity, lastUid: previous.lastUid } : null;
+    const viaApi = Boolean(tenant.imapSettings.provider);
+    const label = viaApi ? tenant.imapSettings.provider : 'imap';
+    const position = viaApi
+      ? (Number.isFinite(previous?.after) ? { after: previous.after } : null)
+      : (Number.isInteger(previous?.lastUid) ? { uidValidity: previous.uidValidity, lastUid: previous.lastUid } : null);
     try {
-      const result = await imap.fetchNew(tenant.imapSettings, position, { maxMessages: MAILBOX_BATCH, maxBytes: INBOX_MAX_BYTES });
+      const options = { maxMessages: MAILBOX_BATCH, maxBytes: INBOX_MAX_BYTES };
+      const result = viaApi ? await mailapi.fetchNew(tenant.imapSettings, position, options) : await imap.fetchNew(tenant.imapSettings, position, options);
       let imported = 0;
-      let lastUid = result.state.lastUid;
+      let finalState = result.state;
       for (const entry of result.messages) {
         let message;
         try {
@@ -1401,7 +1416,7 @@ async function pollMailbox(tenantId) {
             from: parsed.from,
             subject: parsed.subject,
             text: (parsed.text || stripHtml(parsed.html)).trim(),
-            messageId: parsed.messageId || `imap-${result.state.uidValidity}-${entry.uid}`,
+            messageId: parsed.messageId || `${label}-${result.state.uidValidity || ''}-${entry.uid ?? entry.id}`,
             attachments: parsed.attachments.map((file) => ({ filename: file.filename, content: file.content }))
           };
         } catch (_) {
@@ -1410,17 +1425,15 @@ async function pollMailbox(tenantId) {
         const outcome = await ingestEmail({ id: tenantId }, message);
         if (outcome.status === 429) {
           // Stay just before this message: the next round starts here.
-          lastUid = Math.min(lastUid, entry.uid - 1);
+          finalState = viaApi ? entry.rewind : { uidValidity: result.state.uidValidity, lastUid: Math.min(result.state.lastUid, entry.uid - 1) };
           break;
         }
         if (outcome.body.id) imported += 1;
       }
-      await setTenantImapState(tenantId, { uidValidity: result.state.uidValidity, lastUid, checkedAt: new Date().toISOString(), error: null, imported });
+      await setTenantImapState(tenantId, { ...finalState, checkedAt: new Date().toISOString(), error: null, imported });
       return { configured: true, imported, skipped: result.skipped };
     } catch (error) {
-      await setTenantImapState(tenantId, {
-        uidValidity: previous?.uidValidity ?? null, lastUid: previous?.lastUid ?? null, checkedAt: new Date().toISOString(), error: String(error.message).slice(0, 200), imported: 0
-      });
+      await setTenantImapState(tenantId, { ...(previous || {}), checkedAt: new Date().toISOString(), error: String(error.message).slice(0, 200), imported: 0 });
       return { configured: true, error: String(error.message).slice(0, 200) };
     }
   } finally {
@@ -1442,6 +1455,42 @@ function startMailboxPoller() {
   mailboxTimer.unref();
   setTimeout(round, 20000).unref();
 }
+
+// "Sign in with Google / Microsoft": the browser is sent to the provider's consent screen and comes back to the
+// callback below with a one-time code. The state value is signed, short-lived and tied to this person and company.
+const mailRedirectUri = () => `${PUBLIC_URL}/api/integrations/mail-oauth/callback`;
+
+app.get('/api/settings/mail-oauth/:provider/start', authMiddleware, requirePermission('settings:write'), (req, res) => {
+  const { provider } = req.params;
+  if (!mailapi.isProvider(provider) || !PUBLIC_URL || !mailapi.enabled(provider)) {
+    return res.redirect('/?mailbox=error&reason=' + encodeURIComponent('This sign-in is not set up on the server yet.'));
+  }
+  const state = jwt.sign({ k: 'mail-oauth', t: req.user.tenantId, u: req.user.id, p: provider }, JWT_SECRET, { expiresIn: '10m' });
+  return res.redirect(mailapi.authorizeUrl(provider, { redirectUri: mailRedirectUri(), state }));
+});
+
+app.get('/api/integrations/mail-oauth/callback', authMiddleware, requirePermission('settings:write'), async (req, res) => {
+  const fail = (reason) => res.redirect(`/?mailbox=error&reason=${encodeURIComponent(String(reason).slice(0, 200))}`);
+  let claims;
+  try {
+    claims = jwt.verify(String(req.query.state || ''), JWT_SECRET);
+  } catch (_) {
+    return fail('The sign-in took too long or is not valid. Start again.');
+  }
+  if (claims.k !== 'mail-oauth' || claims.u !== req.user.id || claims.t !== req.user.tenantId || !mailapi.isProvider(claims.p)) {
+    return fail('This sign-in belongs to another person. Start again.');
+  }
+  if (req.query.error || typeof req.query.code !== 'string' || !req.query.code) return fail(req.query.error_description || 'The mailbox was not connected.');
+  try {
+    const tokens = await mailapi.exchangeCode(claims.p, { code: req.query.code, redirectUri: mailRedirectUri() });
+    await setTenantImapSettings(req.user.tenantId, { provider: claims.p, email: tokens.email, refreshToken: tokens.refreshToken });
+    // Remember "now" so only mail that arrives from this moment is read.
+    pollMailbox(req.user.tenantId).catch(() => {});
+    return res.redirect('/?mailbox=connected');
+  } catch (error) {
+    return fail(error.message);
+  }
+});
 
 // The company's mailbox. Checked by logging in before it is saved; the password is stored encrypted and never returned.
 // Leave the password empty to keep the saved one when only the other fields change.
@@ -1746,6 +1795,55 @@ app.delete('/api/market-rates/:id', authMiddleware, requirePermission('carriers:
 });
 
 /* =========================================================
+   BORDER WAITING TIMES (what ROUTE adds for a crossing)
+   ========================================================= */
+app.get('/api/border-waits', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
+  try {
+    res.json({ success: true, waits: await listBorderWaits(req.user.tenantId) });
+  } catch (error) {
+    return sendError(res, error, 'Border times unavailable.', 'border waits');
+  }
+});
+
+// One border per line: "UZ; KZ; 6" (two country codes and the usual waiting time in hours).
+app.post('/api/border-waits', authMiddleware, requirePermission('carriers:write'), async (req, res) => {
+  const text = req.body?.lines;
+  if (typeof text !== 'string' || !text.trim() || text.length > 20000) {
+    return res.status(400).json({ success: false, message: 'Write one border per line: UZ; KZ; 6 (two country codes and hours of waiting).' });
+  }
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 300);
+  const errors = [];
+  let created = 0;
+  let updated = 0;
+  try {
+    for (const [index, line] of lines.entries()) {
+      const [a, b, rawHours, ...extra] = line.split(/[;\t]/).map((part) => part.trim());
+      const hours = Number(String(rawHours || '').replace(',', '.'));
+      if (extra.length || !/^[A-Za-z]{2}$/.test(a || '') || !/^[A-Za-z]{2}$/.test(b || '') || a.toUpperCase() === b.toUpperCase()) {
+        errors.push({ line: index + 1, message: 'Use: UZ; KZ; 6 (two different country codes, then hours).' });
+      } else if (!Number.isFinite(hours) || hours < 0 || hours > 240) {
+        errors.push({ line: index + 1, message: 'Hours must be between 0 and 240.' });
+      } else if ((await upsertBorderWait(req.user.tenantId, a, b, Math.round(hours * 10) / 10)) === 'created') created += 1;
+      else updated += 1;
+    }
+    return res.json({ success: true, created, updated, errors });
+  } catch (error) {
+    return sendError(res, error, 'Border times could not be saved.', 'border waits save');
+  }
+});
+
+app.delete('/api/border-waits/:id', authMiddleware, requirePermission('carriers:write'), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ success: false, message: 'Valid ID is required.' });
+  try {
+    if (!(await deleteBorderWait(req.user.tenantId, id))) return res.status(404).json({ success: false, message: 'Not found.' });
+    return res.json({ success: true });
+  } catch (error) {
+    return sendError(res, error, 'Border time could not be deleted.', 'border wait delete');
+  }
+});
+
+/* =========================================================
    AI AGENTS
    ========================================================= */
 // FLOW: order text -> shipment draft for a person to review. Nothing is saved here.
@@ -1796,6 +1894,17 @@ app.get('/api/agents/route/:id', authMiddleware, requirePermission('shipments:re
       data.map = await geo.route(data.shipment.origin, data.shipment.destination);
     } catch (error) {
       console.error('[route] map unavailable:', error.message);
+    }
+    const from = routeAgent.countryOf(data.shipment.origin);
+    const to = routeAgent.countryOf(data.shipment.destination);
+    if (from && to && from !== to) data.border = await getBorderWait(req.user.tenantId, from, to);
+    // Live traffic only for trucks on the road (saves the traffic service's quota).
+    if (['Dispatched', 'In Transit'].includes(data.shipment.status)) {
+      try {
+        data.traffic = await traffic.current(data.shipment.origin, data.shipment.destination);
+      } catch (error) {
+        console.error('[route] traffic unavailable:', error.message);
+      }
     }
     return res.json({ success: true, ...routeAgent.planRoute(data) });
   } catch (error) {
@@ -2048,7 +2157,7 @@ app.get('/api/integrations/status', authMiddleware, requirePermission('users:rea
       inbox: { configured: Boolean(tenant?.inboxTokenHash), pathPrefix: INBOX_WEBHOOK_PREFIX, allowedSenders: tenant?.allowedSenders || [], dailyLimit: INBOX_DAILY_LIMIT,
         maxMb: INBOX_MAX_BYTES / (1024 * 1024), maxFiles: INBOX_MAX_ATTACHMENTS },
       documents: { reads: aiGateway.isEnabled(), maxMb: DOC_MAX_BYTES / (1024 * 1024) },
-      map: { enabled: geo.enabled(), offRouteKm: geo.offRouteKm() },
+      map: { enabled: geo.enabled(), offRouteKm: geo.offRouteKm(), traffic: traffic.enabled() },
       mailbox: mailboxStatus(tenant),
       nexus: { enabled: process.env.NEXUS_ENABLED !== 'false', staleHours: STALE_TRACKING_HOURS, aiDailyLimit: AI_DAILY_LIMIT_PER_TENANT }
     });

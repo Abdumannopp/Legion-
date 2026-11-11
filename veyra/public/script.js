@@ -12,7 +12,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   fetchDashboardData();
   loadAdminConsole();
   window.VeyraViews?.onSessionChange();
+  announceMailboxResult();
 });
+
+// Coming back from Google / Microsoft sign-in: say what happened, then clean the address.
+function announceMailboxResult() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const result = params.get('mailbox');
+    if (!result) return;
+    if (result === 'connected') notify('Mailbox connected. New emails from now on are read.', 'ok');
+    else notify(`The mailbox was not connected: ${String(params.get('reason') || 'unknown reason').slice(0, 200)}`, 'error');
+    window.history.replaceState(null, '', window.location.pathname + window.location.hash);
+  } catch (_) { /* not important */ }
+}
 
 let dashboardDays = 7;
 
@@ -921,7 +934,7 @@ async function loadIntegrationsPanel() {
           : 'Connect a mailbox and VEYRA reads orders from it by itself. No forwarding set-up needed.',
         admin ? button(status.mailbox.configured ? 'Change' : 'Connect', () => toggleMailboxForm(status.mailbox)) : null),
       integrationRow('Map (distance, off-route)', status.map.enabled,
-        status.map.enabled ? `OpenStreetMap services · a truck more than ${status.map.offRouteKm} km from the road is flagged (needs GPS)` : 'Off. Set GEO_PROVIDER=osm on the server to add road distance and off-route warnings. Place names of loads are then sent to OpenStreetMap services.'),
+        status.map.enabled ? `OpenStreetMap services · a truck more than ${status.map.offRouteKm} km from the road is flagged (needs GPS) · live traffic: ${status.map.traffic ? 'on (TomTom)' : 'off'}` : 'Off. Set GEO_PROVIDER=osm on the server to add road distance and off-route warnings. Place names of loads are then sent to OpenStreetMap services.'),
       integrationRow('SCOUT, ROUTE, PULSE, SENTINEL', true, 'Built in, no key needed: carrier ranking, schedule check, price check and risk watch, all from your own loads.'),
       integrationRow('SMS / WhatsApp (RELAY)', messagingChannels.length > 0,
         messagingChannels.length
@@ -936,6 +949,24 @@ async function loadIntegrationsPanel() {
         admin ? button(status.gps.configured ? 'New GPS token' : 'Create GPS token', createGpsToken) : null)
     );
     document.getElementById('mailboxRemove')?.classList.toggle('hidden', !status.mailbox.configured);
+    const providerBox = document.getElementById('mailboxProviders');
+    if (providerBox) {
+      const choices = [['gmail', 'Connect Gmail'], ['outlook', 'Connect Outlook / Microsoft 365']].map(([name, label]) => {
+        if (status.mailbox.providers?.[name]) {
+          // A normal link: the browser goes to the provider's consent screen and comes back here.
+          return Object.assign(createTextElement('a', 'btn btn-primary small', label), { href: `/api/settings/mail-oauth/${name}/start` });
+        }
+        const off = createTextElement('span', 'btn btn-ghost small disabled-chip', `${label} · not set up on the server`);
+        off.setAttribute('aria-disabled', 'true');
+        return off;
+      });
+      providerBox.replaceChildren(...choices);
+    }
+    const borderForm = document.getElementById('borderWaitsForm');
+    if (borderForm) {
+      borderForm.classList.toggle('hidden', !hasPermission('carriers:write'));
+      if (hasPermission('carriers:write')) loadBorderWaits();
+    }
     const marketForm = document.getElementById('marketRatesForm');
     if (marketForm) {
       marketForm.classList.toggle('hidden', !hasPermission('carriers:write'));
@@ -950,6 +981,30 @@ async function loadIntegrationsPanel() {
     if (removeButton) removeButton.classList.toggle('hidden', status.messaging.source !== 'company');
   } catch (error) {
     list.replaceChildren(createTextElement('p', 'muted', `Integrations unavailable: ${error.message}`));
+  }
+}
+
+async function loadBorderWaits() {
+  const list = document.getElementById('borderWaitList');
+  if (!list) return;
+  try {
+    const response = await fetch('/api/border-waits', { headers: getAuthHeaders() });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || 'Unavailable');
+    const rows = result.waits.map((wait) => {
+      const row = createTextElement('div', 'market-rate-row');
+      const remove = createTextElement('button', 'btn btn-ghost small', 'Remove');
+      remove.type = 'button';
+      remove.addEventListener('click', async () => {
+        await fetch(`/api/border-waits/${Number(wait.id)}`, { method: 'DELETE', headers: getAuthHeaders() });
+        loadBorderWaits();
+      });
+      row.append(createTextElement('span', '', wait.pair.replace('-', ' ↔ ')), createTextElement('strong', '', `${wait.hours} h`), remove);
+      return row;
+    });
+    list.replaceChildren(...(rows.length ? rows : [createTextElement('p', 'muted', 'No border times yet.')]));
+  } catch (error) {
+    list.replaceChildren(createTextElement('p', 'muted', `Border times unavailable: ${error.message}`));
   }
 }
 
@@ -1065,6 +1120,24 @@ function bindIntegrationForms() {
       loadIntegrationsPanel();
     } catch (error) {
       notify(error.message, 'error');
+    }
+  });
+
+  const borderForm = document.getElementById('borderWaitsForm');
+  const borderMessage = document.getElementById('borderWaitsMessage');
+  borderForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    borderMessage.textContent = '';
+    try {
+      const response = await fetch('/api/border-waits', { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ lines: borderForm.elements.lines.value }) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Could not save');
+      const problems = (result.errors || []).map((entry) => `line ${entry.line}: ${entry.message}`);
+      borderMessage.textContent = problems.length ? `Saved ${result.created + result.updated}. Not saved — ${problems.slice(0, 3).join(' ')}` : '';
+      if (!problems.length) borderForm.elements.lines.value = '';
+      loadBorderWaits();
+    } catch (error) {
+      borderMessage.textContent = error.message;
     }
   });
 
@@ -1820,6 +1893,8 @@ async function loadShipmentAdvice(shipment) {
       if (route.arrival) {
         lines.push([`Probable arrival: ${formatTimestamp(route.arrival.at)} (${route.arrival.basis})${route.arrival.late ? ' — after the promised delivery day' : ''}.`, route.arrival.late ? 'warn-line' : '']);
       }
+      if (route.border) lines.push([`Border ${route.border.pair.replace('-', ' ↔ ')}: usually ${route.border.hours} h of waiting${route.border.counted ? ' (added to the estimate)' : ' (already part of past trips on this lane)'}.`]);
+      if (route.traffic) lines.push([`Traffic now: ${route.traffic.delayMinutes ? `${route.traffic.delayMinutes} min of delay` : 'no delay'} on the road (${route.traffic.travelHours} h of driving at today's speed).`, route.traffic.delayMinutes >= 60 ? 'warn-line' : '']);
       (route.returnTrucks || []).forEach((truck) => lines.push([`Return truck: ${truck.name}${truck.phone ? `, ${truck.phone}` : ''}. ${truck.note}`]));
       blocks.push(adviceBlock('ROUTE · schedule', lines));
     }

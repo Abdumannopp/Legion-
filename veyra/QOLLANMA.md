@@ -191,11 +191,33 @@ sizning o'z yuklaringiz tarixiga qaraydi. Shuning uchun yo'nalishda kamida
   mashina turi (ixtiyoriy); narx`). PULSE ularni o'z tarixingiz bilan birga
   ko'rsatadi va narx bozordan 30% dan qimmat bo'lsa ogohlantiradi.
 
+## Gmail/Outlook bilan ulash, tirbandlik va chegara kutish
+
+- **Gmail / Outlook (IMAP'siz, ilova parolisiz).** "Integrations → Order mailbox"
+  da "Connect Gmail" yoki "Connect Outlook" tugmasi bor. Bosilsa Google yoki
+  Microsoft'ning o'z oynasi ochiladi, siz ruxsat berasiz va qaytasiz. VEYRA
+  parolingizni ko'rmaydi: faqat "faqat o'qish" ruxsati va shifrlangan uzoq muddatli
+  kalit saqlanadi. Xatlar faqat o'qiladi (o'chirilmaydi, belgilanmaydi), ulashdan
+  oldingi eski xatlar olinmaydi.
+  **Muhim:** bu tugmalar ishlashi uchun VEYRA egasi (siz) bir marta Google Cloud va
+  Microsoft Entra'da "ilova" ro'yxatdan o'tkazib, `GOOGLE_CLIENT_ID`/`SECRET` va
+  `MICROSOFT_CLIENT_ID`/`SECRET` ni serverga yozishi kerak (qadamlari
+  `DEPLOYMENT.md` da). Google begona kompaniyalar pochtasini o'qiydigan ilovani
+  tekshiradi: bu vaqt oladi. Shu vaqtgacha IMAP ishlaydi. Kalit yo'q bo'lsa tugma
+  o'chiq turadi va sababi yoziladi.
+- **Yo'ldagi tirbandlik.** `TRAFFIC_PROVIDER=tomtom` va TomTom kaliti kerak (xarita
+  ham yoqilgan bo'lishi shart). Faqat yo'lga chiqqan mashina uchun ko'rsatiladi
+  ("Traffic now: 90 min of delay"), 30 daqiqa saqlanadi. Bir hafta keyingi sayohat
+  uchun bugungi tirbandlik hisobga olinmaydi, chunki u haqida hech narsa demaydi.
+- **Chegarada kutish.** Jonli chegara navbatini beradigan bepul ochiq manba yo'q, shuning
+  uchun "Integrations → Border waiting times" da chegara bo'yicha odatiy kutish
+  soatini o'zingiz yozasiz (`UZ; KZ; 6`). Shahar nomi mamlakat kodi bilan
+  tugashi kerak ("Tashkent, UZ"). ROUTE bu soatni faqat yo'nalishda o'z tarixingiz
+  hali bo'lmaganda qo'shadi (tarixdagi sayohatlarda u allaqachon bor).
+
 ## Hali yo'q narsalar
 
-- Bozor narxlarini internetdan avtomatik olish (ochiq va ishonchli bepul manba
-  yo'q; hozircha qo'lda kiritiladi).
-- Pochtani IMAP'siz o'qish (Gmail/Outlook API orqali ulash).
-- Xaritada yo'l tirbandligi va chegara kutish vaqtini hisobga olish.
-- IMAP va xarita qismi haqiqiy pochta serveri va OpenStreetMap bilan hali
-  sinalmagan: faqat soxta server bilan tekshirilgan.
+- Chegara navbatini jonli ko'rish (bepul ochiq manba yo'q; hozircha qo'lda).
+- Bozor narxlarini internetdan avtomatik olish (qo'lda kiritiladi).
+- Gmail/Outlook, tirbandlik va xarita qismi haqiqiy xizmatlar bilan hali sinalmagan:
+  faqat soxta javoblar bilan tekshirilgan. Birinchi ulashda natijani o'zingiz ko'rib chiqing.

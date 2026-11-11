@@ -404,6 +404,18 @@ async function initialize() {
   `);
   await run('CREATE UNIQUE INDEX IF NOT EXISTS idx_market_rates_lane ON market_rates (tenant_id, lower(origin), lower(destination), equipment)');
 
+  // Typical waiting time at a border between two countries (hours), entered by the company.
+  await run(`
+    CREATE TABLE IF NOT EXISTS border_waits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+      pair TEXT NOT NULL,
+      hours REAL NOT NULL,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await run('CREATE UNIQUE INDEX IF NOT EXISTS idx_border_waits_pair ON border_waits (tenant_id, pair)');
+
   // Map lookups are cached: a place name is looked up once, a road route once.
   await run(`
     CREATE TABLE IF NOT EXISTS geo_places (
@@ -1751,6 +1763,37 @@ async function deleteMarketRate(tenantId, id) {
   return result.changes === 1;
 }
 
+/* ---------------- border waiting times ---------------- */
+
+// "UZ" and "KZ" in any order name the same border: the pair is stored sorted ("KZ-UZ").
+const borderPair = (a, b) => [String(a).toUpperCase(), String(b).toUpperCase()].sort().join('-');
+
+async function listBorderWaits(tenantId) {
+  return (await all('SELECT id, pair, hours, updated_at AS updatedAt FROM border_waits WHERE tenant_id = ? ORDER BY pair', [assertTenant(tenantId)]))
+    .map((row) => ({ id: row.id, pair: row.pair, hours: Number(row.hours), updatedAt: row.updatedAt }));
+}
+
+async function upsertBorderWait(tenantId, countryA, countryB, hours) {
+  assertTenant(tenantId);
+  const pair = borderPair(countryA, countryB);
+  const existing = await get('SELECT id FROM border_waits WHERE tenant_id = ? AND pair = ?', [tenantId, pair]);
+  if (existing) {
+    await run('UPDATE border_waits SET hours = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ?', [hours, existing.id, tenantId]);
+    return 'updated';
+  }
+  await run('INSERT INTO border_waits (tenant_id, pair, hours) VALUES (?, ?, ?)', [tenantId, pair, hours]);
+  return 'created';
+}
+
+async function deleteBorderWait(tenantId, id) {
+  return (await run('DELETE FROM border_waits WHERE id = ? AND tenant_id = ?', [id, assertTenant(tenantId)])).changes === 1;
+}
+
+async function getBorderWait(tenantId, countryA, countryB) {
+  const row = await get('SELECT pair, hours FROM border_waits WHERE tenant_id = ? AND pair = ?', [assertTenant(tenantId), borderPair(countryA, countryB)]);
+  return row ? { pair: row.pair, hours: Number(row.hours) } : null;
+}
+
 /* ---------------- map cache ---------------- */
 
 async function getGeoPlace(key) {
@@ -1974,6 +2017,10 @@ module.exports = {
   deleteInboxAttachments,
   setDocumentType,
   listMarketRates,
+  listBorderWaits,
+  upsertBorderWait,
+  deleteBorderWait,
+  getBorderWait,
   upsertMarketRate,
   deleteMarketRate,
   getGeoPlace,

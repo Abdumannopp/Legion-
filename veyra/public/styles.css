@@ -1393,3 +1393,7 @@ td:first-child { color: #fff; font-weight: 500; }
 .market-rate-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; }
 .market-rate-row span { overflow-wrap: anywhere; }
 .doc-type-select { max-width: 150px; }
+
+.mailbox-providers { display: flex; flex-wrap: wrap; gap: 8px; }
+.mailbox-providers a { text-decoration: none; }
+.disabled-chip { opacity: .6; cursor: not-allowed; }
