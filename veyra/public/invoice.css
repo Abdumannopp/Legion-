@@ -1,0 +1,16 @@
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #111827; background: #f3f4f6; line-height: 1.5; }
+.invoice { max-width: 760px; margin: 24px auto; padding: 36px; background: #fff; border: 1px solid #e5e7eb; }
+header { display: flex; justify-content: space-between; gap: 24px; flex-wrap: wrap; border-bottom: 2px solid #111827; padding-bottom: 16px; margin-bottom: 20px; }
+h1 { margin: 0; font-size: 26px; overflow-wrap: anywhere; }
+h2 { margin: 0 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: #6b7280; }
+header p, .meta p { margin: 0; }
+.party { font-size: 18px; font-weight: 600; margin: 0 0 20px; overflow-wrap: anywhere; }
+table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+th, td { text-align: left; padding: 9px 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; overflow-wrap: anywhere; }
+th { width: 36%; font-weight: 500; color: #6b7280; }
+.total { display: flex; justify-content: space-between; align-items: baseline; font-size: 20px; border-top: 2px solid #111827; padding-top: 12px; margin: 0; }
+.total strong { font-size: 26px; font-variant-numeric: tabular-nums; }
+.state { color: #6b7280; margin: 6px 0 24px; }
+button { font: inherit; padding: 10px 16px; border-radius: 8px; border: 1px solid #111827; background: #111827; color: #fff; cursor: pointer; }
+@media print { body { background: #fff; } .invoice { margin: 0; border: 0; padding: 0; max-width: none; } .actions { display: none; } }

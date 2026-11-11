@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   bindShipmentDetails();
   bindTeamManagement();
   bindIntegrationForms();
+  bindOperationsUi();
   await loadConfig();
   await restoreSession();
   fetchDashboardData();
@@ -631,7 +632,10 @@ async function loadAdminConsole() {
             const accessButton = createTextElement('button', 'btn btn-ghost small', user.active === false ? 'Enable' : 'Disable');
             accessButton.type = 'button';
             accessButton.addEventListener('click', () => updateTeamMember(user, { active: user.active === false }, accessButton));
-            controls.append(roleSelect, accessButton);
+            const resetButton = createTextElement('button', 'btn btn-ghost small', 'New password');
+            resetButton.type = 'button';
+            resetButton.addEventListener('click', () => openPasswordModal({ id: user.id, name: user.name }));
+            controls.append(roleSelect, accessButton, resetButton);
           } else {
             controls.append(createTextElement('span', `user-role ${safeRoleClass}`, role));
           }
@@ -645,6 +649,9 @@ async function loadAdminConsole() {
       loadIntegrationsPanel();
       document.getElementById('companiesBox')?.classList.toggle('hidden', !storedUser?.isPlatformAdmin);
       if (storedUser?.isPlatformAdmin) loadCompaniesPanel();
+      document.getElementById('backupBox')?.classList.toggle('hidden', !storedUser?.isPlatformAdmin);
+      if (storedUser?.isPlatformAdmin) loadBackupPanel();
+      loadAuditPanel();
       if (userCountLabel) userCountLabel.textContent = `${usersData.users.length} users`;
     }
 
@@ -2018,6 +2025,7 @@ async function openShipmentDetails(shipmentId) {
     renderMessageList(shipment.id);
     loadDocuments(shipment.id);
     loadShipmentAdvice(shipment);
+    setupDetailTools(shipment);
     modal.classList.remove('hidden');
   } catch (error) {
     notify(error.message, 'error');
@@ -2075,4 +2083,275 @@ function bindModalA11y() {
       first.focus();
     }
   });
+}
+
+/* =========================================================
+   Passwords, load corrections, payments, customer link, backups, activity log
+   ========================================================= */
+let detailsShipment = null;
+let passwordTarget = null; // null = own password; otherwise the team member an admin is resetting
+
+function openPasswordModal(target = null) {
+  const modal = document.getElementById('passwordModal');
+  const form = document.getElementById('passwordForm');
+  if (!modal || !form) return;
+  passwordTarget = target;
+  form.reset();
+  document.getElementById('passwordMessage').textContent = '';
+  document.getElementById('passwordModalTitle').textContent = target ? `New password for ${target.name}` : 'Change password';
+  document.getElementById('passwordModalHint').textContent = target
+    ? 'Tell them the new password yourself. They are signed out everywhere and should change it after signing in.'
+    : 'You stay signed in here; other devices are signed out.';
+  document.getElementById('currentPasswordLabel').classList.toggle('hidden', Boolean(target));
+  form.elements.currentPassword.required = !target;
+  modal.classList.remove('hidden');
+  (target ? form.elements.newPassword : form.elements.currentPassword).focus();
+}
+
+// Shows the tools of the load that is open: edit, money, customer link.
+function setupDetailTools(shipment) {
+  detailsShipment = shipment;
+  const finished = ['Delivered', 'Cancelled'].includes(shipment.status);
+  const editToggle = document.getElementById('editShipmentToggle');
+  const editForm = document.getElementById('editShipmentForm');
+  editToggle?.classList.toggle('hidden', !hasPermission('shipments:create') || finished);
+  editForm?.classList.add('hidden');
+  editToggle?.setAttribute('aria-expanded', 'false');
+  if (editForm) {
+    const fields = editForm.elements;
+    ['customer', 'customerPhone', 'origin', 'destination', 'pickup', 'delivery', 'reference', 'driverName', 'driverPhone', 'truckPlate']
+      .forEach((name) => { fields[name].value = shipment[name] || ''; });
+    fields.weight.value = Number.parseFloat(shipment.weight) || '';
+    fields.equipment.value = shipment.equipment || '';
+    fields.customerRate.value = shipment.customerRate ?? '';
+    document.getElementById('editShipmentMessage').textContent = '';
+  }
+
+  const canFinance = hasPermission('shipments:finance') && shipment.status !== 'Cancelled';
+  const paymentForm = document.getElementById('paymentForm');
+  paymentForm?.classList.toggle('hidden', !canFinance);
+  if (paymentForm) {
+    paymentForm.elements.invoiceNumber.value = shipment.invoiceNumber || '';
+    paymentForm.elements.invoiced.checked = Boolean(shipment.invoicedAt);
+    paymentForm.elements.customerPaid.checked = Boolean(shipment.customerPaidAt);
+    paymentForm.elements.carrierPaid.checked = Boolean(shipment.carrierPaidAt);
+    paymentForm.elements.carrierPaid.disabled = !shipment.carrierId;
+    document.getElementById('paymentMessage').textContent = '';
+  }
+  const invoice = document.getElementById('invoiceLink');
+  if (invoice) {
+    const available = canFinance && shipment.customerRate !== null && shipment.customerRate !== undefined;
+    invoice.classList.toggle('hidden', !available);
+    invoice.href = `/api/shipments/${encodeURIComponent(shipment.id)}/invoice`;
+  }
+
+  const canShare = hasPermission('shipments:message');
+  document.getElementById('shareCreate')?.classList.toggle('hidden', !canShare);
+  const create = document.getElementById('shareCreate');
+  if (create) create.textContent = shipment.shared ? 'New customer link' : 'Customer tracking link';
+  document.getElementById('shareRemove')?.classList.toggle('hidden', !canShare || !shipment.shared);
+  const shareResult = document.getElementById('shareResult');
+  if (shareResult) {
+    shareResult.classList.toggle('hidden', !shipment.shared);
+    shareResult.replaceChildren(shipment.shared ? 'A customer link exists for this load. The address is shown only once: make a new link if you lost it (the old one stops working).' : '');
+  }
+}
+
+function bindOperationsUi() {
+  document.getElementById('passwordTrigger')?.addEventListener('click', () => openPasswordModal());
+  const passwordModal = document.getElementById('passwordModal');
+  const passwordForm = document.getElementById('passwordForm');
+  const closePassword = () => passwordModal?.classList.add('hidden');
+  document.getElementById('closePassword')?.addEventListener('click', closePassword);
+  passwordModal?.addEventListener('click', (event) => { if (event.target === passwordModal) closePassword(); });
+  passwordForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const message = document.getElementById('passwordMessage');
+    const { currentPassword, newPassword, repeatPassword } = passwordForm.elements;
+    if (newPassword.value !== repeatPassword.value) {
+      message.textContent = 'The two new passwords are not the same.';
+      return;
+    }
+    message.textContent = 'Saving…';
+    try {
+      const url = passwordTarget ? `/api/admin/users/${Number(passwordTarget.id)}/password` : '/api/me/password';
+      const body = passwordTarget ? { newPassword: newPassword.value } : { currentPassword: currentPassword.value, newPassword: newPassword.value };
+      const response = await fetch(url, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(body) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Could not save the password');
+      closePassword();
+      notify(passwordTarget ? `New password set for ${passwordTarget.name}.` : 'Password changed.', 'ok');
+      if (passwordTarget) loadAuditPanel();
+    } catch (error) {
+      message.textContent = error.message;
+    }
+  });
+
+  const editToggle = document.getElementById('editShipmentToggle');
+  const editForm = document.getElementById('editShipmentForm');
+  editToggle?.addEventListener('click', () => {
+    const open = editForm.classList.toggle('hidden') === false;
+    editToggle.setAttribute('aria-expanded', String(open));
+    if (open) editForm.elements.customer.focus();
+  });
+  editForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!detailsShipment) return;
+    const message = document.getElementById('editShipmentMessage');
+    const fields = editForm.elements;
+    const current = {
+      customer: detailsShipment.customer || '', customerPhone: detailsShipment.customerPhone || '', origin: detailsShipment.origin || '',
+      destination: detailsShipment.destination || '', pickup: detailsShipment.pickup || '', delivery: detailsShipment.delivery || '',
+      reference: detailsShipment.reference || '', driverName: detailsShipment.driverName || '', driverPhone: detailsShipment.driverPhone || '',
+      truckPlate: detailsShipment.truckPlate || '', equipment: detailsShipment.equipment || '',
+      weight: String(Number.parseFloat(detailsShipment.weight) || ''), customerRate: detailsShipment.customerRate === null || detailsShipment.customerRate === undefined ? '' : String(detailsShipment.customerRate)
+    };
+    // Only what the person really changed is sent.
+    const changes = {};
+    Object.keys(current).forEach((name) => {
+      const value = fields[name].value.trim();
+      if (value === current[name]) return;
+      if (name === 'weight') changes.weight = Number(value);
+      else if (name === 'customerRate') changes.customerRate = value === '' ? null : Number(value);
+      else changes[name] = value;
+    });
+    if (!Object.keys(changes).length) {
+      message.textContent = 'Nothing was changed.';
+      return;
+    }
+    message.textContent = 'Saving…';
+    try {
+      const response = await fetch(`/api/shipments/${encodeURIComponent(detailsShipment.id)}`, { method: 'PATCH', headers: getAuthHeaders(), body: JSON.stringify(changes) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Could not save');
+      notify(`${detailsShipment.id} updated.`, 'ok');
+      window.VeyraViews?.refresh();
+      openShipmentDetails(detailsShipment.id);
+    } catch (error) {
+      message.textContent = error.message;
+    }
+  });
+
+  const paymentForm = document.getElementById('paymentForm');
+  paymentForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!detailsShipment) return;
+    const message = document.getElementById('paymentMessage');
+    const fields = paymentForm.elements;
+    message.textContent = 'Saving…';
+    try {
+      const body = { invoiceNumber: fields.invoiceNumber.value.trim(), invoiced: fields.invoiced.checked, customerPaid: fields.customerPaid.checked };
+      if (!fields.carrierPaid.disabled) body.carrierPaid = fields.carrierPaid.checked;
+      const response = await fetch(`/api/shipments/${encodeURIComponent(detailsShipment.id)}/payment`, { method: 'PATCH', headers: getAuthHeaders(), body: JSON.stringify(body) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Could not save');
+      notify(result.changed.length ? 'Payment saved.' : 'Nothing was changed.', result.changed.length ? 'ok' : 'info');
+      window.VeyraViews?.refresh();
+      openShipmentDetails(detailsShipment.id);
+    } catch (error) {
+      message.textContent = error.message;
+    }
+  });
+
+  document.getElementById('shareCreate')?.addEventListener('click', async () => {
+    if (!detailsShipment) return;
+    if (detailsShipment.shared && !window.confirm('Make a new link? The link you gave the customer before stops working.')) return;
+    try {
+      const response = await fetch(`/api/shipments/${encodeURIComponent(detailsShipment.id)}/share`, { method: 'POST', headers: getAuthHeaders() });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Could not create the link');
+      const url = result.url || `${window.location.origin}${result.path}`;
+      const box = document.getElementById('shareResult');
+      const copy = createTextElement('button', 'btn btn-ghost small', 'Copy link');
+      copy.type = 'button';
+      copy.addEventListener('click', () => navigator.clipboard?.writeText(url).then(() => notify('Link copied. Send it to the customer.', 'ok')).catch(() => notify('Select the link and copy it.', 'info')));
+      box.replaceChildren('Send this link to the customer. It shows only where the load is, never prices or phone numbers: ', createTextElement('code', '', url), ' ', copy);
+      box.classList.remove('hidden');
+      detailsShipment.shared = true;
+      document.getElementById('shareRemove')?.classList.remove('hidden');
+      document.getElementById('shareCreate').textContent = 'New customer link';
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+  });
+  document.getElementById('shareRemove')?.addEventListener('click', async () => {
+    if (!detailsShipment || !window.confirm('Remove the customer link? It stops working at once.')) return;
+    try {
+      const response = await fetch(`/api/shipments/${encodeURIComponent(detailsShipment.id)}/share`, { method: 'DELETE', headers: getAuthHeaders() });
+      if (!response.ok) throw new Error((await response.json()).message || 'Could not remove the link');
+      notify('Customer link removed.', 'ok');
+      openShipmentDetails(detailsShipment.id);
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+  });
+
+  document.getElementById('backupNow')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      const response = await fetch('/api/platform/backups', { method: 'POST', headers: getAuthHeaders() });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Backup failed');
+      notify('Backup made. Download it and keep it somewhere else too.', 'ok');
+      loadBackupPanel();
+    } catch (error) {
+      notify(error.message, 'error');
+    }
+    button.disabled = false;
+  });
+}
+
+async function loadAuditPanel() {
+  const box = document.getElementById('auditBox');
+  const list = document.getElementById('auditList');
+  if (!box || !list) return;
+  box.classList.toggle('hidden', !hasPermission('users:write'));
+  if (!hasPermission('users:write')) return;
+  const labels = {
+    'password.changed': 'Changed own password', 'password.reset': 'Set a new password for', 'user.created': 'Added a user', 'user.changed': 'Changed a user',
+    'payment.changed': 'Payment', 'tracking_link.created': 'Made a customer link', 'tracking_link.removed': 'Removed a customer link',
+    'backup.created': 'Made a backup', 'backup.downloaded': 'Downloaded a backup', 'mailbox.connected': 'Connected a mailbox', 'mailbox.disconnected': 'Disconnected the mailbox',
+    'twilio.connected': 'Connected Twilio', 'twilio.disconnected': 'Disconnected Twilio', 'inbox.address_created': 'Made a new inbox address',
+    'gps.token_created': 'Made a new GPS token', 'company.created': 'Added a company'
+  };
+  try {
+    const response = await fetch('/api/audit', { headers: getAuthHeaders() });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || 'Unavailable');
+    const rows = result.entries.slice(0, 50).map((entry) => {
+      const row = createTextElement('div', 'audit-row');
+      row.append(
+        createTextElement('strong', '', `${labels[entry.action] || entry.action}${entry.detail ? `: ${entry.detail}` : ''}`),
+        createTextElement('small', '', `${entry.actor || 'System'} · ${formatTimestamp(entry.createdAt)}`)
+      );
+      return row;
+    });
+    list.replaceChildren(...(rows.length ? rows : [createTextElement('p', 'muted', 'Nothing yet. Changes to accounts, settings and payments will be listed here.')]));
+  } catch (error) {
+    list.replaceChildren(createTextElement('p', 'muted', `Activity log unavailable: ${error.message}`));
+  }
+}
+
+async function loadBackupPanel() {
+  const list = document.getElementById('backupList');
+  if (!list) return;
+  try {
+    const response = await fetch('/api/platform/backups', { headers: getAuthHeaders() });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || 'Unavailable');
+    const hint = document.getElementById('backupHint');
+    if (hint) hint.textContent = `${result.automatic ? 'A copy of the whole database is made every day' : 'Automatic backups are off'} · the newest ${result.keep} are kept · download one regularly and keep it off this server`;
+    const rows = result.backups.map((backup) => {
+      const row = createTextElement('div', 'audit-row backup-row');
+      const link = Object.assign(createTextElement('a', 'btn btn-ghost small', 'Download'), { href: `/api/platform/backups/${encodeURIComponent(backup.name)}/file` });
+      const text = document.createElement('div');
+      text.append(createTextElement('strong', '', new Date(backup.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })), createTextElement('small', '', `${formatSize(backup.size)} · ${backup.name}`));
+      row.append(text, link);
+      return row;
+    });
+    list.replaceChildren(...(rows.length ? rows : [createTextElement('p', 'muted', 'No backup yet. The first one is made about a minute after the server starts.')]));
+  } catch (error) {
+    list.replaceChildren(createTextElement('p', 'muted', `Backups unavailable: ${error.message}`));
+  }
 }

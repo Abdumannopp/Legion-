@@ -190,8 +190,30 @@ async function initialize() {
     ['eta', 'TEXT'],
     ['last_tracked_at', 'TEXT'],
     ['customer_phone', 'TEXT'],
-    ['tenant_id', `INTEGER NOT NULL DEFAULT ${DEFAULT_TENANT_ID}`]
+    ['tenant_id', `INTEGER NOT NULL DEFAULT ${DEFAULT_TENANT_ID}`],
+    // Money follow-up: the invoice sent to the customer, and when each side was paid.
+    ['customer_invoice_number', 'TEXT'],
+    ['customer_invoiced_at', 'TEXT'],
+    ['customer_paid_at', 'TEXT'],
+    ['carrier_paid_at', 'TEXT'],
+    // A link the customer can open without an account (only a hash of its secret is stored).
+    ['share_token_hash', 'TEXT']
   ]);
+  await run('CREATE INDEX IF NOT EXISTS idx_shipments_share ON shipments (share_token_hash)');
+
+  // Who did what: account, settings and money changes. Never holds passwords, tokens or message texts.
+  await run(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+      actor_id INTEGER REFERENCES users(id),
+      action TEXT NOT NULL,
+      detail TEXT,
+      ip TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+  await run('CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_log (tenant_id, id)');
 
   await run(`
     CREATE TABLE IF NOT EXISTS shipment_events (
@@ -774,6 +796,45 @@ async function updateUser(tenantId, id, { role, active }, actorId) {
   });
 }
 
+// The stored hash, to check the current password before a change.
+async function getUserPasswordHash(tenantId, id) {
+  const row = await get('SELECT password FROM users WHERE id = ? AND tenant_id = ? AND disabled_at IS NULL', [id, assertTenant(tenantId)]);
+  return row ? row.password : null;
+}
+
+// Sets a new password hash and signs the person out everywhere (every existing session stops working).
+async function setUserPassword(tenantId, id, passwordHash) {
+  assertTenant(tenantId);
+  return withTransaction(async (transaction) => {
+    const result = await transaction.run('UPDATE users SET password = ? WHERE id = ? AND tenant_id = ?', [passwordHash, id, tenantId]);
+    if (result.changes !== 1) throw httpError(404, 'User not found.');
+    await revokeUserSessions(id, transaction.run);
+    return true;
+  });
+}
+
+/* ---------------- audit log ---------------- */
+
+async function recordAudit(tenantId, { actorId = null, action, detail = null, ip = null }) {
+  assertTenant(tenantId);
+  await run('INSERT INTO audit_log (tenant_id, actor_id, action, detail, ip) VALUES (?, ?, ?, ?, ?)',
+    [tenantId, actorId, String(action).slice(0, 60), detail ? String(detail).slice(0, 300) : null, ip ? String(ip).slice(0, 60) : null]);
+}
+
+async function listAudit(tenantId, { limit = 200 } = {}) {
+  return all(
+    `SELECT audit_log.id, audit_log.action, audit_log.detail, audit_log.ip, audit_log.created_at AS createdAt, users.name AS actor
+     FROM audit_log LEFT JOIN users ON users.id = audit_log.actor_id
+     WHERE audit_log.tenant_id = ? ORDER BY audit_log.id DESC LIMIT ?`,
+    [assertTenant(tenantId), limit]
+  );
+}
+
+// A consistent copy of the whole database in one file (safe while the app is running).
+async function backupTo(filePath) {
+  await run('VACUUM INTO ?', [filePath]);
+}
+
 async function createUser({ name, email, password, role = 'operator', tenantId }) {
   assertTenant(tenantId);
   const safeRole = ALLOWED_ROLES.includes(role) ? role : 'operator';
@@ -955,6 +1016,128 @@ async function createShipment({ customer, origin, destination, pickup, delivery,
       customerPhone: customerPhone || null
     };
   });
+}
+
+const EDITABLE_FIELDS = {
+  customer: ['customer', 'Customer'], customerPhone: ['customer_phone', 'Customer phone'], reference: ['reference', 'Reference'],
+  origin: ['origin', 'Origin'], destination: ['destination', 'Destination'], pickup: ['pickup', 'Pickup'], delivery: ['delivery', 'Delivery'],
+  weight: ['weight', 'Weight'], equipment: ['equipment', 'Equipment'], customerRate: ['customer_rate', 'Customer price'],
+  driverName: ['driver_name', 'Driver'], driverPhone: ['driver_phone', 'Driver phone'], truckPlate: ['truck_plate', 'Truck plate']
+};
+
+// Corrects a load's details. A finished load (Delivered / Cancelled) is not edited. Every change is written
+// to the load's history: what changed, from what to what, by whom. Returns { changed: [labels] }.
+async function updateShipmentDetails(tenantId, id, changes, actorId) {
+  assertTenant(tenantId);
+  return withTransaction(async (transaction) => {
+    const row = await transaction.get('SELECT * FROM shipments WHERE id = ? AND tenant_id = ?', [id, tenantId]);
+    if (!row) throw httpError(404, 'Shipment not found.');
+    if (['Delivered', 'Cancelled'].includes(row.status)) throw httpError(409, `A ${row.status.toLowerCase()} load can no longer be edited.`);
+    const pickup = changes.pickup ?? row.pickup;
+    const delivery = changes.delivery ?? row.delivery;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(String(pickup)) && /^\d{4}-\d{2}-\d{2}$/.test(String(delivery)) && delivery < pickup) {
+      throw httpError(400, 'Delivery date must be on or after pickup date.');
+    }
+    const sets = [];
+    const params = [];
+    const notes = [];
+    for (const [field, value] of Object.entries(changes)) {
+      const [column, label] = EDITABLE_FIELDS[field] || [];
+      if (!column || value === undefined) continue;
+      const before = row[column] ?? null;
+      const after = value ?? null;
+      if (String(before ?? '') === String(after ?? '')) continue;
+      sets.push(`${column} = ?`);
+      params.push(after);
+      notes.push(`${label}: ${before ?? '—'} → ${after ?? '—'}`);
+    }
+    if (!sets.length) return { changed: [] };
+    await transaction.run(`UPDATE shipments SET ${sets.join(', ')} WHERE id = ? AND tenant_id = ?`, [...params, id, tenantId]);
+    // 'Updated' is not a status: it marks a correction in the history without touching status timings.
+    await recordShipmentEvent(id, row.status, 'Updated', notes.join('; ').slice(0, 500), actorId, transaction.run);
+    return { changed: notes };
+  });
+}
+
+// Money follow-up on a load. Each flag is true (set now), false (clear) or undefined (leave).
+async function setShipmentPayment(tenantId, id, { invoiceNumber, invoiced, customerPaid, carrierPaid }, actorId) {
+  assertTenant(tenantId);
+  return withTransaction(async (transaction) => {
+    const row = await transaction.get('SELECT * FROM shipments WHERE id = ? AND tenant_id = ?', [id, tenantId]);
+    if (!row) throw httpError(404, 'Shipment not found.');
+    if (row.status === 'Cancelled') throw httpError(409, 'A cancelled load has no payments.');
+    if (customerPaid === true && (row.customer_rate === null || row.customer_rate === undefined)) throw httpError(409, 'Enter the customer price on the load first.');
+    if (carrierPaid === true && !row.carrier_id) throw httpError(409, 'This load has no carrier to pay.');
+    const sets = [];
+    const params = [];
+    const notes = [];
+    const stamp = (column, flag, on, off) => {
+      if (flag === undefined || Boolean(row[column]) === flag) return;
+      sets.push(`${column} = ${flag ? 'CURRENT_TIMESTAMP' : 'NULL'}`);
+      notes.push(flag ? on : off);
+    };
+    if (invoiceNumber !== undefined && (invoiceNumber || null) !== (row.customer_invoice_number || null)) {
+      sets.push('customer_invoice_number = ?');
+      params.push(invoiceNumber || null);
+      notes.push(invoiceNumber ? `Invoice number ${invoiceNumber}` : 'Invoice number removed');
+    }
+    stamp('customer_invoiced_at', invoiced, 'Invoice sent to the customer', 'Invoice marked as not sent');
+    stamp('customer_paid_at', customerPaid, 'Customer paid', 'Customer payment undone');
+    stamp('carrier_paid_at', carrierPaid, 'Carrier paid', 'Carrier payment undone');
+    if (sets.length) {
+      await transaction.run(`UPDATE shipments SET ${sets.join(', ')} WHERE id = ? AND tenant_id = ?`, [...params, id, tenantId]);
+      await recordShipmentEvent(id, row.status, 'Payment', notes.join('; '), actorId, transaction.run);
+    }
+    return { changed: notes };
+  });
+}
+
+// Money that is still open: delivered loads the customer has not paid, and carriers not yet paid.
+async function getFinanceSummary(tenantId) {
+  assertTenant(tenantId);
+  const totals = await get(`
+    SELECT
+      SUM(CASE WHEN status = 'Delivered' AND customer_paid_at IS NULL AND customer_rate IS NOT NULL THEN customer_rate ELSE 0 END) AS receivable,
+      SUM(CASE WHEN status = 'Delivered' AND customer_paid_at IS NULL AND customer_rate IS NOT NULL THEN 1 ELSE 0 END) AS receivableLoads,
+      SUM(CASE WHEN status = 'Delivered' AND customer_paid_at IS NULL AND customer_invoiced_at IS NULL AND customer_rate IS NOT NULL THEN 1 ELSE 0 END) AS notInvoiced,
+      SUM(CASE WHEN status = 'Delivered' AND carrier_paid_at IS NULL AND rate IS NOT NULL THEN rate ELSE 0 END) AS payable,
+      SUM(CASE WHEN status = 'Delivered' AND carrier_paid_at IS NULL AND rate IS NOT NULL THEN 1 ELSE 0 END) AS payableLoads
+    FROM shipments WHERE tenant_id = ?`, [tenantId]);
+  const delivered = `(SELECT MAX(created_at) FROM shipment_events WHERE shipment_events.shipment_id = shipments.id AND shipment_events.to_status = 'Delivered')`;
+  const open = await all(`
+    SELECT shipments.id, customer, customer_rate AS customerRate, rate, customer_invoice_number AS invoiceNumber,
+      customer_invoiced_at AS invoicedAt, customer_paid_at AS customerPaidAt, carrier_paid_at AS carrierPaidAt,
+      carriers.name AS carrierName, ${delivered} AS deliveredAt,
+      CAST(julianday('now') - julianday(${delivered}) AS INTEGER) AS daysSinceDelivery
+    FROM shipments LEFT JOIN carriers ON carriers.id = shipments.carrier_id
+    WHERE shipments.tenant_id = ? AND shipments.status = 'Delivered'
+      AND ((customer_paid_at IS NULL AND customer_rate IS NOT NULL) OR (carrier_paid_at IS NULL AND rate IS NOT NULL))
+    ORDER BY ${delivered} ASC LIMIT 100`, [tenantId]);
+  return {
+    receivable: Number(totals?.receivable) || 0,
+    receivableLoads: Number(totals?.receivableLoads) || 0,
+    notInvoiced: Number(totals?.notInvoiced) || 0,
+    payable: Number(totals?.payable) || 0,
+    payableLoads: Number(totals?.payableLoads) || 0,
+    open: open.map((row) => ({ ...row, id: `SHP-${row.id}` }))
+  };
+}
+
+async function setShipmentShareTokenHash(tenantId, id, tokenHash) {
+  const result = await run('UPDATE shipments SET share_token_hash = ? WHERE id = ? AND tenant_id = ?', [tokenHash, id, assertTenant(tenantId)]);
+  return result.changes === 1;
+}
+
+// Public tracking page: only what a customer may see. No prices, no phone numbers, no carrier name.
+async function findSharedShipment(tokenHash) {
+  if (!tokenHash) return null;
+  return get(
+    `SELECT shipments.id, shipments.reference, shipments.origin, shipments.destination, shipments.pickup, shipments.delivery, shipments.status,
+       shipments.last_location AS lastLocation, shipments.eta, shipments.last_tracked_at AS lastTrackedAt, shipments.truck_plate AS truckPlate,
+       tenants.name AS company
+     FROM shipments JOIN tenants ON tenants.id = shipments.tenant_id WHERE shipments.share_token_hash = ?`,
+    [tokenHash]
+  );
 }
 
 // details: optional { customerRate, driverName, driverPhone, truckPlate } agreed at booking.
@@ -1990,6 +2173,17 @@ async function deleteDocument(tenantId, shipmentId, id) {
 
 module.exports = {
   db,
+  DB_PATH,
+  getUserPasswordHash,
+  setUserPassword,
+  recordAudit,
+  listAudit,
+  backupTo,
+  updateShipmentDetails,
+  setShipmentPayment,
+  getFinanceSummary,
+  setShipmentShareTokenHash,
+  findSharedShipment,
   BCRYPT_COST,
   DEFAULT_TENANT_ID,
   ALLOWED_ROLES,

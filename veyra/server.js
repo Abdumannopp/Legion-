@@ -18,7 +18,19 @@ const {
   readOptionalPhone,
   parseEta
 } = require('./lib/validation');
+const fs = require('fs');
 const {
+  DB_PATH,
+  getUserPasswordHash,
+  setUserPassword,
+  recordAudit,
+  listAudit,
+  backupTo,
+  updateShipmentDetails,
+  setShipmentPayment,
+  getFinanceSummary,
+  setShipmentShareTokenHash,
+  findSharedShipment,
   BCRYPT_COST,
   DEFAULT_TENANT_ID,
   ALLOWED_ROLES,
@@ -134,7 +146,7 @@ const DUMMY_HASH = bcrypt.hashSync(crypto.randomBytes(16).toString('hex'), BCRYP
 
 const ROLE_PERMISSIONS = {
   admin: ['*'],
-  operations: ['analytics:read', 'dashboard:read', 'carriers:read', 'carriers:write', 'shipments:read', 'shipments:create', 'shipments:status', 'shipments:dispatch', 'shipments:track', 'shipments:message', 'shipments:document', 'users:read'],
+  operations: ['shipments:finance', 'analytics:read', 'dashboard:read', 'carriers:read', 'carriers:write', 'shipments:read', 'shipments:create', 'shipments:status', 'shipments:dispatch', 'shipments:track', 'shipments:message', 'shipments:document', 'users:read'],
   // Dispatchers log where the truck is ("check calls") and message drivers, but cannot book or change status.
   operator: ['dashboard:read', 'carriers:read', 'shipments:read', 'shipments:create', 'shipments:track', 'shipments:message', 'shipments:document']
 };
@@ -353,7 +365,12 @@ function serializeShipment(shipment) {
     lastLocation: shipment.last_location || null,
     eta: shipment.eta || null,
     lastTrackedAt: shipment.last_tracked_at || null,
-    trackingNumber: shipment.tracking_number
+    trackingNumber: shipment.tracking_number,
+    invoiceNumber: shipment.customer_invoice_number || null,
+    invoicedAt: shipment.customer_invoiced_at || null,
+    customerPaidAt: shipment.customer_paid_at || null,
+    carrierPaidAt: shipment.carrier_paid_at || null,
+    shared: Boolean(shipment.share_token_hash)
   };
 }
 
@@ -667,6 +684,12 @@ function sanitizeUser(user) {
 function agentLogger(req, shipmentId = null) {
   return (task) => recordAgentTask(req.user.tenantId, { ...task, shipmentId, actorId: req.user.id })
     .catch((error) => console.error('[agent log] failed:', error.message));
+}
+
+// Writes one line to the company's activity log. Never blocks or fails the request it describes.
+function audit(req, action, detail = null) {
+  recordAudit(req.user.tenantId, { actorId: req.user.id, action, detail, ip: getClientIp(req) })
+    .catch((error) => console.error('[audit] failed:', error.message));
 }
 
 function sendError(res, error, fallbackMessage, logLabel) {
@@ -1016,6 +1039,328 @@ app.post('/api/shipments', authMiddleware, requirePermission('shipments:create')
       message: 'Shipment creation failed'
     });
   }
+});
+
+/* =========================================================
+   ACCOUNT: passwords
+   ========================================================= */
+const passwordLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  keyGenerator: (req) => `pwd:${req.user?.id}`,
+  message: 'Too many password attempts. Try again later.'
+});
+
+// A person changes their own password. Every other device is signed out; this one stays signed in.
+app.post('/api/me/password', authMiddleware, passwordLimiter, async (req, res) => {
+  const { currentPassword, newPassword } = req.body || {};
+  if (typeof currentPassword !== 'string' || !currentPassword || passwordTooLong(currentPassword)) {
+    return res.status(400).json({ success: false, message: 'Enter your current password.' });
+  }
+  const passwordError = validateNewPassword(newPassword);
+  if (passwordError) return res.status(400).json({ success: false, message: passwordError });
+  if (newPassword === currentPassword) return res.status(400).json({ success: false, message: 'The new password must be different from the current one.' });
+  try {
+    const hash = await getUserPasswordHash(req.user.tenantId, req.user.id);
+    if (!hash || !(await bcrypt.compare(currentPassword, hash))) {
+      return res.status(403).json({ success: false, message: 'The current password is not correct.' });
+    }
+    await setUserPassword(req.user.tenantId, req.user.id, await bcrypt.hash(newPassword, BCRYPT_COST));
+    await issueSessionCookie({ id: req.user.id, email: req.user.email, name: req.user.name, role: req.user.role }, res);
+    audit(req, 'password.changed', 'own password');
+    return res.json({ success: true });
+  } catch (error) {
+    return sendError(res, error, 'Password could not be changed.', 'change password');
+  }
+});
+
+// An administrator gives a team member a new password (they forgot it). That person is signed out everywhere.
+app.post('/api/admin/users/:id/password', authMiddleware, requirePermission('users:write'), passwordLimiter, async (req, res) => {
+  const userId = Number(req.params.id);
+  if (!Number.isInteger(userId) || userId <= 0) return res.status(400).json({ success: false, message: 'Valid user ID is required.' });
+  if (userId === req.user.id) return res.status(400).json({ success: false, message: 'Change your own password under "Change password".' });
+  const passwordError = validateNewPassword(req.body?.newPassword);
+  if (passwordError) return res.status(400).json({ success: false, message: passwordError });
+  try {
+    const target = await findUserById(userId);
+    if (!target || target.tenantId !== req.user.tenantId) return res.status(404).json({ success: false, message: 'User not found.' });
+    await setUserPassword(req.user.tenantId, userId, await bcrypt.hash(req.body.newPassword, BCRYPT_COST));
+    audit(req, 'password.reset', target.email);
+    return res.json({ success: true });
+  } catch (error) {
+    return sendError(res, error, 'Password could not be reset.', 'reset password');
+  }
+});
+
+// The company's activity log (administrators only).
+app.get('/api/audit', authMiddleware, requirePermission('users:write'), async (req, res) => {
+  try {
+    res.json({ success: true, entries: await listAudit(req.user.tenantId) });
+  } catch (error) {
+    return sendError(res, error, 'Activity log unavailable.', 'audit');
+  }
+});
+
+/* =========================================================
+   LOADS: corrections, money, customer link
+   ========================================================= */
+// Correct a load that was entered wrong. Only the fields that are sent are changed.
+app.patch('/api/shipments/:id', authMiddleware, requirePermission('shipments:create'), async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const changes = {};
+  const bad = (message) => res.status(400).json({ success: false, message });
+  for (const field of ['customer', 'origin', 'destination']) {
+    if (body[field] === undefined) continue;
+    if (typeof body[field] !== 'string' || !body[field].trim() || body[field].trim().length > MAX_LEN[field]) return bad(`${field} must be text of at most ${MAX_LEN[field]} characters.`);
+    changes[field] = body[field].trim();
+  }
+  for (const [field, max] of [['reference', MAX_LEN.reference], ['driverName', MAX_LEN.driverName], ['truckPlate', MAX_LEN.truckPlate]]) {
+    if (body[field] === undefined) continue;
+    const parsed = readOptionalText(body, field, max);
+    if (parsed.error) return bad(parsed.error);
+    changes[field] = parsed.value;
+  }
+  for (const field of ['customerPhone', 'driverPhone']) {
+    if (body[field] === undefined) continue;
+    const parsed = readOptionalPhone(body, field);
+    if (parsed.error) return bad(parsed.error);
+    changes[field] = parsed.value;
+  }
+  for (const field of ['pickup', 'delivery']) {
+    if (body[field] === undefined) continue;
+    if (!parseIsoDate(body[field])) return bad('Pickup and delivery must be valid dates (YYYY-MM-DD).');
+    changes[field] = body[field];
+  }
+  if (body.weight !== undefined) {
+    const weight = parsePositiveNumber(body.weight, MAX_WEIGHT);
+    if (weight === null) return bad(`Weight must be a number up to ${MAX_WEIGHT.toLocaleString('en-US')} ${WEIGHT_UNIT}.`);
+    changes.weight = `${weight} ${WEIGHT_UNIT}`;
+  }
+  if (body.equipment !== undefined) {
+    if (!EQUIPMENT.includes(body.equipment)) return bad(`Equipment must be one of: ${EQUIPMENT.join(', ')}.`);
+    changes.equipment = body.equipment;
+  }
+  if (body.customerRate !== undefined) {
+    const empty = body.customerRate === null || body.customerRate === '';
+    const price = empty ? null : parseMoney(body.customerRate);
+    if (!empty && price === null) return bad(`Customer price must be between 0.01 and ${MAX_RATE.toLocaleString('en-US')}.`);
+    changes.customerRate = price;
+  }
+  if (!Object.keys(changes).length) return bad('Send at least one field to change.');
+  try {
+    const result = await updateShipmentDetails(req.user.tenantId, shipmentId, changes, req.user.id);
+    const shipment = await getShipment(req.user.tenantId, shipmentId);
+    return res.json({ success: true, changed: result.changed, shipment: serializeShipment(shipment) });
+  } catch (error) {
+    return sendError(res, error, 'Shipment could not be changed.', 'edit shipment');
+  }
+});
+
+// Invoice sent / customer paid / carrier paid.
+app.patch('/api/shipments/:id/payment', authMiddleware, requirePermission('shipments:finance'), async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  const { invoiceNumber, invoiced, customerPaid, carrierPaid } = req.body || {};
+  const flags = [invoiced, customerPaid, carrierPaid];
+  const number = readOptionalText(req.body, 'invoiceNumber', 60);
+  if (!shipmentId || flags.some((flag) => flag !== undefined && typeof flag !== 'boolean') || number.error
+    || (invoiceNumber === undefined && flags.every((flag) => flag === undefined))) {
+    return res.status(400).json({ success: false, message: 'Send invoiceNumber (text) and/or invoiced, customerPaid, carrierPaid (true or false).' });
+  }
+  try {
+    const result = await setShipmentPayment(req.user.tenantId, shipmentId, {
+      invoiceNumber: invoiceNumber === undefined ? undefined : number.value, invoiced, customerPaid, carrierPaid
+    }, req.user.id);
+    if (result.changed.length) audit(req, 'payment.changed', `SHP-${shipmentId}: ${result.changed.join('; ')}`);
+    return res.json({ success: true, changed: result.changed, shipment: serializeShipment(await getShipment(req.user.tenantId, shipmentId)) });
+  } catch (error) {
+    return sendError(res, error, 'Payment could not be saved.', 'payment');
+  }
+});
+
+// Money that is still open (delivered but unpaid).
+app.get('/api/finance/summary', authMiddleware, requirePermission('shipments:finance'), async (req, res) => {
+  try {
+    res.json({ success: true, currency: CURRENCY, ...(await getFinanceSummary(req.user.tenantId)) });
+  } catch (error) {
+    return sendError(res, error, 'Finance summary unavailable.', 'finance');
+  }
+});
+
+const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+
+// A printable invoice for the customer (open it and print or "Save as PDF" from the browser).
+app.get('/api/shipments/:id/invoice', authMiddleware, requirePermission('shipments:finance'), async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
+  try {
+    const shipment = await getShipment(req.user.tenantId, shipmentId);
+    if (!shipment) return res.status(404).json({ success: false, message: 'Shipment not found.' });
+    if (shipment.customer_rate === null || shipment.customer_rate === undefined) {
+      return res.status(409).json({ success: false, message: 'Enter the customer price on the load first.' });
+    }
+    const e = escapeHtml;
+    const number = shipment.customer_invoice_number || `SHP-${shipment.id}`;
+    const date = (shipment.customer_invoiced_at || new Date().toISOString()).slice(0, 10);
+    const row = (label, value) => `<tr><th>${e(label)}</th><td>${e(value || '—')}</td></tr>`;
+    res.type('html').send(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Invoice ${e(number)}</title><link rel="stylesheet" href="/invoice.css"></head>
+<body><main class="invoice">
+<header><div><h1>${e(req.user.tenantName || 'Invoice')}</h1><p>Freight invoice</p></div>
+<div class="meta"><p><strong>Invoice</strong> ${e(number)}</p><p><strong>Date</strong> ${e(date)}</p><p><strong>Load</strong> SHP-${shipment.id}</p></div></header>
+<section><h2>Bill to</h2><p class="party">${e(shipment.customer)}</p></section>
+<table>
+${row('Route', `${shipment.origin} → ${shipment.destination}`)}
+${row('Pickup', shipment.pickup)}
+${row('Delivery', shipment.delivery)}
+${row('Cargo', [shipment.weight, shipment.equipment].filter(Boolean).join(' · '))}
+${row('Customer reference', shipment.reference)}
+${row('Truck', shipment.truck_plate)}
+</table>
+<p class="total"><span>Total due</span><strong>${e(formatMoney(shipment.customer_rate))}</strong></p>
+<p class="state">${shipment.customer_paid_at ? `Paid on ${e(String(shipment.customer_paid_at).slice(0, 10))}` : 'Not paid yet'}</p>
+<p class="actions"><button type="button" id="printButton">Print or save as PDF</button></p>
+</main><script src="/print.js"></script></body></html>`);
+  } catch (error) {
+    return sendError(res, error, 'Invoice unavailable.', 'invoice');
+  }
+});
+
+// A link the customer can open without an account. Creating a new link makes the old one stop working.
+app.post('/api/shipments/:id/share', authMiddleware, requirePermission('shipments:message'), async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
+  try {
+    const token = crypto.randomBytes(24).toString('hex');
+    if (!(await setShipmentShareTokenHash(req.user.tenantId, shipmentId, rateLimitKey(token)))) return res.status(404).json({ success: false, message: 'Shipment not found.' });
+    audit(req, 'tracking_link.created', `SHP-${shipmentId}`);
+    return res.status(201).json({ success: true, path: `/track/${token}`, url: PUBLIC_URL ? `${PUBLIC_URL}/track/${token}` : null });
+  } catch (error) {
+    return sendError(res, error, 'Link could not be created.', 'share');
+  }
+});
+
+app.delete('/api/shipments/:id/share', authMiddleware, requirePermission('shipments:message'), async (req, res) => {
+  const shipmentId = parseShipmentId(req.params.id);
+  if (!shipmentId) return res.status(400).json({ success: false, message: 'Valid shipment ID is required.' });
+  try {
+    if (!(await setShipmentShareTokenHash(req.user.tenantId, shipmentId, null))) return res.status(404).json({ success: false, message: 'Shipment not found.' });
+    audit(req, 'tracking_link.removed', `SHP-${shipmentId}`);
+    return res.json({ success: true });
+  } catch (error) {
+    return sendError(res, error, 'Link could not be removed.', 'unshare');
+  }
+});
+
+const publicTrackLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 60,
+  keyGenerator: (req) => `track:${getClientIp(req)}`,
+  message: 'Too many requests.'
+});
+
+// What the customer sees: where the load is. Nothing about prices, phones, the carrier or other loads.
+app.get('/api/public/track/:token', publicTrackLimiter, async (req, res) => {
+  try {
+    const token = String(req.params.token);
+    const shipment = /^[a-f0-9]{48}$/.test(token) ? await findSharedShipment(rateLimitKey(token)) : null;
+    if (!shipment) return res.status(404).json({ success: false, message: 'This tracking link is not valid any more.' });
+    return res.json({
+      success: true,
+      company: shipment.company,
+      load: `SHP-${shipment.id}`,
+      reference: shipment.reference || null,
+      origin: shipment.origin,
+      destination: shipment.destination,
+      pickup: shipment.pickup,
+      delivery: shipment.delivery,
+      status: shipment.status,
+      lastLocation: shipment.lastLocation || null,
+      lastTrackedAt: shipment.lastTrackedAt || null,
+      eta: shipment.eta || null,
+      truckPlate: shipment.truckPlate || null
+    });
+  } catch (error) {
+    return sendError(res, error, 'Tracking unavailable.', 'public track');
+  }
+});
+
+app.get('/track/:token', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'track.html')));
+
+/* =========================================================
+   BACKUPS: a daily copy of the whole database (platform owner only)
+   ========================================================= */
+const BACKUP_DIR = process.env.BACKUP_DIR || path.join(path.dirname(path.resolve(DB_PATH)), 'backups');
+const BACKUP_KEEP = readPositiveInteger(process.env.BACKUP_KEEP, 7);
+const BACKUP_NAME = /^veyra-\d{8}-\d{6}\.db$/;
+
+function listBackups() {
+  if (!fs.existsSync(BACKUP_DIR)) return [];
+  return fs.readdirSync(BACKUP_DIR).filter((name) => BACKUP_NAME.test(name)).sort().reverse().map((name) => {
+    const stat = fs.statSync(path.join(BACKUP_DIR, name));
+    return { name, size: stat.size, createdAt: stat.mtime.toISOString() };
+  });
+}
+
+let backupRunning = false;
+async function createBackup() {
+  if (backupRunning) throw httpError(409, 'A backup is being made right now.');
+  backupRunning = true;
+  try {
+    fs.mkdirSync(BACKUP_DIR, { recursive: true, mode: 0o700 });
+    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+    const name = `veyra-${stamp}.db`;
+    await backupTo(path.join(BACKUP_DIR, name));
+    // Keep the newest few; older copies are removed so the disk does not fill up.
+    listBackups().slice(BACKUP_KEEP).forEach((old) => fs.rmSync(path.join(BACKUP_DIR, old.name), { force: true }));
+    return listBackups().find((entry) => entry.name === name);
+  } finally {
+    backupRunning = false;
+  }
+}
+
+let backupTimer = null;
+function startBackups() {
+  if (backupTimer || process.env.BACKUP_ENABLED === 'false') return;
+  const check = async () => {
+    try {
+      const newest = listBackups()[0];
+      if (!newest || Date.now() - Date.parse(newest.createdAt) > 24 * 60 * 60 * 1000) await createBackup();
+    } catch (error) {
+      console.error('[backup] failed:', error.message);
+    }
+  };
+  backupTimer = setInterval(check, 60 * 60 * 1000);
+  backupTimer.unref();
+  setTimeout(check, 60000).unref();
+}
+
+app.get('/api/platform/backups', authMiddleware, requirePlatformAdmin, (req, res) => {
+  try {
+    res.json({ success: true, backups: listBackups(), keep: BACKUP_KEEP, automatic: process.env.BACKUP_ENABLED !== 'false' });
+  } catch (error) {
+    return sendError(res, error, 'Backups unavailable.', 'backups');
+  }
+});
+
+app.post('/api/platform/backups', authMiddleware, requirePlatformAdmin, async (req, res) => {
+  try {
+    const backup = await createBackup();
+    audit(req, 'backup.created', backup.name);
+    return res.status(201).json({ success: true, backup });
+  } catch (error) {
+    return sendError(res, error, 'Backup could not be made.', 'backup create');
+  }
+});
+
+// The file holds every company's data: only the platform owner may download it, and each download is logged.
+app.get('/api/platform/backups/:name/file', authMiddleware, requirePlatformAdmin, (req, res) => {
+  const name = String(req.params.name);
+  if (!BACKUP_NAME.test(name) || !fs.existsSync(path.join(BACKUP_DIR, name))) return res.status(404).json({ success: false, message: 'Backup not found.' });
+  audit(req, 'backup.downloaded', name);
+  return res.download(path.join(BACKUP_DIR, name), name);
 });
 
 app.get('/api/shipments/:id/events', authMiddleware, requirePermission('shipments:read'), async (req, res) => {
@@ -1484,6 +1829,7 @@ app.get('/api/integrations/mail-oauth/callback', authMiddleware, requirePermissi
   try {
     const tokens = await mailapi.exchangeCode(claims.p, { code: req.query.code, redirectUri: mailRedirectUri() });
     await setTenantImapSettings(req.user.tenantId, { provider: claims.p, email: tokens.email, refreshToken: tokens.refreshToken });
+    audit(req, 'mailbox.connected', `${claims.p}: ${tokens.email}`);
     // Remember "now" so only mail that arrives from this moment is read.
     pollMailbox(req.user.tenantId).catch(() => {});
     return res.redirect('/?mailbox=connected');
@@ -1518,6 +1864,7 @@ app.put('/api/settings/imap', authMiddleware, requirePermission('settings:write'
     const check = await imap.checkAccess(settings);
     if (!check.ok) return res.status(400).json({ success: false, message: `The mailbox could not be opened: ${check.reason}` });
     await setTenantImapSettings(req.user.tenantId, settings);
+    audit(req, 'mailbox.connected', `IMAP: ${userName} on ${hostName}`);
     // Remember the current end of the mailbox now, so only emails that arrive from this moment are read.
     pollMailbox(req.user.tenantId).catch(() => {});
     return res.json({ success: true, mailbox: mailboxStatus({ imapSettings: settings, imapState: null }) });
@@ -1529,6 +1876,7 @@ app.put('/api/settings/imap', authMiddleware, requirePermission('settings:write'
 app.delete('/api/settings/imap', authMiddleware, requirePermission('settings:write'), async (req, res) => {
   try {
     await setTenantImapSettings(req.user.tenantId, null);
+    audit(req, 'mailbox.disconnected', null);
     return res.json({ success: true });
   } catch (error) {
     return sendError(res, error, 'Mailbox could not be removed.', 'imap remove');
@@ -2043,6 +2391,7 @@ app.post('/api/admin/users', authMiddleware, requirePermission('users:write'), a
       role,
       tenantId: req.user.tenantId
     });
+    audit(req, 'user.created', `${user.email} (${user.role})`);
     return res.status(201).json({ success: true, user: { id: user.id, name: user.name, email: user.email, role: user.role, active: true } });
   } catch (error) {
     if (String(error.code) === 'SQLITE_CONSTRAINT') {
@@ -2065,6 +2414,7 @@ app.patch('/api/admin/users/:id', authMiddleware, requirePermission('users:write
   }
   try {
     const user = await updateUser(req.user.tenantId, userId, { role, active }, req.user.id);
+    audit(req, 'user.changed', `${user.email}: role ${user.role}, ${user.active ? 'active' : 'disabled'}`);
     return res.json({ success: true, user });
   } catch (error) {
     return sendError(res, error, 'User could not be updated.', 'update user');
@@ -2208,6 +2558,7 @@ app.put('/api/settings/messaging', authMiddleware, requirePermission('settings:w
     const check = await messaging.verifyCredentials(settings);
     if (!check.ok) return res.status(400).json({ success: false, message: check.reason });
     await setTenantMessagingSettings(req.user.tenantId, settings);
+    audit(req, 'twilio.connected', null);
     return res.json({ success: true, messaging: messaging.publicStatus({ id: req.user.tenantId, messagingSettings: settings }, DEFAULT_TENANT_ID) });
   } catch (error) {
     return sendError(res, error, 'Settings could not be saved.', 'messaging settings');
@@ -2217,6 +2568,7 @@ app.put('/api/settings/messaging', authMiddleware, requirePermission('settings:w
 app.delete('/api/settings/messaging', authMiddleware, requirePermission('settings:write'), async (req, res) => {
   try {
     await setTenantMessagingSettings(req.user.tenantId, null);
+    audit(req, 'twilio.disconnected', null);
     return res.json({ success: true, messaging: messaging.publicStatus(await getTenant(req.user.tenantId), DEFAULT_TENANT_ID) });
   } catch (error) {
     return sendError(res, error, 'Settings could not be removed.', 'messaging settings delete');
@@ -2228,6 +2580,7 @@ app.post('/api/settings/inbox/token', authMiddleware, requirePermission('setting
   try {
     const token = `inbox_${crypto.randomBytes(24).toString('hex')}`;
     await setTenantInboxTokenHash(req.user.tenantId, rateLimitKey(token));
+    audit(req, 'inbox.address_created', null);
     res.status(201).json({ success: true, token, webhookPath: `${INBOX_WEBHOOK_PREFIX}${token}` });
   } catch (error) {
     return sendError(res, error, 'Token could not be created.', 'inbox token');
@@ -2254,6 +2607,7 @@ app.post('/api/integrations/gps/token', authMiddleware, requirePermission('setti
   try {
     const token = `gps_${crypto.randomBytes(24).toString('hex')}`;
     await setTenantGpsTokenHash(req.user.tenantId, rateLimitKey(token));
+    audit(req, 'gps.token_created', null);
     res.status(201).json({ success: true, token, webhookPath: GPS_WEBHOOK_PATH });
   } catch (error) {
     return sendError(res, error, 'Token could not be created.', 'gps token');
@@ -2342,6 +2696,7 @@ app.post('/api/platform/tenants', authMiddleware, requirePlatformAdmin, async (r
       adminEmail: adminEmail.trim().toLowerCase(),
       passwordHash: await bcrypt.hash(adminPassword, BCRYPT_COST)
     });
+    audit(req, 'company.created', companyName.trim());
     return res.status(201).json({ success: true, ...result });
   } catch (error) {
     if (String(error.code) === 'SQLITE_CONSTRAINT') {
@@ -2382,6 +2737,7 @@ function startServer() {
         console.log(`VEYRA API running at http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT} (${isProduction ? 'production' : 'development'}, ${WEIGHT_UNIT}, ${CURRENCY}, sign-up: ${REGISTRATION_MODE}, AI: ${aiGateway.isEnabled() ? 'on' : 'off'}, messaging: ${messaging.channelsOf(messaging.envConfig()).join('+') || 'per company only'}, NEXUS: ${process.env.NEXUS_ENABLED === 'false' ? 'off' : 'on'})`);
         nexus.startSweeper();
         startMailboxPoller();
+        startBackups();
         if (!isProduction) {
           console.warn('[VEYRA] Development mode: demo accounts with public passwords exist. Never expose this server to the internet.');
         }

@@ -1397,3 +1397,21 @@ td:first-child { color: #fff; font-weight: 500; }
 .mailbox-providers { display: flex; flex-wrap: wrap; gap: 8px; }
 .mailbox-providers a { text-decoration: none; }
 .disabled-chip { opacity: .6; cursor: not-allowed; }
+
+/* ---------- password, edit, payments, customer link, backups, activity log ---------- */
+.login-trigger.hidden + #passwordTrigger { display: none; }
+.detail-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
+.detail-actions a { text-decoration: none; }
+.share-result { margin: 8px 0; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); font-size: 13px; overflow-wrap: anywhere; }
+.share-result code { font-size: 12.5px; user-select: all; }
+.payment-form { margin-top: 10px; }
+.payment-flags { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+.payment-flags .check { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; font-weight: 500; }
+.payment-flags input { width: auto; }
+.audit-list { max-height: 320px; overflow-y: auto; }
+.audit-row { display: grid; gap: 2px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+.audit-row strong { font-weight: 500; overflow-wrap: anywhere; }
+.audit-row small { color: var(--muted); }
+.backup-row { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.backup-row a { text-decoration: none; }
+.backup-row div { display: grid; gap: 2px; min-width: 0; }

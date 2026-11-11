@@ -215,6 +215,33 @@ sizning o'z yuklaringiz tarixiga qaraydi. Shuning uchun yo'nalishda kamida
   tugashi kerak ("Tashkent, UZ"). ROUTE bu soatni faqat yo'nalishda o'z tarixingiz
   hali bo'lmaganda qo'shadi (tarixdagi sayohatlarda u allaqachon bor).
 
+## Parol, yukni tuzatish, to'lovlar, mijoz havolasi, zaxira nusxa, jurnal
+
+- **Parol.** Yuqoridagi "Password" tugmasi bilan har kim o'z parolini almashtiradi
+  (boshqa qurilmalardan chiqarib yuboriladi). Xodim parolini unutsa, administrator
+  "Team Access → New password" bilan yangisini qo'yadi. "Parolni unutdim" xati
+  yo'q: yagona administrator o'z parolini unutsa, uni tiklash yo'li yo'q, shuning
+  uchun uni ishonchli joyda saqlang.
+- **Yukni tuzatish.** Yuk oynasida "Edit load": sana, vazn, narx, manzil, haydovchi
+  va boshqalarni tuzatasiz. Har bir o'zgarish yuk tarixiga yoziladi (nima, nimadan
+  nimaga). Yetkazilgan yoki bekor qilingan yuk tahrirlanmaydi.
+- **To'lovlar.** Yuk oynasida hisob-faktura raqami va uchta belgi: "Invoice sent",
+  "Customer paid", "Carrier paid". "Open invoice" chop etiladigan hisob-fakturani
+  ochadi (brauzerda Print → Save as PDF). "Analytics → Open money" da mijozlar
+  sizga va siz tashuvchilarga qancha qarzdor ekani ko'rinadi. Buni faqat admin va
+  operations roli ko'radi.
+- **Mijoz uchun havola.** Yuk oynasida "Customer tracking link": havolani mijozga
+  yuborasiz, u parolsiz ochadi va faqat yuk qayerdaligini ko'radi (narx, telefon,
+  tashuvchi nomi ko'rinmaydi). Yangi havola eskisini o'chiradi; "Remove link"
+  butunlay o'chiradi.
+- **Zaxira nusxa.** Har kuni butun bazaning nusxasi olinadi, oxirgi 7 tasi
+  saqlanadi. **Muhim:** bu nusxalar server diskida turadi, disk yo'qolsa ular ham
+  yo'qoladi. Shuning uchun "Dashboard → Backups → Download" bilan vaqti-vaqti
+  bilan yuklab olib, boshqa joyda (kompyuter, bulut) saqlang. Buni faqat platforma
+  egasi qila oladi, chunki faylda barcha kompaniyalar ma'lumoti bor.
+- **Faoliyat jurnali.** Administrator "Activity log" da kim hisob, parol, sozlama,
+  to'lov, mijoz havolasi va zaxira nusxani o'zgartirganini ko'radi.
+
 ## Hali yo'q narsalar
 
 - Chegara navbatini jonli ko'rish (bepul ochiq manba yo'q; hozircha qo'lda).

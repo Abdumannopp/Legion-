@@ -121,6 +121,7 @@
             <button class="login-trigger ghost hidden" id="logoutTrigger" type="button">
               <svg class="ico"><use href="#i-logout" /></svg> Logout
             </button>
+            <button class="login-trigger ghost" id="passwordTrigger" type="button">Password</button>
           </div>
         </div>
 
@@ -511,6 +512,14 @@
                   <div class="market-rate-list" id="marketRateList"></div>
                 </form>
               </div>
+              <div class="admin-box hidden" id="auditBox">
+                <div class="mini-head"><span><strong>Activity log</strong><small>Who changed accounts, settings and payments</small></span></div>
+                <div class="admin-list audit-list" id="auditList"></div>
+              </div>
+              <div class="admin-box hidden" id="backupBox">
+                <div class="mini-head"><span><strong>Backups</strong><small id="backupHint">A copy of the whole database is made every day</small></span><button class="btn btn-ghost small" type="button" id="backupNow">Back up now</button></div>
+                <div class="admin-list" id="backupList"></div>
+              </div>
               <div class="admin-box hidden" id="companiesBox">
                 <div class="mini-head"><span><strong>Companies</strong><small>Each customer company sees only its own data</small></span><button class="btn btn-ghost small" type="button" id="addCompanyToggle" aria-expanded="false" aria-controls="addCompanyForm">Add company</button></div>
                 <form class="add-user-form hidden" id="addCompanyForm">
@@ -681,6 +690,44 @@
           <div><dt>Tracking number</dt><dd data-detail="tracking">-</dd></div>
           <div class="span-2"><dt>Last location / ETA</dt><dd data-detail="location">-</dd></div>
         </dl>
+        <div class="detail-actions" id="detailActions">
+          <button class="btn btn-ghost small hidden" type="button" id="editShipmentToggle" aria-expanded="false" aria-controls="editShipmentForm">Edit load</button>
+          <button class="btn btn-ghost small hidden" type="button" id="shareCreate">Customer tracking link</button>
+          <button class="btn btn-ghost small hidden" type="button" id="shareRemove">Remove link</button>
+          <a class="btn btn-ghost small hidden" id="invoiceLink" target="_blank" rel="noopener">Open invoice</a>
+        </div>
+        <p class="share-result hidden" id="shareResult" role="status"></p>
+        <form class="tracking-form hidden" id="editShipmentForm" autocomplete="off">
+          <label>Customer<input name="customer" maxlength="120" required /></label>
+          <label>Customer phone<input name="customerPhone" type="tel" maxlength="40" /></label>
+          <label>Origin<input name="origin" maxlength="160" required /></label>
+          <label>Destination<input name="destination" maxlength="160" required /></label>
+          <label>Pickup<input name="pickup" type="date" required /></label>
+          <label>Delivery<input name="delivery" type="date" required /></label>
+          <label><span>Weight (<span data-weight-unit>kg</span>)</span><input name="weight" type="number" min="0.01" step="0.01" required /></label>
+          <label>Equipment<select name="equipment" data-equipment-select></select></label>
+          <label><span>Customer price (<span data-currency>USD</span>)</span><input name="customerRate" type="number" min="0.01" step="0.01" /></label>
+          <label>Reference<input name="reference" maxlength="80" /></label>
+          <label>Driver name<input name="driverName" maxlength="120" /></label>
+          <label>Driver phone<input name="driverPhone" type="tel" maxlength="40" /></label>
+          <label>Truck plate<input name="truckPlate" maxlength="20" /></label>
+          <div class="tracking-form-footer span-2">
+            <p class="shipment-form-message" id="editShipmentMessage" role="status"></p>
+            <button class="btn btn-primary small" type="submit">Save changes</button>
+          </div>
+        </form>
+        <form class="tracking-form payment-form hidden" id="paymentForm" autocomplete="off">
+          <label>Invoice number<input name="invoiceNumber" maxlength="60" placeholder="e.g. INV-2026-014" /></label>
+          <div class="payment-flags">
+            <label class="check"><input type="checkbox" name="invoiced" /> Invoice sent</label>
+            <label class="check"><input type="checkbox" name="customerPaid" /> Customer paid</label>
+            <label class="check"><input type="checkbox" name="carrierPaid" /> Carrier paid</label>
+          </div>
+          <div class="tracking-form-footer span-2">
+            <p class="shipment-form-message" id="paymentMessage" role="status"></p>
+            <button class="btn btn-primary small" type="submit">Save payment</button>
+          </div>
+        </form>
         <div class="advice-box" id="shipmentAdvice" aria-live="polite"></div>
 
         <div class="detail-timeline-head"><strong>Location updates</strong><span>Newest first</span></div>
@@ -726,6 +773,26 @@
         <div class="detail-timeline-head"><strong>Activity</strong><span>Newest first</span></div>
         <div class="detail-timeline" id="shipmentDetailTimeline"></div>
       </section>
+    </div>
+
+    <div class="shipment-modal hidden" id="passwordModal" aria-modal="true" role="dialog" aria-labelledby="passwordModalTitle">
+      <form class="modal-card shipment-form" id="passwordForm" autocomplete="off">
+        <button class="modal-close" id="closePassword" type="button" aria-label="Close">×</button>
+        <div class="shipment-form-heading">
+          <span class="eyebrow">ACCOUNT</span>
+          <h2 id="passwordModalTitle">Change password</h2>
+          <p id="passwordModalHint">You stay signed in here; other devices are signed out.</p>
+        </div>
+        <div class="shipment-form-grid">
+          <label class="span-2" id="currentPasswordLabel">Current password<input name="currentPassword" type="password" autocomplete="current-password" maxlength="72" /></label>
+          <label class="span-2">New password<input name="newPassword" type="password" autocomplete="new-password" minlength="8" maxlength="72" required placeholder="8+ characters, a letter and a number" /></label>
+          <label class="span-2">Repeat new password<input name="repeatPassword" type="password" autocomplete="new-password" minlength="8" maxlength="72" required /></label>
+        </div>
+        <div class="shipment-form-footer">
+          <p class="shipment-form-message" id="passwordMessage" role="status"></p>
+          <button class="btn btn-primary" type="submit">Save password</button>
+        </div>
+      </form>
     </div>
 
     <div class="shipment-modal hidden" id="shipmentModal" aria-modal="true" role="dialog" aria-labelledby="shipmentModalTitle">

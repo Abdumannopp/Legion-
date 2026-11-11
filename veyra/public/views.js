@@ -766,6 +766,7 @@
     if (!state.analytics.data) loading(container);
     try {
       state.analytics.data = await api(`/api/analytics?days=${state.analytics.days}`);
+      state.analytics.finance = can('shipments:finance') ? await api('/api/finance/summary').catch(() => null) : null;
     } catch (error) {
       return errorState(container, error.message, renderAnalytics);
     }
@@ -866,7 +867,23 @@
       ]), window.VeyraConfig?.ai?.enabled ? 'No AI calls in this period.' : 'AI is off. Add OPENROUTER_API_KEY to turn on FLOW.')
     ]);
 
-    container.replaceChildren(kpis, el('div', { class: 'analytics-grid' }, [volumeCard, statusCard, equipmentCard, lanesCard, customersCard, carriersCard, agentsCard]));
+    // Money that is still open: delivered loads the customer has not paid, carriers not yet paid.
+    const finance = state.analytics.finance;
+    const financeCard = finance ? el('div', { class: 'card panel-card span-2' }, [
+      el('div', { class: 'mini-head' }, el('span', {}, [
+        el('strong', { text: 'Open money' }),
+        el('small', { text: `Customers owe ${money(finance.receivable)} (${finance.receivableLoads} loads, ${finance.notInvoiced} not invoiced yet) · you owe carriers ${money(finance.payable)} (${finance.payableLoads} loads)` })
+      ])),
+      miniTable(['Load', 'Customer', 'Customer owes', 'Carrier is owed', 'Delivered'], finance.open.map((row) => [
+        el('button', { class: 'link-button', type: 'button', onclick: () => openShipmentDetails(row.id) }, row.id),
+        el('span', {}, [row.customer, el('small', { class: 'cell-sub', text: row.invoiceNumber ? `Invoice ${row.invoiceNumber}` : (row.invoicedAt ? 'Invoice sent' : 'Not invoiced') })]),
+        row.customerPaidAt || row.customerRate === null ? '—' : money(row.customerRate),
+        row.carrierPaidAt || row.rate === null ? '—' : el('span', {}, [money(row.rate), el('small', { class: 'cell-sub', text: row.carrierName || '' })]),
+        row.daysSinceDelivery === null ? '—' : `${row.daysSinceDelivery} day${row.daysSinceDelivery === 1 ? '' : 's'} ago`
+      ]), 'Nothing is open: every delivered load is paid on both sides.')
+    ]) : null;
+
+    container.replaceChildren(kpis, el('div', { class: 'analytics-grid' }, [financeCard, volumeCard, statusCard, equipmentCard, lanesCard, customersCard, carriersCard, agentsCard].filter(Boolean)));
   }
 
   function hbars(rows) {

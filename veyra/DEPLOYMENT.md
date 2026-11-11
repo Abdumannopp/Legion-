@@ -112,6 +112,15 @@ All three are off until configured, and the app works without them.
 
 NEXUS reacts to events (an order email arrives, a load reaches Sourcing, a truck is booked, a document is uploaded, a truck goes quiet) and leaves **tasks** under Inbox & tasks. It prepares things: reads emails, ranks carriers, drafts messages, compares documents with the load. It never sends a message, books a truck, creates a load or changes a status: every one of those waits for a person to press the button. Trucks with no location update for `STALE_TRACKING_HOURS` get a drafted "where are you?" message (checked every 10 minutes). `NEXUS_ENABLED=false` switches it off.
 
+## Accounts, money, customer link, backups, activity log
+
+- **Passwords**: everyone changes their own under *Password* (other devices are signed out). An administrator can set a new password for a team member who forgot theirs (Team Access -> New password). There is no "forgot password" email: the administrator is the way back in. If the only administrator forgets theirs, a new first admin cannot be created automatically; keep that password in a password manager.
+- **Editing a load**: the load window -> *Edit load*. Every correction is written to the load's history. Delivered and cancelled loads are not edited.
+- **Payments**: invoice number, *Invoice sent*, *Customer paid*, *Carrier paid* in the load window; *Open invoice* gives a printable page (browser -> Print -> Save as PDF); Analytics -> *Open money* lists what is still unpaid. Role needed: admin or operations.
+- **Customer tracking link**: the load window -> *Customer tracking link*. The page shows only route, dates, status, last place, ETA and truck plate. A new link replaces the old one; *Remove link* switches it off. Set `PUBLIC_URL` so the link uses your domain.
+- **Backups**: a full copy of the database is written every day to `BACKUP_DIR` (default: `backups/` next to the database), the newest `BACKUP_KEEP` (7) are kept; `BACKUP_ENABLED=false` switches it off. These copies sit on the same disk as the database, so they protect against mistakes, not against losing the disk: the platform owner should download one regularly (Dashboard -> Backups) and keep it elsewhere. The file holds every company's data. To restore: stop the app, replace the database file with the backup, start the app.
+- **Activity log**: administrators see who changed accounts, passwords, integrations, payments, customer links and backups.
+
 ## Before real traffic
 
 - Change the example admin email and all generated placeholder values.
