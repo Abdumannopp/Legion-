@@ -1,0 +1,208 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+<title id="title">LEGION Cybersecurity Intelligence — Premium SOC Dashboard</title>
+<desc id="desc">Apple-inspired dark purple security operations dashboard with Spartan branding, KPI cards, threat activity chart, severity distribution, MITRE ATT&CK tactics, recent alerts, agent health and recent activity.</desc>
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#090510"/><stop offset=".55" stop-color="#10091D"/><stop offset="1" stop-color="#1A0D2B"/></linearGradient>
+  <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#251638" stop-opacity=".94"/><stop offset="1" stop-color="#171024" stop-opacity=".97"/></linearGradient>
+  <linearGradient id="purple" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#D8B4FE"/><stop offset=".45" stop-color="#A855F7"/><stop offset="1" stop-color="#6D28D9"/></linearGradient>
+  <linearGradient id="lineFill" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#A855F7" stop-opacity=".38"/><stop offset="1" stop-color="#A855F7" stop-opacity="0"/></linearGradient>
+  <linearGradient id="orb" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#C084FC" stop-opacity=".5"/><stop offset="1" stop-color="#6D28D9" stop-opacity="0"/></linearGradient>
+  <filter id="glow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="9" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur in="SourceAlpha" stdDeviation="10"/><feOffset dy="7"/><feComponentTransfer><feFuncA type="linear" slope=".3"/></feComponentTransfer><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  <style>
+    .ui{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif}
+    .muted{fill:#A99BBE}.white{fill:#F8F5FC}.purple{fill:#C084FC}
+    .small{font-size:12px}.tiny{font-size:10px}.label{font-size:13px;font-weight:500}
+    .heading{font-size:17px;font-weight:650}.kpi{font-size:29px;font-weight:700;letter-spacing:-.7px}
+    .card{fill:url(#panel);stroke:#4C3565;stroke-opacity:.58;stroke-width:1.2}
+    .gridline{stroke:#665477;stroke-opacity:.28;stroke-width:1}
+  </style>
+</defs>
+<rect width="1600" height="1000" fill="url(#bg)"/>
+<circle cx="1470" cy="110" r="330" fill="url(#orb)" opacity=".25"/>
+<circle cx="1180" cy="900" r="360" fill="url(#orb)" opacity=".12"/>
+
+<!-- Sidebar -->
+<rect x="0" y="0" width="264" height="1000" fill="#0C0715" fill-opacity=".82"/>
+<path d="M263 0V1000" stroke="#5A3A78" stroke-opacity=".45"/>
+<!-- Spartan shield mark -->
+<g transform="translate(25 25) scale(.48)">
+ <path d="M80 4L145 30L141 93Q137 128 80 160Q23 128 19 93L15 30Z" fill="#170B2A" stroke="url(#purple)" stroke-width="7"/>
+ <path d="M80 24Q49 25 39 52L42 91Q46 113 80 137Q114 113 118 91L121 52Q111 25 80 24Z" fill="url(#purple)"/>
+ <path d="M80 24V137M40 66L69 78L80 91L91 78L120 66L115 91L94 105L80 108L66 105L45 91Z" fill="#0A0610"/>
+ <path d="M48 78L72 88L65 92L52 87ZM112 78L88 88L95 92L108 87Z" fill="#FFF" filter="url(#glow)"/>
+ <path d="M80 23Q55 13 49 45Q65 34 80 37Q95 34 111 45Q105 13 80 23Z" fill="#D8B4FE"/>
+</g>
+<text x="112" y="48" class="ui white" font-size="22" font-weight="750" letter-spacing="4">LEGION</text>
+<text x="113" y="67" class="ui muted" font-size="8.5" letter-spacing="2.2">CYBERSECURITY</text>
+<text x="113" y="80" class="ui muted" font-size="8.5" letter-spacing="2.2">INTELLIGENCE</text>
+
+<text x="26" y="133" class="ui muted tiny" letter-spacing="1.7">WORKSPACE</text>
+<rect x="15" y="150" width="232" height="47" rx="13" fill="#6D28D9" fill-opacity=".34" stroke="#A855F7" stroke-opacity=".42"/>
+<rect x="15" y="150" width="3" height="47" rx="1.5" fill="#C084FC"/>
+<g class="ui" fill="none" stroke="#E9D5FF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+ <path d="M34 173l10-9 10 9v12H34zM40 185v-8h8v8"/>
+ <path d="M35 229a9 9 0 1 1 18 0v7H35zM44 216v3"/>
+ <path d="M35 284l9-11 9 11v10H35zM40 294v-8h8v8"/>
+ <path d="M35 337l9-9 9 9M44 328v18M35 337h18"/>
+ <rect x="36" y="374" width="17" height="15" rx="2"/><path d="M40 374v-4h9v4M40 382h9"/>
+ <path d="M35 431h18v14H35zM40 427h8v4M40 438h8"/>
+ <path d="M35 486l9-5 9 5v12l-9 5-9-5zM44 486v17"/>
+ <path d="M36 542h17v18H36zM40 537h9v5M40 549h9"/>
+ <path d="M35 598l9-9 9 9-9 9zM44 589v18M35 598h18"/>
+</g>
+<g class="ui label">
+ <text x="70" y="180" class="white" font-weight="650">Dashboard</text>
+ <text x="70" y="236" class="white">Alerts &amp; Incidents</text>
+ <text x="70" y="291" class="white">Threat Intelligence</text>
+ <text x="70" y="345" class="white">AI Copilot</text>
+ <text x="70" y="386" class="white">Monitoring</text>
+ <text x="70" y="443" class="white">Assets &amp; Agents</text>
+ <text x="70" y="497" class="white">Vulnerabilities</text>
+ <text x="70" y="555" class="white">Compliance</text>
+ <text x="70" y="604" class="white">Reports</text>
+ <text x="70" y="660" class="white">Integrations</text>
+</g>
+<rect x="199" y="216" width="36" height="22" rx="11" fill="#9333EA"/>
+<text x="217" y="231" text-anchor="middle" class="ui white tiny" font-weight="700">12</text>
+<path d="M20 850H244" stroke="#5A3A78" stroke-opacity=".4"/>
+<g class="ui" fill="none" stroke="#C4B5D5" stroke-width="1.8"><circle cx="44" cy="891" r="9"/><path d="M44 877v4M44 901v4M30 891h4M54 891h4M34 881l3 3M51 898l3 3M54 881l-3 3M37 898l-3 3"/></g>
+<text x="70" y="896" class="ui white label">Settings</text>
+<rect x="16" y="924" width="232" height="60" rx="14" fill="#251638" stroke="#5A3A78" stroke-opacity=".6"/>
+<circle cx="48" cy="954" r="19" fill="url(#purple)"/>
+<text x="48" y="959" text-anchor="middle" class="ui white" font-size="12" font-weight="700">AD</text>
+<circle cx="62" cy="967" r="4" fill="#4ADE80" stroke="#0C0715" stroke-width="2"/>
+<text x="78" y="950" class="ui white label" font-weight="650">Admin</text>
+<text x="78" y="968" class="ui muted tiny">Security Operator</text>
+<path d="M225 950l5 5 5-5" fill="none" stroke="#B9A9CE" stroke-width="1.5"/>
+
+<!-- Top bar -->
+<g class="ui">
+ <rect x="1115" y="22" width="300" height="42" rx="21" fill="#20142F" stroke="#604477" stroke-opacity=".6"/>
+ <circle cx="1140" cy="43" r="7" fill="none" stroke="#CFC3DD" stroke-width="1.6"/><path d="M1145 48l5 5" stroke="#CFC3DD" stroke-width="1.6"/>
+ <text x="1162" y="47" class="muted" font-size="12">Search anything...</text>
+ <rect x="1362" y="31" width="40" height="23" rx="7" fill="#38264D"/><text x="1382" y="47" text-anchor="middle" class="muted tiny">⌘ K</text>
+ <circle cx="1462" cy="43" r="20" fill="#20142F" stroke="#604477"/><path d="M1455 46v-5a7 7 0 0 1 14 0v5l3 4h-20zM1460 54h5" fill="none" stroke="#D9CBE8" stroke-width="1.5" stroke-linejoin="round"/>
+ <circle cx="1480" cy="25" r="4" fill="#F59E0B"/>
+ <circle cx="1530" cy="43" r="20" fill="url(#purple)"/><text x="1530" y="47" text-anchor="middle" class="white" font-size="11" font-weight="700">AD</text>
+</g>
+
+<!-- Heading -->
+<text x="310" y="112" class="ui white" font-size="30" font-weight="700" letter-spacing="-.8">Good evening, Admin <tspan fill="#FBBF24">✦</tspan></text>
+<text x="311" y="141" class="ui muted" font-size="14">Here's your security overview for today.</text>
+<rect x="1358" y="94" width="208" height="38" rx="19" fill="#241631" stroke="#604477" stroke-opacity=".65"/>
+<circle cx="1380" cy="113" r="4" fill="#4ADE80" filter="url(#glow)"/>
+<text x="1393" y="117" class="ui white small">All systems operational</text>
+
+<!-- KPI cards -->
+<g filter="url(#shadow)">
+ <rect x="306" y="168" width="294" height="126" rx="19" class="card"/>
+ <rect x="618" y="168" width="294" height="126" rx="19" class="card"/>
+ <rect x="930" y="168" width="294" height="126" rx="19" class="card"/>
+ <rect x="1242" y="168" width="324" height="126" rx="19" class="card"/>
+</g>
+<!-- KPI icons -->
+<path d="M335 194l13-5 13 5v12q-4 12-13 17-9-5-13-17z" fill="none" stroke="#D8B4FE" stroke-width="2" filter="url(#glow)"/>
+<circle cx="661" cy="211" r="13" fill="none" stroke="#C084FC" stroke-width="2"/><path d="M661 202v9l7 4M654 195l-5 5M668 195l5 5" fill="none" stroke="#C084FC" stroke-width="2"/>
+<path d="M963 224l14-26 14 26z" fill="none" stroke="#FB923C" stroke-width="2"/><path d="M977 207v8M977 219v1" stroke="#FB923C" stroke-width="2"/>
+<rect x="1271" y="197" width="27" height="20" rx="3" fill="none" stroke="#C4B5FD" stroke-width="2"/><path d="M1284 217v7M1277 225h14" stroke="#C4B5FD" stroke-width="2"/>
+<g class="ui">
+ <text x="371" y="204" class="muted label">Security Score</text><text x="371" y="246" class="white kpi">93<tspan class="muted" font-size="16"> /100</tspan></text><text x="371" y="273" fill="#4ADE80" font-size="12">↑ +4 pts (24h)</text>
+ <circle cx="555" cy="224" r="27" fill="none" stroke="#3B2B4D" stroke-width="8"/><circle cx="555" cy="224" r="27" fill="none" stroke="url(#purple)" stroke-width="8" stroke-dasharray="158 170" transform="rotate(-90 555 224)" stroke-linecap="round"/>
+ <text x="683" y="204" class="muted label">Active Threats</text><text x="683" y="246" class="white kpi">07</text><text x="683" y="273" fill="#F87171" font-size="12">↑ +2 (24h)</text>
+ <path d="M808 250c18-32 29 16 47-6s24-19 39-7" fill="none" stroke="#A855F7" stroke-width="2.5" stroke-linecap="round"/>
+ <text x="995" y="204" class="muted label">Open Incidents</text><text x="995" y="246" class="white kpi">12</text><text x="995" y="273" fill="#4ADE80" font-size="12">↓ −3 (24h)</text>
+ <path d="M1120 250c16-23 28 17 44-3s25-20 42-9" fill="none" stroke="#A855F7" stroke-width="2.5" stroke-linecap="round"/>
+ <text x="1310" y="204" class="muted label">Protected Endpoints</text><text x="1310" y="246" class="white kpi">1,248</text><text x="1310" y="273" fill="#4ADE80" font-size="12">↑ +24 (24h)</text>
+</g>
+
+<!-- Mid row: threat activity -->
+<rect x="306" y="316" width="608" height="282" rx="19" class="card"/>
+<text x="330" y="351" class="ui white heading">Threat Activity</text>
+<text x="330" y="374" class="ui muted small">Detected security events over time</text>
+<rect x="780" y="332" width="110" height="32" rx="9" fill="#30213F" stroke="#63477A" stroke-opacity=".55"/>
+<text x="795" y="352" class="ui white small">Last 24 hours⌄</text>
+<!-- chart grid -->
+<g class="ui muted tiny">
+ <text x="330" y="431">1,000</text><text x="339" y="469">750</text><text x="339" y="507">500</text><text x="339" y="545">250</text><text x="350" y="580">0</text>
+</g>
+<g class="gridline"><path d="M378 426H886M378 464H886M378 502H886M378 540H886M378 578H886"/></g>
+<path d="M378 567 C412 562 425 548 451 552 S492 520 522 525 S559 485 589 497 S624 521 657 510 S699 490 727 482 S770 520 801 507 S850 472 886 493 L886 578 L378 578Z" fill="url(#lineFill)"/>
+<path d="M378 567 C412 562 425 548 451 552 S492 520 522 525 S559 485 589 497 S624 521 657 510 S699 490 727 482 S770 520 801 507 S850 472 886 493" fill="none" stroke="#C084FC" stroke-width="3" stroke-linecap="round" filter="url(#glow)"/>
+<path d="M727 482V578" stroke="#A855F7" stroke-opacity=".35" stroke-dasharray="4 5"/>
+<circle cx="727" cy="482" r="5" fill="#E9D5FF" stroke="#A855F7" stroke-width="3"/>
+<rect x="682" y="433" width="91" height="42" rx="9" fill="#352348" stroke="#76539A"/>
+<text x="727" y="450" text-anchor="middle" class="ui white small" font-weight="650">642 events</text><text x="727" y="465" text-anchor="middle" class="ui muted tiny">14:00</text>
+<g class="ui muted tiny" text-anchor="middle"><text x="378" y="590">00:00</text><text x="451" y="590">03:00</text><text x="524" y="590">06:00</text><text x="597" y="590">09:00</text><text x="670" y="590">12:00</text><text x="743" y="590">15:00</text><text x="816" y="590">18:00</text><text x="886" y="590">21:00</text></g>
+
+<!-- Severity -->
+<rect x="932" y="316" width="296" height="282" rx="19" class="card"/>
+<text x="956" y="351" class="ui white heading">Threats by Severity</text>
+<circle cx="1020" cy="475" r="54" fill="none" stroke="#39264B" stroke-width="15"/>
+<circle cx="1020" cy="475" r="54" fill="none" stroke="#EF4444" stroke-width="15" stroke-dasharray="32 339" transform="rotate(-90 1020 475)"/>
+<circle cx="1020" cy="475" r="54" fill="none" stroke="#F59E0B" stroke-width="15" stroke-dasharray="77 339" stroke-dashoffset="-32" transform="rotate(-90 1020 475)"/>
+<circle cx="1020" cy="475" r="54" fill="none" stroke="#A855F7" stroke-width="15" stroke-dasharray="145 339" stroke-dashoffset="-109" transform="rotate(-90 1020 475)"/>
+<circle cx="1020" cy="475" r="54" fill="none" stroke="#D8B4FE" stroke-width="15" stroke-dasharray="85 339" stroke-dashoffset="-254" transform="rotate(-90 1020 475)"/>
+<text x="1020" y="474" text-anchor="middle" class="ui white" font-size="25" font-weight="700">35</text><text x="1020" y="493" text-anchor="middle" class="ui muted tiny">Total</text>
+<g class="ui small">
+ <circle cx="1100" cy="423" r="5" fill="#EF4444"/><text x="1112" y="427" class="white">Critical</text><text x="1201" y="427" text-anchor="end" class="muted">3 (9%)</text>
+ <circle cx="1100" cy="458" r="5" fill="#F59E0B"/><text x="1112" y="462" class="white">High</text><text x="1201" y="462" text-anchor="end" class="muted">8 (23%)</text>
+ <circle cx="1100" cy="493" r="5" fill="#A855F7"/><text x="1112" y="497" class="white">Medium</text><text x="1201" y="497" text-anchor="end" class="muted">15 (43%)</text>
+ <circle cx="1100" cy="528" r="5" fill="#D8B4FE"/><text x="1112" y="532" class="white">Low</text><text x="1201" y="532" text-anchor="end" class="muted">9 (25%)</text>
+</g>
+
+<!-- MITRE -->
+<rect x="1246" y="316" width="320" height="282" rx="19" class="card"/>
+<text x="1270" y="351" class="ui white heading">MITRE ATT&amp;CK</text><text x="1270" y="374" class="ui muted small">Top tactics · 24h</text>
+<g class="ui small">
+ <text x="1270" y="422" class="white">Initial Access</text><rect x="1390" y="409" width="132" height="14" rx="7" fill="#382747"/><rect x="1390" y="409" width="76" height="14" rx="7" fill="url(#purple)"/><text x="1540" y="421" text-anchor="end" class="muted">32%</text>
+ <text x="1270" y="460" class="white">Execution</text><rect x="1390" y="447" width="132" height="14" rx="7" fill="#382747"/><rect x="1390" y="447" width="58" height="14" rx="7" fill="url(#purple)"/><text x="1540" y="459" text-anchor="end" class="muted">24%</text>
+ <text x="1270" y="498" class="white">Persistence</text><rect x="1390" y="485" width="132" height="14" rx="7" fill="#382747"/><rect x="1390" y="485" width="44" height="14" rx="7" fill="url(#purple)"/><text x="1540" y="497" text-anchor="end" class="muted">18%</text>
+ <text x="1270" y="536" class="white">Defense Evasion</text><rect x="1390" y="523" width="132" height="14" rx="7" fill="#382747"/><rect x="1390" y="523" width="35" height="14" rx="7" fill="url(#purple)"/><text x="1540" y="535" text-anchor="end" class="muted">14%</text>
+ <text x="1270" y="574" class="white">Privilege Escalation</text><rect x="1390" y="561" width="132" height="14" rx="7" fill="#382747"/><rect x="1390" y="561" width="29" height="14" rx="7" fill="url(#purple)"/><text x="1540" y="573" text-anchor="end" class="muted">12%</text>
+</g>
+
+<!-- Bottom alerts -->
+<rect x="306" y="620" width="594" height="302" rx="19" class="card"/>
+<text x="330" y="657" class="ui white heading">Recent Alerts</text><text x="860" y="657" text-anchor="end" class="ui purple small">View all →</text>
+<rect x="326" y="675" width="554" height="32" rx="7" fill="#30213F" fill-opacity=".9"/>
+<g class="ui muted tiny"><text x="340" y="696">TIME</text><text x="407" y="696">SEVERITY</text><text x="500" y="696">ALERT</text><text x="785" y="696">SOURCE</text></g>
+<g class="ui small">
+ <path d="M326 714H880M326 755H880M326 796H880M326 837H880M326 878H880" stroke="#5A456B" stroke-opacity=".35"/>
+ <text x="340" y="734" class="white">18:42</text><rect x="407" y="718" width="61" height="22" rx="11" fill="#7F1D35"/><text x="437" y="733" text-anchor="middle" fill="#FCA5A5" font-size="10">Critical</text><text x="500" y="734" class="white">Suspicious PowerShell execution</text><text x="785" y="734" class="muted">wazuh-agent-01</text>
+ <text x="340" y="775" class="white">17:29</text><rect x="407" y="759" width="48" height="22" rx="11" fill="#783B18"/><text x="431" y="774" text-anchor="middle" fill="#FDBA74" font-size="10">High</text><text x="500" y="775" class="white">Multiple failed login attempts</text><text x="785" y="775" class="muted">wazuh-agent-03</text>
+ <text x="340" y="816" class="white">16:57</text><rect x="407" y="800" width="48" height="22" rx="11" fill="#783B18"/><text x="431" y="815" text-anchor="middle" fill="#FDBA74" font-size="10">High</text><text x="500" y="816" class="white">Potential malware activity detected</text><text x="785" y="816" class="muted">wazuh-agent-07</text>
+ <text x="340" y="857" class="white">15:14</text><rect x="407" y="841" width="61" height="22" rx="11" fill="#49266D"/><text x="437" y="856" text-anchor="middle" fill="#D8B4FE" font-size="10">Medium</text><text x="500" y="857" class="white">Unusual outbound connection</text><text x="785" y="857" class="muted">wazuh-agent-02</text>
+ <text x="340" y="898" class="white">14:36</text><rect x="407" y="882" width="61" height="22" rx="11" fill="#49266D"/><text x="437" y="897" text-anchor="middle" fill="#D8B4FE" font-size="10">Medium</text><text x="500" y="898" class="white">Policy violation: USB device</text><text x="785" y="898" class="muted">wazuh-agent-05</text>
+</g>
+
+<!-- Agent status -->
+<rect x="918" y="620" width="300" height="302" rx="19" class="card"/>
+<text x="942" y="657" class="ui white heading">Agent Status</text>
+<circle cx="1010" cy="782" r="61" fill="none" stroke="#39264B" stroke-width="14"/>
+<circle cx="1010" cy="782" r="61" fill="none" stroke="#4ADE80" stroke-width="14" stroke-dasharray="365 383" transform="rotate(-90 1010 782)" stroke-linecap="round"/>
+<circle cx="1010" cy="782" r="61" fill="none" stroke="#A855F7" stroke-width="14" stroke-dasharray="9 383" stroke-dashoffset="-365" transform="rotate(-90 1010 782)"/>
+<text x="1010" y="780" text-anchor="middle" class="ui white" font-size="25" font-weight="700">1,248</text><text x="1010" y="801" text-anchor="middle" class="ui muted tiny">Agents</text>
+<g class="ui small">
+ <circle cx="1100" cy="741" r="5" fill="#4ADE80"/><text x="1113" y="745" class="white">Online</text><text x="1190" y="745" text-anchor="end" class="muted">1,208</text>
+ <circle cx="1100" cy="780" r="5" fill="#A78BFA"/><text x="1113" y="784" class="white">Offline</text><text x="1190" y="784" text-anchor="end" class="muted">28</text>
+ <circle cx="1100" cy="819" r="5" fill="#F59E0B"/><text x="1113" y="823" class="white">Unhealthy</text><text x="1190" y="823" text-anchor="end" class="muted">12</text>
+</g>
+<text x="942" y="882" class="ui muted tiny">Endpoint health across connected agents</text>
+
+<!-- Recent activity -->
+<rect x="1236" y="620" width="330" height="302" rx="19" class="card"/>
+<text x="1260" y="657" class="ui white heading">Recent Activity</text>
+<g class="ui small">
+ <path d="M1271 710V866" stroke="#6D28D9" stroke-opacity=".55" stroke-width="2"/>
+ <circle cx="1271" cy="711" r="9" fill="#123D2B" stroke="#4ADE80" stroke-width="1.5"/><path d="M1267 711l3 3 5-6" fill="none" stroke="#4ADE80" stroke-width="1.5"/>
+ <text x="1292" y="707" class="white">Agent wazuh-agent-03 connected</text><text x="1292" y="726" class="muted tiny">2 min ago</text>
+ <circle cx="1271" cy="759" r="9" fill="#321B4D" stroke="#C084FC" stroke-width="1.5"/><path d="M1271 753l5 3v5l-5 4-5-4v-5z" fill="none" stroke="#D8B4FE"/>
+ <text x="1292" y="755" class="white">Threat blocked: malicious IP</text><text x="1292" y="774" class="muted tiny">7 min ago</text>
+ <circle cx="1271" cy="807" r="9" fill="#28213A" stroke="#A78BFA" stroke-width="1.5"/><path d="M1267 807h8m-3-3 3 3-3 3" fill="none" stroke="#C4B5FD" stroke-width="1.4"/>
+ <text x="1292" y="803" class="white">Rules updated (v4.7.2)</text><text x="1292" y="822" class="muted tiny">15 min ago</text>
+ <circle cx="1271" cy="855" r="9" fill="#28213A" stroke="#A78BFA" stroke-width="1.5"/><circle cx="1271" cy="852" r="2.5" fill="none" stroke="#C4B5FD"/><path d="M1266 860q5-7 10 0" fill="none" stroke="#C4B5FD"/>
+ <text x="1292" y="851" class="white">New agent enrolled</text><text x="1292" y="870" class="muted tiny">28 min ago</text>
+</g>
+<text x="1260" y="900" class="ui purple tiny">View activity log →</text>
+</svg>

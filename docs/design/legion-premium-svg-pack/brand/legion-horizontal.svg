@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
+<title id="title">LEGION — Cybersecurity Intelligence</title>
+<desc id="desc">Premium purple Spartan helmet inside a shield, with LEGION wordmark and Cybersecurity Intelligence tagline.</desc>
+
+<defs>
+  <linearGradient id="shieldStroke" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#F1D8FF"/>
+    <stop offset=".34" stop-color="#B66BFF"/>
+    <stop offset=".72" stop-color="#792BEB"/>
+    <stop offset="1" stop-color="#E0B5FF"/>
+  </linearGradient>
+  <linearGradient id="helmetFace" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#FFFFFF"/>
+    <stop offset=".24" stop-color="#DCC5FF"/>
+    <stop offset=".58" stop-color="#9B5CF6"/>
+    <stop offset="1" stop-color="#4C1D95"/>
+  </linearGradient>
+  <linearGradient id="crest" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#F4DFFF"/>
+    <stop offset=".45" stop-color="#A855F7"/>
+    <stop offset="1" stop-color="#5B21B6"/>
+  </linearGradient>
+  <linearGradient id="word" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#FFFFFF"/>
+    <stop offset="1" stop-color="#D9D2E5"/>
+  </linearGradient>
+  <filter id="softGlow" x="-60%" y="-60%" width="220%" height="220%">
+    <feGaussianBlur stdDeviation="5" result="b"/>
+    <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+</defs>
+
+
+<g id="legion-emblem">
+  <!-- shield -->
+  <path d="M160 12 L292 65 L285 190 C279 259 226 311 160 348 C94 311 41 259 35 190 L28 65 Z"
+        fill="#10091C" fill-opacity=".18" stroke="url(#shieldStroke)" stroke-width="11"
+        stroke-linejoin="round"/>
+  <path d="M160 28 L276 75 L269 188 C263 247 218 291 160 326 C102 291 57 247 51 188 L44 75 Z"
+        fill="#170B2A" fill-opacity=".42" stroke="#D8B4FE" stroke-opacity=".22" stroke-width="2"/>
+  <!-- Spartan crest -->
+  <path d="M157 45 C130 48 104 61 88 82 C75 100 69 122 71 144
+           C75 128 87 113 103 103 C121 91 139 85 160 83
+           C181 85 199 91 217 103 C233 113 245 128 249 144
+           C251 122 245 100 232 82 C216 61 190 48 163 45 Z"
+        fill="url(#crest)" stroke="#E9D5FF" stroke-opacity=".85" stroke-width="2.5"
+        stroke-linejoin="round"/>
+  <path d="M160 49 L160 83 M130 57 L119 91 M190 57 L201 91 M103 74 L92 105 M217 74 L228 105"
+        fill="none" stroke="#F5E9FF" stroke-opacity=".48" stroke-width="3" stroke-linecap="round"/>
+  <!-- helmet shell -->
+  <path d="M160 83 C123 83 93 105 86 139 L91 218
+           C93 244 111 267 137 281 L160 299 L183 281
+           C209 267 227 244 229 218 L234 139
+           C227 105 197 83 160 83 Z"
+        fill="url(#helmetFace)" stroke="#E9D5FF" stroke-width="3.5" stroke-linejoin="round"/>
+  <!-- center ridge -->
+  <path d="M160 84 L160 299" stroke="#F8EEFF" stroke-opacity=".58" stroke-width="3"/>
+  <path d="M160 86 C128 91 104 111 98 143 L102 207
+           C105 231 119 250 145 270 L160 283 Z"
+        fill="#FFFFFF" fill-opacity=".13"/>
+  <path d="M160 86 C192 91 216 111 222 143 L218 207
+           C215 231 201 250 175 270 L160 283 Z"
+        fill="#240A49" fill-opacity=".32"/>
+  <!-- brow / eye opening -->
+  <path d="M91 151 L139 167 L160 188 L181 167 L229 151
+           L222 195 L185 218 L160 222 L135 218 L98 195 Z"
+        fill="#090510"/>
+  <path d="M108 164 L150 181 L137 188 L116 180 Z"
+        fill="#FFFFFF" filter="url(#softGlow)"/>
+  <path d="M212 164 L170 181 L183 188 L204 180 Z"
+        fill="#FFFFFF" filter="url(#softGlow)"/>
+  <!-- nose guard and cheek plates -->
+  <path d="M160 188 L160 299 L137 281 L137 224 L112 209 L98 195"
+        fill="none" stroke="#F3E8FF" stroke-opacity=".72" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M160 188 L160 299 L183 281 L183 224 L208 209 L222 195"
+        fill="none" stroke="#7E22CE" stroke-opacity=".9" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M102 207 L137 224 L137 270 M218 207 L183 224 L183 270"
+        fill="none" stroke="#F3E8FF" stroke-opacity=".52" stroke-width="2.5" stroke-linecap="round"/>
+</g>
+
+<g transform="translate(20 25) scale(.88)">
+  <use href="#legion-emblem"/>
+</g>
+<g font-family="Arial, Helvetica, sans-serif">
+  <text x="350" y="208" fill="url(#word)" font-size="104" font-weight="700" letter-spacing="13">LEGION</text>
+  <text x="356" y="263" fill="#D8D2E2" font-size="23" font-weight="500" letter-spacing="4.4">CYBERSECURITY INTELLIGENCE</text>
+  <path d="M356 286 H1000" stroke="url(#shieldStroke)" stroke-width="2" opacity=".75"/>
+</g>
+
+</svg>

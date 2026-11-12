@@ -59,7 +59,7 @@ export default function RegionalSettingsSection({ isAdmin }: { isAdmin: boolean 
   const label = "text-ink-faint text-xs";
 
   return (
-    <div className="rounded-xl border border-line bg-surface p-4 flex flex-col gap-3">
+    <div className="lg-surface p-4 flex flex-col gap-3">
       <div>
         <h2 className="text-ink text-sm font-medium">{w.regionalTitle}</h2>
         <p className="text-ink-faint text-[11px] mt-1">{w.regionalHint}</p>

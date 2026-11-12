@@ -39,7 +39,7 @@ export default function AiSettingsSection({ isAdmin }: { isAdmin: boolean }) {
   const choice = s ? (s.tenant_setting === null ? "default" : s.tenant_setting ? "on" : "off") : "default";
 
   return (
-    <div className="rounded-xl border border-line bg-surface p-4 flex flex-col gap-3">
+    <div className="lg-surface p-4 flex flex-col gap-3">
       <div>
         <h2 className="text-ink text-sm font-medium">{t.ai.settings.heading}</h2>
         <p className="text-ink-faint text-[11px] mt-1">{t.ai.settings.intro}</p>

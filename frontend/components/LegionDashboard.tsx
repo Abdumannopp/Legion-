@@ -45,6 +45,7 @@ import { useLanguage } from "@/lib/i18n/LanguageContext";
 import { suggestedActionText, timeAgo } from "@/lib/i18n/format";
 import ErrorNotice from "@/components/ErrorNotice";
 import ProtectionOverview from "@/components/ProtectionOverview";
+import { KpiRow, SeverityRing } from "@/components/DashboardWidgets";
 import { isTestSource, sourceLabel } from "@/lib/sources";
 
 type Severity = Alert["severity"];
@@ -70,9 +71,9 @@ const SEVERITY_STYLE: Record<
   { color: string; Icon: typeof AlertTriangle }
 > = {
   critical: { color: COLORS.critical, Icon: AlertTriangle },
-  high: { color: COLORS.warning, Icon: AlertCircle },
-  medium: { color: COLORS.info, Icon: Info },
-  low: { color: COLORS.textFaint, Icon: Info },
+  high: { color: palette.high, Icon: AlertCircle },
+  medium: { color: palette.warning, Icon: Info },
+  low: { color: palette.low, Icon: Info },
 };
 
 const STATUS_COLOR: Record<Alert["status"], string> = {
@@ -89,7 +90,7 @@ function TopBar() {
   return (
     <div className="flex items-center justify-between flex-wrap gap-4 mb-4">
       <div>
-        <h1 className="text-ink font-semibold tracking-tight text-lg leading-none">
+        <h1 className="text-ink font-semibold tracking-tight text-2xl sm:text-[28px] leading-tight">
           {t.dashboard.welcome}
         </h1>
         <p className="legion-eyebrow text-brand-bright mt-2">
@@ -112,6 +113,7 @@ function TopBar() {
 
 function AlertRow({
   alert,
+  fresh = false,
   expanded,
   onToggle,
   onResolve,
@@ -120,6 +122,8 @@ function AlertRow({
   explaining,
 }: {
   alert: Alert;
+  /** Just arrived live: one soft pulse (none with reduced motion). */
+  fresh?: boolean;
   expanded: boolean;
   onToggle: () => void;
   onResolve: () => void;
@@ -129,7 +133,6 @@ function AlertRow({
 }) {
   const { t, locale } = useLanguage();
   const sev = SEVERITY_STYLE[alert.severity];
-  const statusColor = STATUS_COLOR[alert.status];
   const SevIcon = sev.Icon;
   const source = sourceLabel(alert.source, t);
   const steps = (alert.suggested_action_codes ?? []).slice(0, 3);
@@ -141,7 +144,7 @@ function AlertRow({
     alert.ai_explanation_locale !== locale;
 
   return (
-    <div className="rounded-xl border border-line bg-surface hover:border-brand-hover/40 transition-colors" data-testid="alert-row">
+    <div className={`lg-surface lg-interactive ${expanded ? "!border-brand-hover/50" : ""} ${fresh ? "lg-new" : ""}`} data-testid="alert-row">
       <div
         className="flex items-center gap-4 px-4 py-3.5 cursor-pointer"
         onClick={onToggle}
@@ -154,42 +157,32 @@ function AlertRow({
         </div>
 
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="text-ink-faint text-[11px] font-mono">{alert.id}</span>
-            <span
-              className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded"
-              style={{ color: sev.color, backgroundColor: `${sev.color}1A` }}
-            >
+          <p className="text-ink text-sm font-medium truncate">
+            {alert.title}
+          </p>
+          <div className="flex items-center gap-2 mt-1 min-w-0 text-[11px] text-ink-faint">
+            <span className={`lg-status lg-status-${alert.severity} shrink-0`}>
               {t.common.severity[alert.severity]}
             </span>
             {isTestSource(alert.source) && (
-              <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-panel text-ink-faint border border-line">
+              <span className="shrink-0 uppercase tracking-wide px-1.5 py-0.5 rounded bg-panel border border-line">
                 {t.overview.testBadge}
               </span>
             )}
+            {source && (
+              <span className="hidden sm:inline-flex items-center gap-1 min-w-0 shrink">
+                <Radio size={11} className="shrink-0" />
+                <span className="truncate">{source}</span>
+              </span>
+            )}
+            <span className="shrink-0 whitespace-nowrap">· {timeAgo(alert.created_at, locale)}</span>
+            <span className="hidden md:inline font-mono truncate min-w-0" title={alert.id}>· {alert.id}</span>
           </div>
-          <p className="text-ink text-sm font-medium truncate mt-0.5">
-            {alert.title}
-          </p>
         </div>
 
-        {source && (
-          <div className="hidden sm:flex items-center gap-1.5 text-ink-faint text-xs shrink-0 max-w-[9rem]">
-            <Radio size={12} className="shrink-0" />
-            <span className="truncate">{source}</span>
-          </div>
-        )}
-
-        <div className="hidden md:flex items-center gap-1.5 text-ink-faint text-xs shrink-0 w-28 whitespace-nowrap">
-          {timeAgo(alert.created_at, locale)}
-        </div>
-
-        <div
-          className="hidden sm:block text-xs font-medium shrink-0 w-24 truncate"
-          style={{ color: statusColor }}
-        >
+        <span className={`lg-status ${alert.status === "resolved" ? "lg-status-healthy" : alert.status === "investigating" ? "lg-status-brand" : "lg-status-high"} hidden sm:inline-flex shrink-0`}>
           {t.common.status[alert.status]}
-        </div>
+        </span>
 
         <ChevronRight
           size={16}
@@ -344,6 +337,7 @@ export default function LegionDashboard() {
   const [error, setError] = useState<unknown>(null);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [explainingId, setExplainingId] = useState<string | null>(null);
+  const [freshIds, setFreshIds] = useState<Set<string>>(new Set());
   // Drives the subscription banner. Fetched separately from the alert list so
   // a 402 on /alerts still leaves us able to explain *why* it happened.
   const [me, setMe] = useState<CurrentUser | null>(null);
@@ -387,6 +381,10 @@ export default function LegionDashboard() {
         }
         return upsertAlert(prev, incoming);
       });
+      if (event.type === "new_alert") {
+        setFreshIds((prev) => new Set(prev).add(incoming.id));
+        setTimeout(() => setFreshIds((prev) => { const next = new Set(prev); next.delete(incoming.id); return next; }), 2000);
+      }
       refreshStats();
     },
     [filter, query, refreshStats]
@@ -395,7 +393,7 @@ export default function LegionDashboard() {
   // The list reload is what the feed asks for when it has fallen too far behind
   // to catch up by paging. `loadRef` breaks the cycle (load uses the hook).
   const loadRef = useRef<() => Promise<void>>(async () => {});
-  const { setBaseline } = useRealtimeAlerts(handleRealtime, () => loadRef.current());
+  const { setBaseline, isConnected } = useRealtimeAlerts(handleRealtime, () => loadRef.current());
 
   // Only the latest load may install its result: a slow response for an old
   // filter must not overwrite a newer one (or hand the feed an old cursor).
@@ -478,10 +476,10 @@ export default function LegionDashboard() {
   };
 
   return (
-    <div className="flex min-h-screen bg-canvas">
+    <div className="flex min-h-screen lg-app-bg">
       <Sidebar />
-      <div className="flex-1 p-4 sm:p-6">
-        <div className="max-w-3xl mx-auto">
+      <div className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8">
+        <div className="max-w-6xl mx-auto">
           <TopBar />
           {me && (
             <AccessBanner
@@ -490,7 +488,14 @@ export default function LegionDashboard() {
               isAdmin={me.role === "admin"}
             />
           )}
+          {overview && <KpiRow data={overview} />}
+          <div className="grid lg:grid-cols-[minmax(0,1fr)_320px] gap-5 items-start">
+          <div className="min-w-0">
           {overview && <ProtectionOverview data={overview} />}
+          <h2 className="text-ink text-sm font-semibold mb-3 flex items-center gap-2">
+            {t.dashboard.alertsTitle}
+            {isConnected && <span className="lg-status lg-status-healthy !text-[10px] !py-0.5">{t.dashboard.live}</span>}
+          </h2>
 
           <div className="flex flex-wrap items-center gap-2 mb-4">
             <div className="relative flex-1 min-w-[180px]">
@@ -502,17 +507,18 @@ export default function LegionDashboard() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder={t.dashboard.searchPlaceholder}
-                className="w-full bg-surface border border-line rounded-lg pl-9 pr-3 py-2 text-sm text-ink placeholder:text-ink-disabled outline-none focus:border-brand-hover"
+                className="lg-input !pl-9 text-sm"
               />
             </div>
             {(["all", "critical", "high", "medium", "low"] as const).map((f) => (
               <button
                 key={f}
                 onClick={() => setFilter(f)}
-                className={`text-xs font-medium px-3 py-2 rounded-lg border transition-colors whitespace-nowrap ${
+                aria-pressed={filter === f}
+                className={`text-xs font-medium px-3 py-2 rounded-full border transition-colors whitespace-nowrap ${
                   filter === f
-                    ? "border-brand-hover text-brand-bright bg-brand/10"
-                    : "border-line text-ink-faint hover:text-ink-muted"
+                    ? "border-brand-hover/60 text-ink bg-brand/20 shadow-violet"
+                    : "border-line text-ink-faint hover:text-ink-muted hover:border-line-strong"
                 }`}
               >
                 {f === "all"
@@ -538,6 +544,7 @@ export default function LegionDashboard() {
                 <AlertRow
                   key={alert.id}
                   alert={alert}
+                  fresh={freshIds.has(alert.id)}
                   expanded={expandedId === alert.id}
                   onToggle={() =>
                     setExpandedId(expandedId === alert.id ? null : alert.id)
@@ -556,6 +563,11 @@ export default function LegionDashboard() {
               )}
             </div>
           )}
+          </div>
+          <aside className="space-y-4 lg:sticky lg:top-6">
+            {overview && <SeverityRing data={overview} />}
+          </aside>
+          </div>
         </div>
       </div>
     </div>

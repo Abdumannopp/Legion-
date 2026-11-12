@@ -13,7 +13,7 @@ export default function AlertDeliveries({ alertId }: { alertId: string }) {
   useEffect(() => { getAlertDeliveries(alertId).then((r) => setList(r.deliveries)).catch(() => setList([])); }, [alertId]);
   if (!list.length) return null;
   return (
-    <section className="mb-4 rounded-xl border border-line bg-surface px-4 py-3" data-testid="alert-deliveries">
+    <section className="mb-4 lg-surface px-4 py-3" data-testid="alert-deliveries">
       <h3 className="text-ink text-xs font-semibold flex items-center gap-1.5"><Send size={12} />{m.title}</h3>
       <ul className="mt-1.5 space-y-1">
         {list.map((d, i) => (

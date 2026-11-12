@@ -21,9 +21,9 @@ import { useLanguage } from "@/lib/i18n/LanguageContext";
 const SEVERITY_ORDER: Alert["severity"][] = ["critical", "high", "medium", "low"];
 const SEVERITY_COLOR: Record<Alert["severity"], string> = {
   critical: palette.critical,
-  high: palette.warning,
-  medium: palette.info,
-  low: palette.inkFaint,
+  high: palette.high,
+  medium: palette.warning,
+  low: palette.low,
 };
 
 const STATUS_ORDER: Alert["status"][] = ["open", "investigating", "resolved"];
@@ -77,7 +77,7 @@ function SummaryCard({
   Icon: typeof BarChart3;
 }) {
   return (
-    <div className="flex-1 min-w-[140px] rounded-xl border border-line bg-surface px-4 py-3.5">
+    <div className="flex-1 min-w-[140px] lg-surface px-4 py-3.5">
       <div className="flex items-center gap-2 mb-2">
         <Icon size={14} color={color || palette.inkMuted} strokeWidth={2.2} />
         <span className="text-ink-muted text-[11px] uppercase tracking-wide">{label}</span>
@@ -152,7 +152,7 @@ export default function ReportsPage() {
   const onlineAssets = assets.filter((a) => a.online).length;
 
   return (
-    <div className="flex min-h-screen bg-canvas">
+    <div className="flex min-h-screen lg-app-bg">
       <Sidebar />
       <div className="flex-1 p-4 sm:p-6">
         <div className="max-w-5xl mx-auto">
@@ -203,7 +203,7 @@ export default function ReportsPage() {
 
               <div className="grid md:grid-cols-2 gap-4">
                 {/* Severity breakdown */}
-                <div className="rounded-xl border border-line bg-surface p-4">
+                <div className="lg-surface p-4">
                   <h2 className="text-ink text-sm font-medium mb-4">
                     {t.reports.bySeverity}
                   </h2>
@@ -221,7 +221,7 @@ export default function ReportsPage() {
                 </div>
 
                 {/* Status breakdown */}
-                <div className="rounded-xl border border-line bg-surface p-4">
+                <div className="lg-surface p-4">
                   <h2 className="text-ink text-sm font-medium mb-4">
                     {t.reports.byStatus}
                   </h2>
@@ -243,7 +243,7 @@ export default function ReportsPage() {
                 </div>
 
                 {/* Detections by source */}
-                <div className="rounded-xl border border-line bg-surface p-4">
+                <div className="lg-surface p-4">
                   <h2 className="text-ink text-sm font-medium mb-4">
                     {t.reports.byAgent}
                   </h2>
@@ -265,7 +265,7 @@ export default function ReportsPage() {
                 </div>
 
                 {/* Oracle coverage */}
-                <div className="rounded-xl border border-line bg-surface p-4">
+                <div className="lg-surface p-4">
                   <h2 className="text-ink text-sm font-medium mb-4">
                     {t.reports.oracleCoverage}
                   </h2>
@@ -282,7 +282,7 @@ export default function ReportsPage() {
               </div>
 
               {/* Recently resolved */}
-              <div className="rounded-xl border border-line bg-surface overflow-hidden">
+              <div className="lg-surface overflow-hidden">
                 <div className="px-4 py-3 border-b border-line">
                   <h2 className="text-ink text-sm font-medium">
                     {t.reports.recentlyResolved}

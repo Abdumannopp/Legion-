@@ -23,7 +23,7 @@ export function AuthLanguageSwitcher() {
 export default function AuthShell({ title, children, footer }: { title: string; children: ReactNode; footer?: ReactNode }) {
   const { t } = useLanguage();
   return (
-    <main className="relative min-h-screen legion-backdrop flex flex-col items-center justify-center gap-8 p-6">
+    <main className="relative min-h-screen lg-app-bg lg-auth-bg flex flex-col items-center justify-center gap-8 p-6">
       <AuthLanguageSwitcher />
       {/* i18n-ignore: brand name */}
       <Link href="/" aria-label="Legion">

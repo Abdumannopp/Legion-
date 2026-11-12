@@ -12,32 +12,44 @@
  * look like a button. Severity keeps its own, conventional scale.
  */
 export const palette = {
-  // Surfaces, darkest to lightest
+  // Surfaces, darkest to lightest (Legion global design system, premium dark)
   canvas: "#08060F", // page background
-  panel: "#0E0A19", // inputs, inner panels, sidebar accents
-  surface: "#140F24", // cards
-  line: "#251C3D", // borders, dividers
-  lineStrong: "#342A4F",
+  panel: "#100B1B", // inputs, inner panels, sidebar
+  surface: "#151020", // cards
+  raised: "#1C1429", // raised cards, selected rows
+  hover: "#241934", // hover on surfaces
+  line: "#312A43", // borders, dividers (lavender at 16 % on a card)
+  lineStrong: "#423B59",
 
   // Text
-  ink: "#F6F4FB",
-  inkSoft: "#D9D3EA",
-  inkMuted: "#B1A9CC",
-  inkFaint: "#857CA8",
-  inkDisabled: "#4F4669",
+  ink: "#F8F7FC",
+  inkSoft: "#D5CDE2",
+  inkMuted: "#A99DBB",
+  inkFaint: "#817591",
+  inkDisabled: "#5E566B",
 
-  // Brand (the helmet gradient runs brandBright → brand → brandDeep)
+  // Brand: violet for brand, selection and primary actions — never for severity
   brand: "#7C3AED", // solid fills: primary buttons, active pills
   brandHover: "#8B5CF6",
-  brandBright: "#A78BFA", // violet text and icons on dark backgrounds
+  brandBright: "#C4B5FD", // lavender: violet text and icons on dark backgrounds
   brandDeep: "#5B21B6",
 
   // Meaning, independent of the brand
-  critical: "#EF4444",
-  criticalHover: "#F05252",
-  warning: "#F59E0B",
-  success: "#22C55E",
-  info: "#38BDF8",
+  critical: "#F87171",
+  criticalHover: "#FCA5A5",
+  high: "#FB923C",
+  warning: "#FBBF24", // also "medium" severity
+  low: "#60A5FA",
+  success: "#4ADE80", // healthy
+  info: "#67C7F5",
+} as const;
+
+/** One severity scale for every screen: critical red, high orange, medium amber, low blue. */
+export const severityColor = {
+  critical: palette.critical,
+  high: palette.high,
+  medium: palette.warning,
+  low: palette.low,
 } as const;
 
 export type PaletteColor = keyof typeof palette;

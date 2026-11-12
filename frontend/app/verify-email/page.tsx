@@ -65,5 +65,5 @@ function VerifyEmail() {
 }
 
 export default function VerifyEmailPage() {
-  return <Suspense fallback={<main className="min-h-screen bg-canvas" />}><VerifyEmail /></Suspense>;
+  return <Suspense fallback={<main className="min-h-screen lg-app-bg" />}><VerifyEmail /></Suspense>;
 }

@@ -58,5 +58,5 @@ function ConfirmNotification() {
 }
 
 export default function ConfirmNotificationPage() {
-  return <Suspense fallback={<main className="min-h-screen bg-canvas" />}><ConfirmNotification /></Suspense>;
+  return <Suspense fallback={<main className="min-h-screen lg-app-bg" />}><ConfirmNotification /></Suspense>;
 }

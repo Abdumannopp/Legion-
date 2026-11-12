@@ -34,6 +34,7 @@ export const site = defineMessages({
       ctaTrial: (days: number) => `Start ${days}-day free trial`,
       ctaPricing: "See pricing",
       noCard: "No credit card required.",
+      highlights: ["Works with Wazuh", "Explains every alert in plain language", "You decide what runs automatically"],
       featuresEyebrow: "What you get",
       featuresTitle: "From alert to decision",
       features: {

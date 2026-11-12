@@ -1,11 +1,9 @@
 import { useId } from "react";
 
 /**
- * The Legion emblem: a purple Spartan helmet inside a shield, the symbol of the official logo
- * (public/brand/legion-cybersecurity-intelligence.svg). Drawn inline so it stays sharp at any size,
- * keeps a transparent background and needs no image request.
- *
- * `variant="color"` is the violet gradient; `variant="mono"` uses currentColor (one-colour print).
+ * The Legion emblem: the purple Spartan helmet inside a shield (public/brand/legion-mark.svg, from the premium
+ * brand pack). In colour it is the brand file itself, so every screen shows exactly the approved artwork with a
+ * transparent background; `variant="mono"` is a one-colour silhouette in currentColor for embossing and print.
  */
 export default function LegionMark({
   size = 32,
@@ -23,6 +21,20 @@ export default function LegionMark({
   // Gradient and filter ids must be unique per instance, or two marks on one page would share them.
   const id = useId().replace(/:/g, "");
   const mono = variant === "mono";
+  if (!mono) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src="/brand/legion-mark.svg"
+        width={size}
+        height={Math.round((size * 360) / 320)}
+        alt={title}
+        aria-hidden={title ? undefined : true}
+        className={className}
+        draggable={false}
+      />
+    );
+  }
   const g = (name: string) => (mono ? "currentColor" : `url(#${name}${id})`);
   return (
     <svg

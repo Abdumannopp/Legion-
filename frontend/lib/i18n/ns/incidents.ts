@@ -4,6 +4,8 @@ import { defineMessages, plural } from "../core";
 export const incidents = defineMessages({
   en: {
     title: "Incidents",
+    bySeverity: (label: string) => `${label} alerts`,
+    filterBy: (label: string) => `Show only ${label.toLowerCase()} alerts`,
     summary: (total: number, open: number, investigating: number) =>
       `${plural("en", total, { one: `${total} incident`, other: `${total} incidents` })} · ${open} open · ${investigating} investigating`,
     searchPlaceholder: "Search incidents by title",

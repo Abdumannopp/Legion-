@@ -165,7 +165,7 @@ export default function BillingPage() {
   const trialDays = trialEnd ? Math.ceil((new Date(trialEnd).getTime() - Date.now()) / 86_400_000) : 0;
 
   return (
-    <div className="flex min-h-screen bg-canvas">
+    <div className="flex min-h-screen lg-app-bg">
       <Sidebar />
       <div className="flex-1 flex flex-col">
         <div className="border-b border-line px-6 py-4 flex items-center gap-2.5">
@@ -204,7 +204,7 @@ export default function BillingPage() {
                 </div>
               )}
 
-              <div className="rounded-xl border border-line bg-surface p-5">
+              <div className="lg-surface p-5">
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="text-ink font-medium text-sm">
                     {t.billing.currentPlan}

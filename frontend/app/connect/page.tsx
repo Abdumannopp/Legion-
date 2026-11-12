@@ -133,7 +133,7 @@ export default function ConnectPage() {
   const num = "flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-semibold shrink-0";
 
   return (
-    <div className="flex min-h-screen bg-canvas">
+    <div className="flex min-h-screen lg-app-bg">
       <Sidebar />
       <div className="flex-1 p-4 sm:p-6">
         <div className="max-w-3xl mx-auto space-y-4">
@@ -156,7 +156,7 @@ export default function ConnectPage() {
           )}
 
           {/* Wazuh */}
-          <section className="rounded-xl border border-line bg-surface">
+          <section className="lg-surface">
             <div className="flex items-start gap-3 px-4 py-4">
               <div className="w-9 h-9 rounded-lg bg-brand/15 text-brand-bright flex items-center justify-center shrink-0 font-semibold text-sm">W</div>
               <div className="min-w-0 flex-1">
@@ -283,7 +283,7 @@ export default function ConnectPage() {
           </section>
 
           {/* AI agents: MCP servers and agent-to-agent calls are protected there. */}
-          <section className="rounded-xl border border-line bg-surface flex items-start gap-3 px-4 py-4">
+          <section className="lg-surface flex items-start gap-3 px-4 py-4">
             <div className="w-9 h-9 rounded-lg bg-brand/15 text-brand-bright flex items-center justify-center shrink-0"><BrainCircuit size={16} /></div>
             <div className="min-w-0 flex-1">
               <h2 className="text-ink text-sm font-semibold">{c.agentsCard.title}</h2>

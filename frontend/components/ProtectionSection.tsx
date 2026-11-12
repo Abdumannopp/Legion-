@@ -11,7 +11,7 @@ import { palette } from "@/lib/theme";
 import { useLanguage } from "@/lib/i18n/LanguageContext";
 import { timeAgo } from "@/lib/i18n/format";
 
-const card = "bg-surface border border-line rounded-2xl p-5";
+const card = "lg-surface p-5";
 const MODES: ProtectionMode[] = ["manual", "hybrid", "automatic"];
 
 /**

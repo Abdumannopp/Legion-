@@ -21,7 +21,7 @@ import { useLanguage } from "@/lib/i18n/LanguageContext";
 import { formatDateTime, timeAgo } from "@/lib/i18n/format";
 
 const MINUTES = [15, 30, 60, 240, 1440, 10080];
-const card = "bg-surface border border-line rounded-2xl p-5";
+const card = "lg-surface p-5";
 const input = "w-full bg-canvas border border-line rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-brand-hover";
 
 export default function DefensePage() {
@@ -126,7 +126,7 @@ export default function DefensePage() {
   const changed = draft && settings && (draft.mode !== settings.mode || draft.minutes !== settings.minutes || draft.allowlist !== settings.allowlist);
 
   return (
-    <div className="flex min-h-screen bg-canvas">
+    <div className="flex min-h-screen lg-app-bg">
       <Sidebar />
       <div className="flex-1 p-4 sm:p-6">
         <div className="max-w-5xl mx-auto space-y-5">

@@ -172,7 +172,7 @@ export default function AgentPage() {
 
   if (missing) {
     return (
-      <div className="flex min-h-screen bg-canvas"><Sidebar />
+      <div className="flex min-h-screen lg-app-bg"><Sidebar />
         <div className="flex-1 p-4 sm:p-6"><div className="max-w-3xl mx-auto space-y-4">{header}
           <ErrorNotice error={new ApiError(t.errors.notFound.title, 404)} />
         </div></div>
@@ -183,7 +183,7 @@ export default function AgentPage() {
   const btn = "flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg disabled:opacity-60";
 
   return (
-    <div className="flex min-h-screen bg-canvas">
+    <div className="flex min-h-screen lg-app-bg">
       <Sidebar />
       <div className="flex-1 p-4 sm:p-6">
         <div className="max-w-3xl mx-auto space-y-4">
@@ -195,7 +195,7 @@ export default function AgentPage() {
             error == null && <div className="flex justify-center py-12"><Loader2 size={18} className="animate-spin text-ink-faint" /></div>
           ) : (
             <>
-              <header className="rounded-xl border border-line bg-surface px-4 py-4">
+              <header className="lg-surface px-4 py-4">
                 <div className="flex items-start justify-between gap-3 flex-wrap">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -236,7 +236,7 @@ export default function AgentPage() {
               </div>
 
               {tab === "permissions" && (
-                <section className="rounded-xl border border-line bg-surface p-4 space-y-3">
+                <section className="lg-surface p-4 space-y-3">
                   {editing ? (
                     <>
                       <PermissionPicker catalogue={catalogue.permissions} selected={editing} onChange={setEditing} disabled={busy} />
@@ -266,7 +266,7 @@ export default function AgentPage() {
               {tab === "skills" && <AgentSkills agentId={agent.id} granted={agent.permissions.effective} canEdit={isAdmin && agent.status !== "revoked"} />}
 
               {tab === "activity" && (
-                <section className="rounded-xl border border-line bg-surface">
+                <section className="lg-surface">
                   {decisions.length === 0
                     ? <p className="text-ink-faint text-xs py-8 px-4 text-center">{a.activity.empty}</p>
                     : <ul className="divide-y divide-line">{decisions.map((d) => <DecisionItem key={d.decisionId} d={d} />)}</ul>}
@@ -274,7 +274,7 @@ export default function AgentPage() {
               )}
 
               {tab === "approvals" && (
-                <section className="rounded-xl border border-line bg-surface p-4">
+                <section className="lg-surface p-4">
                   <AgentApprovals approvals={approvals} canAnswer={isStaff} onAnswered={load} />
                 </section>
               )}

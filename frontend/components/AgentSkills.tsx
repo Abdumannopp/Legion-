@@ -53,7 +53,7 @@ export default function AgentSkills({ agentId, granted, canEdit }: { agentId: st
   }
 
   return (
-    <section className="rounded-xl border border-line bg-surface p-4 space-y-4" data-testid="agent-skills">
+    <section className="lg-surface p-4 space-y-4" data-testid="agent-skills">
       <p className="text-ink-muted text-xs leading-relaxed">{m.assign.intro}</p>
       {!canEdit && <p className="text-ink-faint text-[11px]">{m.assign.adminOnly}</p>}
       {error != null && <ErrorNotice error={error} onRetry={load} />}

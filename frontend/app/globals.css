@@ -6,7 +6,7 @@
 html,
 body {
   background-color: #08060f; /* palette.canvas */
-  color: #f6f4fb; /* palette.ink */
+  color: #f8f7fc; /* palette.ink */
 }
 
 body {
@@ -34,13 +34,13 @@ body {
 
 /* Thin scrollbars that belong to the dark violet theme. */
 * {
-  scrollbar-color: #342a4f transparent; /* palette.lineStrong */
+  scrollbar-color: #423b59 transparent; /* palette.lineStrong */
   scrollbar-width: thin;
 }
 
 @layer components {
   /* The faint violet glow behind the logo on the brand sheet. */
-  .legion-backdrop {
+  .lg-app-bg lg-auth-bg {
     background:
       radial-gradient(60rem 30rem at 50% -10%, rgba(124, 58, 237, 0.16), transparent 60%),
       #08060f;
@@ -56,4 +56,139 @@ body {
   .legion-eyebrow {
     @apply font-display uppercase tracking-[0.28em] text-[10px];
   }
+}
+
+/* ---------------------------------------------------------------------------------------------
+ * Legion global design system — premium dark. Values come from lib/theme.ts (palette); these are
+ * the shared primitives every screen uses. Purple is brand and selection, never severity.
+ * ------------------------------------------------------------------------------------------- */
+:root {
+  color-scheme: dark;
+  --lg-glass: rgba(28, 20, 41, 0.72);
+  --lg-border: rgba(196, 181, 253, 0.16);
+  --lg-border-subtle: rgba(196, 181, 253, 0.1);
+  --lg-shadow-card: 0 12px 36px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  --lg-motion: 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+body {
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", ui-sans-serif, system-ui, Roboto, Arial, sans-serif;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+@layer components {
+  /* Cards: subtle gradient, quiet border, soft depth. */
+  .lg-surface {
+    background: linear-gradient(145deg, rgba(32, 23, 47, 0.96), rgba(19, 14, 29, 0.98));
+    border: 1px solid var(--lg-border);
+    border-radius: 18px;
+    box-shadow: var(--lg-shadow-card);
+  }
+  .lg-surface-soft {
+    background: rgba(28, 20, 41, 0.66);
+    border: 1px solid var(--lg-border-subtle);
+    border-radius: 14px;
+  }
+  /* Glass: only for floating / focused layers (sign-in card, drawers, menus). */
+  .lg-glass {
+    background: var(--lg-glass);
+    border: 1px solid rgba(216, 196, 255, 0.14);
+    backdrop-filter: blur(18px) saturate(135%);
+    -webkit-backdrop-filter: blur(18px) saturate(135%);
+    border-radius: 22px;
+    box-shadow: 0 22px 70px rgba(0, 0, 0, 0.42);
+  }
+  .lg-interactive {
+    transition: transform var(--lg-motion), border-color var(--lg-motion), background-color var(--lg-motion), box-shadow var(--lg-motion);
+  }
+  .lg-interactive:hover {
+    border-color: rgba(196, 181, 253, 0.3);
+    box-shadow: var(--lg-shadow-card), 0 0 24px rgba(139, 92, 246, 0.08);
+  }
+  .lg-interactive:active { transform: scale(0.99); }
+
+  .lg-button-primary {
+    @apply inline-flex items-center justify-center gap-2 text-sm;
+    min-height: 40px; padding: 0 16px; border-radius: 12px;
+    color: #fff; font-weight: 600;
+    background: linear-gradient(135deg, #9b6bfa, #6d35d6);
+    border: 1px solid rgba(221, 203, 255, 0.2);
+    box-shadow: 0 8px 22px rgba(109, 53, 214, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    transition: filter var(--lg-motion), transform var(--lg-motion);
+  }
+  .lg-button-primary:hover { filter: brightness(1.1); }
+  .lg-button-primary:disabled { opacity: 0.55; filter: none; }
+  .lg-button-secondary {
+    @apply inline-flex items-center justify-center gap-2 text-sm;
+    min-height: 40px; padding: 0 16px; border-radius: 12px;
+    color: #d5cde2; background: rgba(255, 255, 255, 0.035);
+    border: 1px solid var(--lg-border);
+    transition: border-color var(--lg-motion), color var(--lg-motion);
+  }
+  .lg-button-secondary:hover { color: #f8f7fc; border-color: rgba(196, 181, 253, 0.3); }
+
+  .lg-input {
+    min-height: 44px; width: 100%; border-radius: 12px;
+    color: #f8f7fc; background: rgba(8, 6, 15, 0.56);
+    border: 1px solid var(--lg-border); padding: 0 13px;
+    transition: border-color var(--lg-motion), box-shadow var(--lg-motion);
+  }
+  .lg-input::placeholder { color: #817591; }
+  .lg-input:focus { outline: none; border-color: #a78bfa; box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.16); }
+
+  .lg-eyebrow { color: #a99dbb; font-size: 10px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; }
+
+  /* Severity / status chips: colour AND text, never colour alone. */
+  .lg-status { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .lg-status::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
+  .lg-status-critical { color: #fca5a5; background: rgba(248, 113, 113, 0.12); border: 1px solid rgba(248, 113, 113, 0.2); }
+  .lg-status-high { color: #fdba74; background: rgba(251, 146, 60, 0.12); border: 1px solid rgba(251, 146, 60, 0.2); }
+  .lg-status-medium { color: #fde68a; background: rgba(251, 191, 36, 0.11); border: 1px solid rgba(251, 191, 36, 0.18); }
+  .lg-status-low { color: #93c5fd; background: rgba(96, 165, 250, 0.11); border: 1px solid rgba(96, 165, 250, 0.18); }
+  .lg-status-healthy { color: #86efac; background: rgba(74, 222, 128, 0.1); border: 1px solid rgba(74, 222, 128, 0.18); }
+  .lg-status-brand { color: #ddd6fe; background: rgba(139, 92, 246, 0.14); border: 1px solid rgba(139, 92, 246, 0.24); }
+
+  .lg-table-wrap { overflow: hidden; border: 1px solid var(--lg-border-subtle); border-radius: 14px; }
+  .lg-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+  .lg-table thead { color: #a99dbb; background: rgba(255, 255, 255, 0.035); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; }
+  .lg-table th { text-align: left; font-weight: 600; padding: 11px 14px; }
+  .lg-table td { padding: 13px 14px; color: #d5cde2; border-top: 1px solid var(--lg-border-subtle); }
+  .lg-table tbody tr:hover { background: rgba(196, 181, 253, 0.035); }
+
+  /* The app background: canvas with a faint violet light from the top. */
+  .lg-app-bg {
+    background:
+      radial-gradient(70rem 32rem at 60% -12%, rgba(139, 92, 246, 0.13), transparent 62%),
+      radial-gradient(40rem 30rem at 100% 100%, rgba(109, 40, 217, 0.08), transparent 70%),
+      #08060f;
+  }
+}
+
+/* Mobile: the bottom navigation is fixed; keep the page's last content above it. */
+@media (max-width: 767px) {
+  body:has(.lg-bottom-nav) { padding-bottom: calc(68px + env(safe-area-inset-bottom)); }
+}
+
+/* Motion: purposeful and short; switched off when the system asks for reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .lg-enter { animation: lg-enter 360ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+  @keyframes lg-enter { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
+  /* A new alert arriving live: one soft pulse, then still. */
+  .lg-new { animation: lg-new 1.6s cubic-bezier(0.2, 0.8, 0.2, 1) 1; }
+  @keyframes lg-new { 0% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.55); } 100% { box-shadow: 0 0 0 14px rgba(139, 92, 246, 0); } }
+  .lg-live-dot { animation: lg-live 2.4s ease-in-out infinite; }
+  @keyframes lg-live { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}
+
+/* Sign-in: a soft violet horizon under the glass card (decorative only). */
+.lg-auth-bg {
+  background:
+    radial-gradient(48rem 22rem at 50% 108%, rgba(139, 92, 246, 0.22), transparent 70%),
+    radial-gradient(60rem 30rem at 50% -14%, rgba(139, 92, 246, 0.16), transparent 62%),
+    radial-gradient(1px 1px at 1px 1px, rgba(196, 181, 253, 0.13) 1px, transparent 0) 0 0 / 22px 22px,
+    #08060f;
 }

@@ -13,7 +13,7 @@ import {
   Radio,
 } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
-import { Alert, getAlerts, isLoggedIn, ApiError } from "@/lib/api";
+import { Alert, AlertStats, getAlerts, getStats, isLoggedIn, ApiError } from "@/lib/api";
 import ErrorNotice from "@/components/ErrorNotice";
 import { sourceLabel } from "@/lib/sources";
 import { palette } from "@/lib/theme";
@@ -26,9 +26,9 @@ const SEVERITY_STYLE: Record<
   { color: string; Icon: typeof AlertTriangle }
 > = {
   critical: { color: palette.critical, Icon: AlertTriangle },
-  high: { color: palette.warning, Icon: AlertCircle },
-  medium: { color: palette.info, Icon: Info },
-  low: { color: palette.inkFaint, Icon: Info },
+  high: { color: palette.high, Icon: AlertCircle },
+  medium: { color: palette.warning, Icon: Info },
+  low: { color: palette.low, Icon: Info },
 };
 
 const STATUS_COLOR: Record<Alert["status"], string> = {
@@ -46,6 +46,8 @@ export default function IncidentsPage() {
   const [severityFilter, setSeverityFilter] = useState<"all" | Alert["severity"]>("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<unknown>(null);
+  // Totals per severity for the cards, across every alert (not only the current filter).
+  const [stats, setStats] = useState<AlertStats | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -56,6 +58,7 @@ export default function IncidentsPage() {
         q: query || undefined,
       });
       setIncidents(data);
+      getStats().then(setStats).catch(() => { /* the cards are optional */ });
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         router.push("/login");
@@ -82,10 +85,10 @@ export default function IncidentsPage() {
   };
 
   return (
-    <div className="flex min-h-screen bg-canvas">
+    <div className="flex min-h-screen lg-app-bg">
       <Sidebar />
-      <div className="flex-1 p-4 sm:p-6">
-        <div className="max-w-5xl mx-auto">
+      <div className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8">
+        <div className="max-w-6xl mx-auto">
           <div className="mb-6">
             <h1 className="legion-title text-ink flex items-center gap-2">
               <ClipboardList size={20} color={palette.brandBright} />
@@ -100,6 +103,31 @@ export default function IncidentsPage() {
             </p>
           </div>
 
+          {stats && (
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5" data-testid="severity-cards">
+              {(["critical", "high", "medium", "low"] as const).map((sv, i) => {
+                const st = SEVERITY_STYLE[sv];
+                const Icon = st.Icon;
+                const on = severityFilter === sv;
+                return (
+                  <button
+                    key={sv}
+                    onClick={() => setSeverityFilter(on ? "all" : sv)}
+                    aria-pressed={on}
+                    aria-label={t.incidents.filterBy(t.common.severity[sv])}
+                    className={`lg-surface lg-interactive lg-enter text-left p-4 ${on ? "!border-brand-hover/60 shadow-violet" : ""}`}
+                    style={{ animationDelay: `${i * 40}ms` }}
+                  >
+                    <span className="flex items-center gap-2 text-ink-muted text-xs">
+                      <Icon size={16} color={st.color} />{t.incidents.bySeverity(t.common.severity[sv])}
+                    </span>
+                    <span className="block text-ink text-[28px] leading-none font-semibold tabular-nums mt-3">{stats.by_severity?.[sv] ?? 0}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           <div className="flex flex-wrap items-center gap-2 mb-4">
             <div className="relative flex-1 min-w-[180px]">
               <Search
@@ -110,7 +138,7 @@ export default function IncidentsPage() {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder={t.incidents.searchPlaceholder}
-                className="w-full bg-surface border border-line rounded-lg pl-9 pr-3 py-2 text-sm text-ink placeholder:text-ink-disabled outline-none focus:border-brand-hover"
+                className="lg-input !pl-9 text-sm"
               />
             </div>
 
@@ -118,10 +146,11 @@ export default function IncidentsPage() {
               <button
                 key={f}
                 onClick={() => setStatusFilter(f)}
-                className={`text-xs font-medium px-3 py-2 rounded-lg border transition-colors whitespace-nowrap ${
+                aria-pressed={statusFilter === f}
+                className={`text-xs font-medium px-3 py-2 rounded-full border transition-colors whitespace-nowrap ${
                   statusFilter === f
-                    ? "border-brand-hover text-brand-bright bg-brand/10"
-                    : "border-line text-ink-faint hover:text-ink-muted"
+                    ? "border-brand-hover/60 text-ink bg-brand/20 shadow-violet"
+                    : "border-line text-ink-faint hover:text-ink-muted hover:border-line-strong"
                 }`}
               >
                 {f === "all" ? t.common.all : t.common.status[f]}
@@ -133,7 +162,7 @@ export default function IncidentsPage() {
               onChange={(e) =>
                 setSeverityFilter(e.target.value as "all" | Alert["severity"])
               }
-              className="bg-surface border border-line rounded-lg px-3 py-2 text-xs text-ink-muted outline-none focus:border-brand-hover"
+              className="lg-input !w-auto !min-h-[36px] text-xs !text-ink-muted"
             >
               <option value="all">{t.incidents.allSeverities}</option>
               <option value="critical">{t.common.severity.critical}</option>
@@ -152,7 +181,7 @@ export default function IncidentsPage() {
               <Loader2 size={20} className="animate-spin" />
             </div>
           ) : (
-            <div className="rounded-xl border border-line bg-surface overflow-hidden">
+            <div className="lg-surface overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-line text-left">
@@ -162,7 +191,7 @@ export default function IncidentsPage() {
                     <th className="px-4 py-3 text-ink-faint text-[11px] uppercase tracking-wide font-medium whitespace-nowrap">
                       {t.incidents.column.severity}
                     </th>
-                    <th className="px-4 py-3 text-ink-faint text-[11px] uppercase tracking-wide font-medium whitespace-nowrap">
+                    <th className="hidden sm:table-cell px-4 py-3 text-ink-faint text-[11px] uppercase tracking-wide font-medium whitespace-nowrap">
                       {t.incidents.column.status}
                     </th>
                     <th className="hidden sm:table-cell px-4 py-3 text-ink-faint text-[11px] uppercase tracking-wide font-medium whitespace-nowrap">
@@ -183,28 +212,27 @@ export default function IncidentsPage() {
                       <tr
                         key={incident.id}
                         onClick={() => router.push(`/incident/${incident.id}`)}
-                        className="border-b border-line last:border-b-0 hover:bg-panel transition-colors cursor-pointer"
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); router.push(`/incident/${incident.id}`); } }}
+                        tabIndex={0}
+                        role="link"
+                        className="border-b border-line/60 last:border-b-0 hover:bg-surface-hover/50 focus:bg-surface-hover/50 transition-colors cursor-pointer outline-none"
                       >
                         <td className="px-4 py-3">
-                          <p className="text-ink font-medium">{incident.title}</p>
-                          <p className="text-ink-faint text-[11px] font-mono">
+                          <p className="text-ink font-medium break-words">{incident.title}</p>
+                          <p className="hidden sm:block text-ink-faint text-[11px] font-mono truncate max-w-[22rem]" title={incident.id}>
                             {incident.id}
                           </p>
+                          <span className={`sm:hidden mt-1.5 lg-status ${incident.status === "resolved" ? "lg-status-healthy" : "lg-status-brand"}`}>
+                            {t.common.status[incident.status]}
+                          </span>
                         </td>
-                        <td className="px-4 py-3">
-                          <span
-                            className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded whitespace-nowrap"
-                            style={{ color: sev.color, backgroundColor: `${sev.color}1A` }}
-                          >
-                            <SevIcon size={11} />
+                        <td className="px-2 sm:px-4 py-3 w-px whitespace-nowrap">
+                          <span className={`lg-status lg-status-${incident.severity} w-max`}>
                             {t.common.severity[incident.severity]}
                           </span>
                         </td>
-                        <td className="px-4 py-3">
-                          <span
-                            className="text-xs font-medium whitespace-nowrap"
-                            style={{ color: statusColor }}
-                          >
+                        <td className="hidden sm:table-cell px-4 py-3">
+                          <span className={`lg-status ${incident.status === "resolved" ? "lg-status-healthy" : "lg-status-brand"}`}>
                             {t.common.status[incident.status]}
                           </span>
                         </td>
@@ -217,7 +245,7 @@ export default function IncidentsPage() {
                         <td className="hidden sm:table-cell px-4 py-3 text-ink-faint text-xs whitespace-nowrap">
                           {timeAgo(incident.created_at, locale)}
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="pr-3 sm:px-4 py-3 w-px">
                           <ChevronRight size={14} className="text-ink-disabled" />
                         </td>
                       </tr>

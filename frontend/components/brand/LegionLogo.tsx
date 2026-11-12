@@ -19,7 +19,7 @@ export default function LegionLogo({
   tagline?: boolean;
   className?: string;
 }) {
-  const markWidth = (size * 312) / 360;
+  const markWidth = (size * 320) / 360;
 
   if (layout === "stacked") {
     return (
@@ -82,7 +82,7 @@ export function LegionLockup({ width = 420, className = "" }: { width?: number; 
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src="/brand/legion-cybersecurity-intelligence.svg"
+      src="/brand/legion-horizontal.svg"
       // i18n-ignore: brand name
       alt="Legion — Cybersecurity Intelligence"
       width={width}

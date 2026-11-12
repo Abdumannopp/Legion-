@@ -25,7 +25,7 @@ const STEP_HREF: Record<Overview["onboarding"]["steps"][number]["id"], string> =
 };
 
 const SEVERITY_DOT: Record<string, string> = {
-  critical: "bg-critical", high: "bg-warning", medium: "bg-info", low: "bg-ink-faint",
+  critical: "bg-critical", high: "bg-high", medium: "bg-warning", low: "bg-low",
 };
 
 /**
@@ -42,7 +42,7 @@ export default function ProtectionOverview({ data }: { data: Overview }) {
 
   return (
     <div className="space-y-3 mb-6">
-      <section className={`rounded-xl border bg-surface px-4 py-4 ${s.tone}`} aria-live="polite">
+      <section className={`lg-surface px-4 py-4 ${s.tone}`} aria-live="polite">
         <div className="flex items-start gap-3">
           <s.Icon size={22} className="shrink-0 mt-0.5" />
           <div className="min-w-0 flex-1">
@@ -67,7 +67,7 @@ export default function ProtectionOverview({ data }: { data: Overview }) {
       </section>
 
       {!data.onboarding.complete && (
-        <section className="rounded-xl border border-line bg-surface px-4 py-4">
+        <section className="lg-surface px-4 py-4">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-ink text-sm font-medium">{o.checklist.title}</h2>
             <span className="text-ink-faint text-[11px]">{o.checklist.progress(done, required.length)}</span>
@@ -100,7 +100,7 @@ export default function ProtectionOverview({ data }: { data: Overview }) {
       )}
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <section className="rounded-xl border border-line bg-surface px-4 py-3.5">
+        <section className="lg-surface px-4 py-3.5">
           <h3 className="text-ink-muted text-[11px] uppercase tracking-wide mb-2">{o.protectedTitle}</h3>
           {data.protected.sources.length === 0 ? (
             <p className="text-ink-faint text-xs">{o.noSources}</p>
@@ -121,7 +121,7 @@ export default function ProtectionOverview({ data }: { data: Overview }) {
           <p className="text-ink-faint text-[11px]">{o.agentsLine(data.protected.agents.total, data.protected.agents.active)}</p>
         </section>
 
-        <section className="rounded-xl border border-line bg-surface px-4 py-3.5">
+        <section className="lg-surface px-4 py-3.5">
           <h3 className="text-ink-muted text-[11px] uppercase tracking-wide mb-2">{o.threatsTitle}</h3>
           {data.threats.open_total === 0 ? (
             <p className="text-ink-faint text-xs flex items-center gap-1.5"><CheckCircle2 size={13} className="text-success" />{o.noThreats}</p>
@@ -150,7 +150,7 @@ export default function ProtectionOverview({ data }: { data: Overview }) {
           <p className="text-ink-faint text-[11px] mt-2">{o.newToday(data.threats.new_last_24h)}</p>
         </section>
 
-        <section className="rounded-xl border border-line bg-surface px-4 py-3.5">
+        <section className="lg-surface px-4 py-3.5">
           <h3 className="text-ink-muted text-[11px] uppercase tracking-wide mb-0.5">{o.blockedTitle}</h3>
           <p className="text-ink-faint text-[10px] mb-2">{o.blockedWindow(data.blocked.window_days)}</p>
           {data.protected.agents.total === 0 ? (
