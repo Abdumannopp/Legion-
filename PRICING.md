@@ -92,6 +92,19 @@ PADDLE_ADDON_PRICES=agent_security=pri_…,payment_fraud=pri_…
 The browser asks for a plan, a period and add-ons; the server chooses the Paddle
 prices. A subscription whose price is not in these lists grants no access.
 
+## From choosing a plan to working under it
+
+1. **Choose and pay.** On the Billing page an administrator picks a plan, a period and add-ons; Paddle's checkout takes the payment.
+2. **The plan applies.** Paddle's signed webhook tells Legion which prices were bought; the workspace's plan and add-ons are set from that (never from what the browser asked for), and the page shows the new limits within seconds.
+3. **The limits are enforced** from that moment (see "What each limit does in the product").
+4. **Changing plan later.** A workspace that already pays never opens a second subscription (`POST /billing/checkout-context` answers 409 `already_subscribed`, so nobody is billed twice). The administrator presses *Switch to …*; Legion changes the items of the existing Paddle subscription (`POST /billing/change-plan`):
+   - a more expensive plan: the difference for the rest of the period is charged at once to the payment method on file;
+   - a cheaper plan: the difference is credited against the next bill;
+   - the new plan applies immediately, and it is the plan **Paddle confirms**, not the one requested. If Paddle refuses (a declined card) or cannot be reached, nothing changes.
+   - Not possible while a payment is overdue (fix the payment method first), for Enterprise (by agreement), or for a plan set by contract (`plan_override`).
+
+`PADDLE_API_KEY` must be allowed to **write subscriptions** for step 4.
+
 ## Enterprise
 
 Enterprise is sold by agreement, so it has no checkout. Set it by hand once the
@@ -116,7 +129,7 @@ An override wins over the subscription and is written to the audit log.
 ## Not implemented yet (honest list)
 
 - **AI credits** and **Advanced Threat Intelligence** are sold as add-ons but nothing in the product is metered or gated by them yet: the price list gives no quantities per plan.
-- **Changing plan** on a running subscription goes through support (the Paddle portal does not switch plans by itself).
+- **Changing plan** is built (above) but, like the checkout, has only been tested against a simulated Paddle: run one upgrade and one downgrade in the Paddle **sandbox** before selling. Cancelling still goes through the Paddle portal ("Manage subscription").
 - **Launch offer, partner (reseller/MSP) discounts and Managed SOC** from the recommendation are commercial terms, not product features.
 - **Self-hosted licence keys**: not enforced by the software, by design.
 - **API/integration levels** are shown on the price list; the API is available wherever AI Agent Security is.

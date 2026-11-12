@@ -1204,3 +1204,8 @@ export function decideSocApproval(a: SocApproval, decision: "approve" | "reject"
     method: "POST", body: JSON.stringify({ decision, action_digest: a.action_digest, ...opts }),
   });
 }
+
+/** Change the plan of the subscription the workspace already has (no second checkout). */
+export function changePlan(choice: { plan: PlanId; interval: "month" | "year"; addons: AddonId[] }): Promise<{ status: "changed"; charged: "now" | "next_bill"; entitlements: PlanEntitlements }> {
+  return request("/billing/change-plan", { method: "POST", body: JSON.stringify(choice) });
+}

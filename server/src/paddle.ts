@@ -112,3 +112,26 @@ export async function createPortalSession(
   }
   return { ok: true, url };
 }
+
+interface PaddleSubscriptionItems { id?: string; items?: Array<{ price?: { id?: string } }>; updated_at?: string }
+
+/**
+ * Changes what an existing subscription bills for (a plan change). The customer is not asked to pay again in a
+ * checkout: Paddle charges the difference to the payment method on file ("prorated_immediately", an upgrade) or
+ * credits it against the next bill ("prorated_next_billing_period", a downgrade). Returns the price ids Paddle
+ * now holds, so the caller applies exactly what was accepted.
+ */
+export async function updateSubscriptionItems(
+  subscriptionId: string,
+  priceIds: string[],
+  proration: "prorated_immediately" | "prorated_next_billing_period",
+): Promise<{ ok: true; priceIds: string[]; updatedAt: string | null } | { ok: false; status: number; detail: string }> {
+  const result = await paddleRequest<PaddleSubscriptionItems>(
+    `/subscriptions/${encodeURIComponent(subscriptionId)}`,
+    { method: "PATCH", body: { items: priceIds.map((price_id) => ({ price_id, quantity: 1 })), proration_billing_mode: proration } },
+  );
+  if (!result.ok) return result;
+  const held = (result.data?.items ?? []).map((i) => i.price?.id).filter((x): x is string => typeof x === "string");
+  if (!held.length) return { ok: false, status: 502, detail: "The billing provider did not confirm the change" };
+  return { ok: true, priceIds: held, updatedAt: typeof result.data?.updated_at === "string" ? result.data.updated_at : null };
+}

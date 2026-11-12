@@ -8,6 +8,7 @@ import {
   getSubscription,
   openBillingPortal,
   getCheckoutContext,
+  changePlan,
   getEntitlements,
   getPlans,
   getMe,
@@ -96,6 +97,8 @@ export default function BillingPage() {
         const sub = await getSubscription().catch(() => null);
         if (sub && (sub.status === "active" || sub.status === "trialing")) {
           setSubscription(sub);
+          // The plan that was paid for applies now: show its limits, not the trial's.
+          setEntitlements(await getEntitlements().catch(() => null));
           setActivating(false);
           clearInterval(timer);
         } else if (tries >= 20) {
@@ -117,6 +120,25 @@ export default function BillingPage() {
       // The server turns the plan, period and add-ons into Paddle prices and binds the checkout to this workspace.
       const ctx = await getCheckoutContext({ plan, interval: period, addons: period === "month" ? addons : [] });
       await openCheckout(ctx.items ?? ctx.price_id ?? "", ctx.checkout_token, me.email, locale);
+    } catch (err) {
+      setError(err instanceof ApiError ? err : new Error(t.billing.checkoutError));
+    } finally {
+      setCheckoutBusy(false);
+    }
+  }
+
+  const [notice, setNotice] = useState<string | null>(null);
+  /** A workspace that already pays: the plan changes on its subscription, with no second checkout. */
+  async function handleSwitch(plan: PlanId) {
+    if (!window.confirm(t.billing.switchConfirm(PLANS[plan].name))) return;
+    setCheckoutBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const r = await changePlan({ plan, interval: period, addons: period === "month" ? addons : [] });
+      setEntitlements(r.entitlements);
+      setSubscription(await getSubscription().catch(() => subscription));
+      setNotice(r.charged === "now" ? t.billing.switchedNow(PLANS[r.entitlements.plan].name) : t.billing.switchedLater(PLANS[r.entitlements.plan].name));
     } catch (err) {
       setError(err instanceof ApiError ? err : new Error(t.billing.checkoutError));
     } finally {
@@ -263,9 +285,10 @@ export default function BillingPage() {
                 {isActive && <p className="text-ink-faint text-xs mt-4">{t.billing.changePlan}</p>}
               </div>
 
-              {!isActive && me?.role === "admin" && (
-                <div className="rounded-xl border border-brand-hover/40 bg-brand/5 p-5">
-                  <h2 className="text-ink font-medium text-sm mb-3">{t.billing.subscribeTitle}</h2>
+              {me?.role === "admin" && entitlements?.source !== "self-hosted" && entitlements?.source !== "override" && (
+                <div className="rounded-xl border border-brand-hover/40 bg-brand/5 p-5" data-testid="plan-picker">
+                  <h2 className="text-ink font-medium text-sm mb-3">{isActive ? t.billing.switchTitle : t.billing.subscribeTitle}</h2>
+                  {notice && <p className="text-success text-xs mb-3 flex items-center gap-1" data-testid="plan-notice"><CheckCircle2 size={13} />{notice}</p>}
                   <div className="mb-4"><PeriodToggle value={period} onChange={setPeriod} /></div>
                   <div className="grid gap-3 sm:grid-cols-3">
                     {BUYABLE.map((id) => {
@@ -283,13 +306,13 @@ export default function BillingPage() {
                             <li className="flex gap-1.5"><CheckCircle2 size={12} color={palette.brandBright} className="mt-0.5 shrink-0" />{t.pricing.headline.history(PLANS[id].entitlements.retentionDays)}</li>
                           </ul>
                           <button
-                            onClick={() => handleChoose(id)}
-                            disabled={checkoutBusy || !buyable || !isPaddleConfigured()}
+                            onClick={() => (isActive ? handleSwitch(id) : handleChoose(id))}
+                            disabled={checkoutBusy || !buyable || (!isActive && !isPaddleConfigured()) || (isActive && entitlements?.source === "subscription" && entitlements.plan === id && addons.length === 0 && entitlements.addons.length === 0)}
                             title={buyable ? undefined : t.billing.notAvailable}
                             className="inline-flex items-center justify-center gap-2 bg-brand hover:bg-brand-hover text-white text-sm font-medium rounded-lg px-3 py-2 transition-colors disabled:opacity-50"
                           >
                             {checkoutBusy && <Loader2 size={14} className="animate-spin" />}
-                            {t.billing.choosePlan(PLANS[id].name)}
+                            {isActive ? (entitlements?.source === "subscription" && entitlements.plan === id ? t.billing.yourPlan : t.billing.switchTo(PLANS[id].name)) : t.billing.choosePlan(PLANS[id].name)}
                           </button>
                         </div>
                       );
