@@ -60,7 +60,7 @@ export default function Sidebar() {
 
   return (
     <>
-    <aside className="hidden md:flex flex-col w-60 shrink-0 border-r border-line/70 bg-panel/70 min-h-screen py-5 px-3 sticky top-0 h-screen overflow-y-auto">
+    <aside className="hidden md:flex flex-col w-60 shrink-0 border-r border-white/[0.06] bg-[#1c1c1e]/60 backdrop-blur-2xl backdrop-saturate-150 min-h-screen py-5 px-3 sticky top-0 h-screen overflow-y-auto">
       <Link href="/" className="px-2 mb-7 block" aria-label={`Legion — ${t.nav.dashboard}`}>
         <LegionLogo layout="horizontal" size={38} tagline={false} />
       </Link>
@@ -161,7 +161,7 @@ function MobileBottomNav({ items, isActive }: { items: { label: string; Icon: ty
       )}
       <nav
         aria-label={t.nav.mainNav}
-        className="lg-bottom-nav md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-line/70 bg-panel/90 backdrop-blur-xl pb-[env(safe-area-inset-bottom)]"
+        className="lg-bottom-nav md:hidden fixed bottom-0 inset-x-0 z-40 border-t border-white/[0.08] bg-[#1c1c1e]/75 backdrop-blur-2xl backdrop-saturate-150 pb-[env(safe-area-inset-bottom)]"
       >
         <div className="grid grid-cols-5">
           {primary.map(({ label, Icon, href, i }) => {

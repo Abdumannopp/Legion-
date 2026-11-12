@@ -12,36 +12,36 @@
  * look like a button. Severity keeps its own, conventional scale.
  */
 export const palette = {
-  // Surfaces, darkest to lightest (Legion global design system, premium dark)
-  canvas: "#08060F", // page background
-  panel: "#100B1B", // inputs, inner panels, sidebar
-  surface: "#151020", // cards
-  raised: "#1C1429", // raised cards, selected rows
-  hover: "#241934", // hover on surfaces
-  line: "#312A43", // borders, dividers (lavender at 16 % on a card)
-  lineStrong: "#423B59",
+  // Surfaces, darkest to lightest — Apple-style dark: true black, system grays, hairline borders
+  canvas: "#000000", // page background
+  panel: "#0E0E10", // inputs, inner panels, sidebar
+  surface: "#1C1C1E", // cards
+  raised: "#2C2C2E", // raised cards, selected rows
+  hover: "#3A3A3C", // hover on surfaces
+  line: "#2E2E33", // borders, dividers (hairline)
+  lineStrong: "#48484A",
 
   // Text
-  ink: "#F8F7FC",
-  inkSoft: "#D5CDE2",
-  inkMuted: "#A99DBB",
-  inkFaint: "#817591",
-  inkDisabled: "#5E566B",
+  ink: "#F5F5F7",
+  inkSoft: "#D1D1D6",
+  inkMuted: "#A1A1A6",
+  inkFaint: "#8E8E93",
+  inkDisabled: "#636366",
 
   // Brand: violet for brand, selection and primary actions — never for severity
-  brand: "#7C3AED", // solid fills: primary buttons, active pills
-  brandHover: "#8B5CF6",
-  brandBright: "#C4B5FD", // lavender: violet text and icons on dark backgrounds
+  brand: "#7D52F4", // solid fills: primary buttons, active pills
+  brandHover: "#8F6AF7",
+  brandBright: "#C9B8FF", // lavender: violet text and icons on dark backgrounds
   brandDeep: "#5B21B6",
 
-  // Meaning, independent of the brand
-  critical: "#F87171",
-  criticalHover: "#FCA5A5",
-  high: "#FB923C",
-  warning: "#FBBF24", // also "medium" severity
-  low: "#60A5FA",
-  success: "#4ADE80", // healthy
-  info: "#67C7F5",
+  // Meaning, independent of the brand (Apple system colours, dark appearance)
+  critical: "#FF453A",
+  criticalHover: "#FF6961",
+  high: "#FF9F0A",
+  warning: "#FFD60A", // also "medium" severity
+  low: "#0A84FF",
+  success: "#30D158", // healthy
+  info: "#64D2FF",
 } as const;
 
 /** One severity scale for every screen: critical red, high orange, medium amber, low blue. */
