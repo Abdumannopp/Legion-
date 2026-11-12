@@ -1,76 +1,71 @@
 import { useId } from "react";
 
 /**
- * The Legion helmet mark, drawn as vector geometry from the brand sheet:
- * a cube-shaped Spartan helmet — the top face is the crest, the two side
- * faces are the cheek guards, split by the nose guard.
+ * The Legion emblem: a purple Spartan helmet inside a shield, the symbol of the official logo
+ * (public/brand/legion-cybersecurity-intelligence.svg). Drawn inline so it stays sharp at any size,
+ * keeps a transparent background and needs no image request.
  *
- * `variant="color"` is the violet gradient; `variant="mono"` uses
- * currentColor (white on dark, embossing, one-colour print).
+ * `variant="color"` is the violet gradient; `variant="mono"` uses currentColor (one-colour print).
  */
-
-// The left half of the helmet; the right half is its mirror image.
-const HALF =
-  "M58 232 L438 455 L438 832 L406 832 L368 470 L168 434 L186 648 L300 718 " +
-  "Q362 812 380 968 Q344 852 282 792 L100 668 Z";
-const CREST_LEFT = "M445 55 L183 243 L445 398 Z";
-const CREST_RIGHT = "M445 55 L707 243 L445 398 Z";
-const MIRROR = "translate(890 0) scale(-1 1)";
-
 export default function LegionMark({
   size = 32,
   variant = "color",
   className,
   title = "Legion",
 }: {
+  /** Width in px; the height follows the emblem's proportions. */
   size?: number;
   variant?: "color" | "mono";
   className?: string;
   /** Accessible name; pass "" when the mark sits next to the word "Legion". */
   title?: string;
 }) {
-  // Gradient ids must be unique per instance, or two marks on one page
-  // would share (and fight over) the same <defs>.
+  // Gradient and filter ids must be unique per instance, or two marks on one page would share them.
   const id = useId().replace(/:/g, "");
-  const fill = (name: string) => (variant === "mono" ? "currentColor" : `url(#${name}${id})`);
-
+  const mono = variant === "mono";
+  const g = (name: string) => (mono ? "currentColor" : `url(#${name}${id})`);
   return (
     <svg
-      viewBox="40 40 810 945"
+      viewBox="14 0 312 360"
       width={size}
-      height={(size * 945) / 810}
+      height={(size * 360) / 312}
       className={className}
       role={title ? "img" : undefined}
       aria-label={title || undefined}
       aria-hidden={title ? undefined : true}
       xmlns="http://www.w3.org/2000/svg"
     >
-      {variant === "color" && (
+      {!mono && (
         <defs>
-          <linearGradient id={`lf${id}`} x1="0" y1="0" x2="0.55" y2="1">
-            <stop offset="0" stopColor="#B89EFF" />
-            <stop offset="0.55" stopColor="#8B5CF6" />
+          <linearGradient id={`violet${id}`} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stopColor="#E5B8FF" />
+            <stop offset=".42" stopColor="#A855F7" />
             <stop offset="1" stopColor="#6D28D9" />
           </linearGradient>
-          <linearGradient id={`rf${id}`} x1="1" y1="0" x2="0.45" y2="1">
-            <stop offset="0" stopColor="#8B5CF6" />
-            <stop offset="0.6" stopColor="#6D28D9" />
-            <stop offset="1" stopColor="#4C1D95" />
+          <linearGradient id={`helmet${id}`} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stopColor="#DCC4FF" />
+            <stop offset=".48" stopColor="#8B5CF6" />
+            <stop offset="1" stopColor="#3B0764" />
           </linearGradient>
-          <linearGradient id={`dl${id}`} x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor="#C4B0FF" />
-            <stop offset="1" stopColor="#8B5CF6" />
-          </linearGradient>
-          <linearGradient id={`dr${id}`} x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor="#7C3AED" />
-            <stop offset="1" stopColor="#4C1D95" />
-          </linearGradient>
+          <filter id={`glow${id}`} x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="5" result="blur" />
+            <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
         </defs>
       )}
-      <path d={CREST_LEFT} fill={fill("dl")} />
-      <path d={CREST_RIGHT} fill={fill("dr")} opacity={variant === "mono" ? 0.78 : 1} />
-      <path d={HALF} fill={fill("lf")} />
-      <path d={HALF} fill={fill("rf")} transform={MIRROR} opacity={variant === "mono" ? 0.88 : 1} />
+      <path d="M170 8 L316 67 L307 207 Q296 278 170 350 Q44 278 33 207 L24 67 Z" fill="none" stroke={g("violet")} strokeWidth="13" strokeLinejoin="round" />
+      <path d="M170 40 Q116 74 91 123 L91 211 L137 280 L170 315 L203 280 L249 211 L249 123 Q224 74 170 40Z" fill={mono ? "none" : "#10071D"} stroke={g("helmet")} strokeWidth="5" strokeLinejoin="round" />
+      <path d="M170 43 L170 188 L104 151 L111 204 L146 228 L146 285 L170 315Z" fill={g("helmet")} opacity=".96" />
+      <path d="M170 43 L170 188 L236 151 L229 204 L194 228 L194 285 L170 315Z" fill={mono ? "currentColor" : "#4C1D95"} opacity={mono ? 0.7 : 0.88} />
+      {!mono && (
+        <>
+          <path d="M170 43 L170 188 L104 151 L111 204 L146 228 L146 285" fill="none" stroke="#E9D5FF" strokeOpacity=".72" strokeWidth="3" strokeLinejoin="round" />
+          <path d="M170 43 L170 188 L236 151 L229 204 L194 228 L194 285" fill="none" stroke="#A855F7" strokeOpacity=".9" strokeWidth="3" strokeLinejoin="round" />
+        </>
+      )}
+      <path d="M104 151 L151 174 L170 191 L189 174 L236 151 L229 188 L190 211 L170 213 L150 211 L111 188Z" fill={mono ? "currentColor" : "#090510"} opacity={mono ? 0.35 : 1} />
+      <path d="M118 169 L157 185 L145 190 L126 183Z M222 169 L183 185 L195 190 L214 183Z" fill={mono ? "currentColor" : "#F5E9FF"} filter={mono ? undefined : `url(#glow${id})`} />
+      {!mono && <path d="M170 214 L170 315" stroke="#D8B4FE" strokeWidth="3" opacity=".7" />}
     </svg>
   );
 }

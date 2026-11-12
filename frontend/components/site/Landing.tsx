@@ -4,7 +4,7 @@ import Link from "next/link";
 import {
   Activity, Bot, Boxes, KeyRound, Radar, ShieldCheck, Sparkles, Workflow,
 } from "lucide-react";
-import LegionLogo from "@/components/brand/LegionLogo";
+import { LegionLockup } from "@/components/brand/LegionLogo";
 import SiteHeader from "./SiteHeader";
 import SiteFooter from "./SiteFooter";
 import PlansGrid from "./PricingCard";
@@ -35,7 +35,7 @@ export default function Landing() {
 
       <section className="max-w-6xl mx-auto px-5 pt-16 pb-20 text-center">
         <div className="flex justify-center">
-          <LegionLogo layout="stacked" size={120} />
+          <LegionLockup width={560} />
         </div>
         <h1 className="mt-10 text-3xl sm:text-5xl font-semibold tracking-tight leading-tight">
           {l.heroTitle}

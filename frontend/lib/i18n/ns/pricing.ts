@@ -4,7 +4,7 @@ import { defineMessages } from "../core";
 
 export const pricing = defineMessages({
   en: {
-    metaTitle: "Pricing | Legion Cyber Intelligence",
+    metaTitle: "Pricing | Legion Cybersecurity Intelligence",
     eyebrow: "Pricing",
     title: "Plans for every size of team",
     subtitle: (days: number) => `Start free for ${days} days, no card needed. Pay only if you keep it.`,
