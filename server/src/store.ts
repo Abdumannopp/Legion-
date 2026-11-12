@@ -884,6 +884,16 @@ export async function getSubscriptionByPaddleId(
  * guarantee delivery order, and checking in the application would leave a
  * window where a stale retry overwrites a newer state.
  */
+/** A plan change Paddle accepted through the API: the plan and add-ons take effect at once (the webhook confirms it later). */
+export async function setSubscriptionPlan(tenantId: string, subscriptionId: string, plan: string, addons: string[], priceId: string): Promise<Subscription | null> {
+  const row = await queryOne(
+    `UPDATE subscriptions SET plan = $3, addons = $4, paddle_price_id = $5
+      WHERE tenant_id = $1 AND paddle_subscription_id = $2 RETURNING *`,
+    [tenantId, subscriptionId, plan, addons, priceId],
+  );
+  return row ? toSubscription(row) : null;
+}
+
 export async function applySubscriptionEvent(
   sub: Subscription
 ): Promise<Subscription | null> {

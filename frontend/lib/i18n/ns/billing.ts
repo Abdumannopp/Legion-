@@ -25,6 +25,12 @@ export const billing = defineMessages({
     notConfirmed:
       "Payment received by Paddle, but not confirmed here yet. Refresh in a minute; if it persists, contact support.",
     checkoutError: "Couldn't open checkout.",
+    switchTitle: "Change your plan",
+    switchTo: (name: string) => `Switch to ${name}`,
+    yourPlan: "Your current plan",
+    switchConfirm: (name: string) => `Switch this workspace to ${name}? A more expensive plan is charged now for the rest of the period, to the payment method on file; a cheaper one is credited to your next bill. The new plan applies at once.`,
+    switchedNow: (name: string) => `You are now on ${name}. The difference was charged to your payment method.`,
+    switchedLater: (name: string) => `You are now on ${name}. The difference is credited to your next bill.`,
     portalError: "Couldn't open the billing portal.",
     activating: "Payment received — activating your subscription…",
     paddleNotConfigured:
@@ -60,7 +66,7 @@ export const billing = defineMessages({
       overAdmins: "You have more administrators than your plan includes. Remove one or upgrade to add more.",
     },
     addonsTitle: "Add-ons (monthly plans only)",
-    changePlan: "To change plan or add an add-on to a running subscription, contact support — we switch you without losing any data.",
+    changePlan: "You can change plan below at any time; your data is kept. Card and invoices: Manage subscription.",
     /** Billing period after the price: "$49 / month", "$120 / 3 months". */
     interval: (count: number, unit: BillingInterval) => (count === 1 ? unit : `${count} ${unit}s`),
   },

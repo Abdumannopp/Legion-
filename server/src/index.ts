@@ -52,7 +52,7 @@ import { startSensorMonitor, stopSensorMonitor } from "./sensor-monitor.js";
 import { seedDemoIfEmpty } from "./seed.js";
 import { inviteEmail, mailEnabled, notificationConfirmEmail, passwordResetEmail, sendMail, testNotificationEmail, verifyEmailEmail, verifyMail } from "./mailer.js";
 import { LOCALES, actionText, copilotFallback, isLocale, localExplanation, localizeResponses, requestLocale, suggestedActions, translate, validationMessage, type Locale } from "./i18n.js";
-import { createPortalSession, paddleConfigured, verifyPaddleSignature } from "./paddle.js";
+import { createPortalSession, paddleConfigured, updateSubscriptionItems, verifyPaddleSignature } from "./paddle.js";
 import { aiCircuit, aiConfigWarnings, aiEnabled, aiProviderName, copilotAnswerSafe, explainAlertSafe } from "./ai.js";
 import { aiAuditDetail, aiPolicy, consumeAiQuota, type AiWhy } from "./ai-policy.js";
 import { clip, isIp } from "./ai-safety.js";
@@ -1935,6 +1935,12 @@ app.post("/billing/checkout-context", requireRole("admin"), async (req: AuthedRe
     interval: z.enum(["month", "year"]).default("month"),
     addons: z.array(z.enum(ADDON_IDS)).max(10).default([]),
   }), req.body ?? {}, res); if (!body) return; // unknown keys (a client-chosen price, another tenant) are ignored: nothing reads them if (!body) return;
+  // A workspace that is already paying must not open a second subscription (it would be billed twice):
+  // it changes plan on the one it has (POST /billing/change-plan).
+  const paying = await store.getSubscription(req.user!.tenant_id);
+  if (paying?.paddle_subscription_id && ["active", "trialing", "past_due"].includes(paying.status)) {
+    return res.status(409).json({ detail: "This workspace already has a subscription. Change its plan instead of buying a second one.", code: "already_subscribed" });
+  }
   if (!body.plan) {
     return res.json({ checkout_token: token, currency, price_id: config.paddlePriceIds[currency] ?? null });
   }
@@ -1956,6 +1962,60 @@ app.post("/billing/checkout-context", requireRole("admin"), async (req: AuthedRe
     checkout_token: token, currency: "USD", plan: body.plan, interval: body.interval,
     items: [planPrice, ...addonIds.map((a) => config.paddleAddonPrices[a]!)].map((priceId) => ({ priceId, quantity: 1 })),
   });
+});
+
+/**
+ * Changes the plan of the subscription the workspace already has. No second checkout and no second subscription:
+ * Paddle charges the difference now (an upgrade) or credits it to the next bill (a downgrade), and the workspace
+ * works under the new plan at once. The plan that takes effect is the one Paddle confirms, never the request.
+ */
+app.post("/billing/change-plan", requireRole("admin"), async (req: AuthedRequest, res) => {
+  const body = parse(z.object({
+    plan: z.enum(PLAN_IDS),
+    interval: z.enum(["month", "year"]).default("month"),
+    addons: z.array(z.enum(ADDON_IDS)).max(10).default([]),
+  }), req.body ?? {}, res); if (!body) return;
+  const tenantId = req.user!.tenant_id;
+  const sub = await store.getSubscription(tenantId);
+  if (!sub?.paddle_subscription_id || !["active", "trialing"].includes(sub.status)) {
+    return res.status(409).json({
+      detail: sub?.status === "past_due" ? "The last payment failed. Update the payment method first, then change the plan." : "There is no active subscription to change. Choose a plan and pay first.",
+      code: sub?.status === "past_due" ? "payment_due" : "no_subscription",
+    });
+  }
+  const planPrice = config.paddlePlanPrices[`${body.plan}.${body.interval}`];
+  if (!planPrice) {
+    return res.status(409).json({ detail: body.plan === "enterprise" ? "Enterprise is by agreement. Contact us." : "That plan cannot be bought online yet.", code: "plan_not_purchasable" });
+  }
+  const addonIds = [...new Set(body.addons)];
+  if (addonIds.length && body.interval !== "month") {
+    return res.status(400).json({ detail: "Add-ons are billed monthly. Choose the monthly plan to add them.", code: "addon_interval" });
+  }
+  if (addonIds.some((a) => !config.paddleAddonPrices[a])) return res.status(409).json({ detail: "An add-on you chose cannot be bought online yet.", code: "addon_not_purchasable" });
+  const wanted = [planPrice, ...addonIds.map((a) => config.paddleAddonPrices[a]!)];
+  const before = await resolvePlan(tenantId);
+  if (sub.paddle_price_id === planPrice && sub.plan === body.plan && [...(sub.addons ?? [])].sort().join() === [...addonIds].sort().join()) {
+    return res.status(409).json({ detail: "The workspace is already on that plan.", code: "same_plan" });
+  }
+  // Paying more now: charge the difference now. Paying less: credit it against the next bill.
+  const price = (id: (typeof PLAN_IDS)[number], interval: "month" | "year") => (interval === "year" ? (PLANS[id].annualUsd ?? 0) / 12 : PLANS[id].monthlyUsd ?? 0);   // per month, so periods compare
+  const currentInterval: "month" | "year" = Object.entries(config.paddlePlanPrices).find(([, id]) => id === sub.paddle_price_id)?.[0].endsWith(".year") ? "year" : "month";
+  const upgrade = price(body.plan, body.interval) >= price(sub.plan ?? "professional", currentInterval);
+  const changed = await updateSubscriptionItems(sub.paddle_subscription_id, wanted, upgrade ? "prorated_immediately" : "prorated_next_billing_period");
+  if (!changed.ok) {
+    await log(req, "billing.plan_change_failed", "subscription", sub.paddle_subscription_id, `${body.plan}.${body.interval}: ${changed.detail}`.slice(0, 300));
+    return res.status(changed.status >= 500 ? 502 : 409).json({ detail: changed.status >= 500 ? "Could not reach the billing provider. Nothing was changed. Try again later." : `The billing provider refused the change: ${changed.detail}`.slice(0, 300), code: "provider_refused" });
+  }
+  // What Paddle now holds decides the plan, exactly as in the webhook.
+  const bought = classifyPrices(changed.priceIds);
+  if (!bought.plan || bought.unknown.length) {
+    await log(req, "billing.plan_change_unrecognised", "subscription", sub.paddle_subscription_id, changed.priceIds.join(",").slice(0, 200));
+    return res.status(502).json({ detail: "The billing provider confirmed something Legion does not sell. The plan was not changed here; contact support.", code: "provider_mismatch" });
+  }
+  const saved = await store.setSubscriptionPlan(tenantId, sub.paddle_subscription_id, bought.plan, bought.addons, planPrice);
+  await log(req, "billing.plan_changed", "subscription", sub.paddle_subscription_id, `${before.plan} -> ${bought.plan} (${body.interval})${bought.addons.length ? ` + ${bought.addons.join(",")}` : ""}`.slice(0, 300));
+  const plan = await resolvePlan(tenantId);
+  return res.json({ status: "changed", charged: upgrade ? "now" : "next_bill", subscription: saved, entitlements: { ...plan, usage: await usageOf(tenantId, plan) } });
 });
 
 app.post("/billing/portal", requireRole("admin"), async (req: AuthedRequest, res) => {

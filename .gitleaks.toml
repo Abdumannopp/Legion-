@@ -10,6 +10,9 @@ paths = [
   '''(^|/)server/tests/''',
   '''(^|/)packages/agent-identity/test/''',
   '''(^|/)ops/tests/''',
+  # Test fixtures of the separate "Veyra" project on another branch of this repository (gitleaks reads every
+  # branch): made-up demo logins and passwords in its tests. Only the test folder, never its source.
+  '''(^|/)veyra/test/''',
   '''(^|/)integrations/test_[^/]*\.py$''',
   '''(^|/)e2e-results/''',
   '''(^|/)pilot-results/''',

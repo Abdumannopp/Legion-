@@ -2,7 +2,7 @@
  * Plans (src/plans.ts) in the running API: which plan a workspace is on, what
  * Paddle's webhook turns into, and what each plan refuses.
  */
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from "vitest";
 import request from "supertest";
 import bcrypt from "bcryptjs";
 import { randomUUID, createHmac } from "node:crypto";
@@ -141,6 +141,106 @@ describe("Paddle's webhook records the plan", () => {
     expect(plain.status).toBe(200); expect(plain.body.items).toBeUndefined();                          // the old call still works
     const analyst = await user(t, "analyst");
     expect((await checkout(analyst, { plan: "starter" })).status).toBe(403);
+  });
+
+  describe("choose a plan, pay, work under it, change it", () => {
+    type Call = { url: string; method: string; body: Record<string, unknown> };
+    let calls: Call[]; let reply: (c: Call) => { status: number; body: unknown };
+    const realFetch = globalThis.fetch; let savedKey = "";
+    const local = (input: unknown) => /^https?:\/\/(127\.0\.0\.1|localhost)/.test(String(input));
+    beforeEach(() => {
+      savedKey = config.paddleApiKey; set("paddleApiKey", "pdl_test_key");
+      calls = []; reply = (c) => ({ status: 200, body: { data: { id: "sub", updated_at: new Date().toISOString(), items: ((c.body.items as Array<{ price_id: string }>) ?? []).map((i) => ({ price: { id: i.price_id } })) } } });
+      globalThis.fetch = (async (input: URL | string, init: RequestInit = {}) => {
+        if (local(input)) return realFetch(input as never, init);
+        const c: Call = { url: String(input), method: String(init.method ?? "GET"), body: init.body ? JSON.parse(String(init.body)) : {} };
+        calls.push(c); const r = reply(c);
+        return new Response(JSON.stringify(r.body), { status: r.status });
+      }) as typeof fetch;
+    });
+    afterEach(() => { globalThis.fetch = realFetch; set("paddleApiKey", savedKey); });
+    const ent = async (u: User) => (await request(app).get("/billing/entitlements").set(...asUser(u))).body;
+    const change = (u: User, body: Record<string, unknown>) => request(app).post("/billing/change-plan").set(...asUser(u)).send(body);
+    const copilot = (u: User) => request(app).post("/copilot/chat").set(...asUser(u)).send({ message: "hi" });
+    async function subscribe(admin: User, plan: string, price: string) {
+      const ctx = await checkout(admin, { plan });
+      expect(ctx.status).toBe(200);
+      const ev = event([price], { custom_data: { checkout_token: ctx.body.checkout_token } });
+      expect((await paddle(ev)).body.subscription_status).toBe("active");
+      return (ev.data as { id: string }).id;
+    }
+
+    it("the workspace gets exactly the plan it paid for, and its limits apply at once", async () => {
+      const t = await tenant(); const admin = await user(t, "admin");
+      expect(await ent(admin)).toMatchObject({ plan: "professional", source: "trial" });       // before paying: the trial
+      await subscribe(admin, "starter", "pri_starter_m");
+      expect(await ent(admin)).toMatchObject({ plan: "starter", source: "subscription", endpoints: 25, admins: 2, retentionDays: 30, ipBlocking: "none" });
+      const refused = await copilot(admin);                                                       // a Professional feature
+      expect(refused.status).toBe(403);
+      expect(refused.body).toMatchObject({ code: "plan_feature", plan: "starter", upgrade_to: "professional" });
+    });
+
+    it("a paying workspace cannot open a second subscription; it changes plan on the one it has", async () => {
+      const t = await tenant(); const admin = await user(t, "admin");
+      const subId = await subscribe(admin, "starter", "pri_starter_m");
+      const again = await checkout(admin, { plan: "business" });
+      expect(again.status).toBe(409);
+      expect(again.body.code).toBe("already_subscribed");
+      expect((await checkout(admin, {})).status).toBe(409);
+
+      const up = await change(admin, { plan: "business", addons: ["payment_fraud"] });
+      expect(up.status).toBe(200);
+      expect(up.body).toMatchObject({ status: "changed", charged: "now", entitlements: { plan: "business", endpoints: 500, ipBlocking: "policy", addons: ["payment_fraud"] } });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({ method: "PATCH", body: { proration_billing_mode: "prorated_immediately", items: [{ price_id: "pri_biz_m", quantity: 1 }, { price_id: "pri_addon_pay", quantity: 1 }] } });
+      expect(calls[0]!.url).toMatch(new RegExp(`/subscriptions/${subId}$`));
+      expect((await copilot(admin)).status).not.toBe(403);                                        // the new plan works at once
+      expect((await query("SELECT detail FROM audit_log WHERE tenant_id = $1 AND action = 'billing.plan_changed'", [t])).rows[0].detail).toMatch(/starter -> business/);
+      // Paddle's own confirmation arrives later and agrees
+      await paddle({ event_id: `evt_${randomUUID()}`, event_type: "subscription.updated", occurred_at: new Date(Date.now() + 1000).toISOString(), data: { id: subId, status: "active", customer_id: "ctm_1", items: [{ price: { id: "pri_biz_m" } }, { price: { id: "pri_addon_pay" } }] } });
+      expect(await store.getSubscription(t)).toMatchObject({ plan: "business", addons: ["payment_fraud"], paddle_subscription_id: subId });
+
+      // a downgrade is credited to the next bill, and the smaller plan's limits apply
+      const down = await change(admin, { plan: "starter" });
+      expect(down.body).toMatchObject({ status: "changed", charged: "next_bill", entitlements: { plan: "starter", addons: [] } });
+      expect(calls[1]!.body.proration_billing_mode).toBe("prorated_next_billing_period");
+      expect((await copilot(admin)).status).toBe(403);
+      expect((await change(admin, { plan: "starter" })).body.code).toBe("same_plan");
+    });
+
+    it("nothing changes unless the billing provider accepts it; the plan is what the provider confirms", async () => {
+      const t = await tenant(); const admin = await user(t, "admin");
+      await subscribe(admin, "starter", "pri_starter_m");
+      reply = () => ({ status: 400, body: { error: { detail: "payment declined" } } });
+      const declined = await change(admin, { plan: "business" });
+      expect(declined.status).toBe(409);
+      expect(declined.body.code).toBe("provider_refused");
+      reply = () => ({ status: 503, body: {} });
+      expect((await change(admin, { plan: "business" })).status).toBe(502);
+      expect((await ent(admin)).plan).toBe("starter");
+      // the provider answers with something else than was asked: Legion follows the provider, never the request
+      reply = () => ({ status: 200, body: { data: { items: [{ price: { id: "pri_pro_m" } }] } } });
+      expect((await change(admin, { plan: "business" })).body.entitlements.plan).toBe("professional");
+      reply = () => ({ status: 200, body: { data: { items: [{ price: { id: "pri_mystery" } }] } } });
+      expect((await change(admin, { plan: "business" })).status).toBe(502);
+      expect((await ent(admin)).plan).toBe("professional");
+    });
+
+    it("who may change a plan, and when", async () => {
+      const t = await tenant(); const admin = await user(t, "admin"); const analyst = await user(t, "analyst");
+      expect((await change(admin, { plan: "business" })).body.code).toBe("no_subscription");     // nothing paid yet
+      await subscribe(admin, "starter", "pri_starter_m");
+      expect((await change(analyst, { plan: "business" })).status).toBe(403);
+      expect((await change(admin, { plan: "enterprise" })).body.code).toBe("plan_not_purchasable");
+      expect((await change(admin, { plan: "business", interval: "year", addons: ["payment_fraud"] })).body.code).toBe("addon_interval");
+      expect((await change(admin, { plan: "platinum" })).status).toBe(422);
+      await query("UPDATE subscriptions SET status = 'past_due' WHERE tenant_id = $1", [t]);
+      expect((await change(admin, { plan: "business" })).body.code).toBe("payment_due");
+      expect(calls).toHaveLength(0);
+      // another workspace's admin changes only their own subscription
+      const t2 = await tenant(); const admin2 = await user(t2, "admin");
+      expect((await change(admin2, { plan: "business" })).body.code).toBe("no_subscription");
+    });
   });
 
   it("the price list is public and never shows Paddle price ids", async () => {
