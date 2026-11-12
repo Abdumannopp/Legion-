@@ -82,7 +82,7 @@ function layout(title: string, bodyHtml: string, locale: Locale): string {
   return `<!doctype html><html lang="${locale}"><body style="margin:0;background:#08060F;padding:24px;font-family:Segoe UI,Helvetica,Arial,sans-serif">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
 <table role="presentation" width="520" cellpadding="0" cellspacing="0" style="max-width:520px;background:#140F24;border:1px solid #251C3D;border-radius:12px;padding:28px">
-<tr><td style="padding-bottom:18px"><span style="color:#F6F4FB;font-size:15px;letter-spacing:6px;text-transform:uppercase">Legion</span><br><span style="color:#A78BFA;font-size:9px;letter-spacing:4px;text-transform:uppercase">Cyber Intelligence</span></td></tr>
+<tr><td style="padding-bottom:18px"><span style="color:#F6F4FB;font-size:15px;letter-spacing:6px;text-transform:uppercase">Legion</span><br><span style="color:#A78BFA;font-size:9px;letter-spacing:4px;text-transform:uppercase">Cybersecurity Intelligence</span></td></tr>
 <tr><td style="color:#F6F4FB;font-size:19px;font-weight:600;padding-bottom:14px">${escape(title)}</td></tr>
 <tr><td style="color:#B1A9CC;font-size:14px;line-height:1.6">${bodyHtml}</td></tr>
 </table></td></tr></table></body></html>`;

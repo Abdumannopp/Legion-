@@ -32,7 +32,7 @@ export default function TeamPage() {
   }, [router]);
 
   return (
-    <div className="flex min-h-screen bg-canvas">
+    <div className="flex min-h-screen lg-app-bg">
       <Sidebar />
       <div className="flex-1 p-4 sm:p-6">
         <div className="max-w-4xl mx-auto space-y-5">
@@ -53,7 +53,7 @@ export default function TeamPage() {
                 const mine = skills.filter((s) => s.agent === agent);
                 const text = m.agents[agent];
                 return (
-                  <section key={agent} className="bg-surface border border-line rounded-2xl p-5" data-testid={`team-${agent}`}>
+                  <section key={agent} className="lg-surface p-5" data-testid={`team-${agent}`}>
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-center gap-2.5">
                         <span className="w-9 h-9 rounded-lg bg-brand/10 flex items-center justify-center shrink-0"><Icon size={17} className="text-brand-bright" /></span>

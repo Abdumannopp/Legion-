@@ -10,7 +10,7 @@ import { useLanguage } from "@/lib/i18n/LanguageContext";
 
 const RISK_COLOR: Record<Asset["risk"], string> = {
   critical: palette.critical,
-  high: palette.critical,
+  high: palette.high,
   medium: palette.warning,
   low: palette.success,
 };
@@ -66,7 +66,7 @@ export default function AssetsPage() {
   const onlineCount = assets.filter((a) => a.online).length;
 
   return (
-    <div className="flex min-h-screen bg-canvas">
+    <div className="flex min-h-screen lg-app-bg">
       <Sidebar />
       <div className="flex-1 p-4 sm:p-6">
         <div className="max-w-4xl mx-auto">
@@ -120,7 +120,7 @@ export default function AssetsPage() {
               <Loader2 size={20} className="animate-spin" />
             </div>
           ) : (
-            <div className="rounded-xl border border-line bg-surface overflow-hidden">
+            <div className="lg-surface overflow-hidden">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-line text-left">

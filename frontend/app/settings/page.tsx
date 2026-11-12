@@ -298,7 +298,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="flex min-h-screen bg-canvas">
+    <div className="flex min-h-screen lg-app-bg">
       <Sidebar />
       <div className="flex-1 p-4 sm:p-6">
         <div className="max-w-3xl mx-auto">
@@ -356,7 +356,7 @@ export default function SettingsPage() {
                   <AiSettingsSection isAdmin={isAdmin} />
                   <RegionalSettingsSection isAdmin={isAdmin} />
                   <WorkspaceExportSection isAdmin={isAdmin} />
-                  <div className="rounded-xl border border-line bg-surface p-4 flex flex-col gap-3">
+                  <div className="lg-surface p-4 flex flex-col gap-3">
                     <div className="flex items-center justify-between py-2 border-b border-line">
                       <span className="text-ink-faint text-xs uppercase tracking-wide">{t.common.email}</span>
                       <span className="text-ink text-sm">{me.email}</span>
@@ -387,7 +387,7 @@ export default function SettingsPage() {
 
                   <form
                     onSubmit={handleChangePassword}
-                    className="rounded-xl border border-line bg-surface p-4 flex flex-col gap-3"
+                    className="lg-surface p-4 flex flex-col gap-3"
                   >
                     <div className="flex items-center gap-2">
                       <KeyRound size={14} color={palette.inkFaint} />
@@ -435,7 +435,7 @@ export default function SettingsPage() {
 
               {/* Notifications tab */}
               {tab === "notifications" && (
-                <div className="rounded-xl border border-line bg-surface p-4">
+                <div className="lg-surface p-4">
                   {!isAdmin ? (
                     <AdminOnlyNotice />
                   ) : (
@@ -499,14 +499,14 @@ export default function SettingsPage() {
               {tab === "team" && (
                 <div className="flex flex-col gap-4">
                   {!isAdmin ? (
-                    <div className="rounded-xl border border-line bg-surface p-4">
+                    <div className="lg-surface p-4">
                       <AdminOnlyNotice />
                     </div>
                   ) : (
                     <>
                       <form
                         onSubmit={handleInvite}
-                        className="rounded-xl border border-line bg-surface p-4 flex flex-col gap-3"
+                        className="lg-surface p-4 flex flex-col gap-3"
                       >
                         <div className="flex items-center gap-2">
                           <UserPlus size={14} color={palette.inkFaint} />
@@ -562,7 +562,7 @@ export default function SettingsPage() {
                         )}
                       </form>
 
-                      <div className="rounded-xl border border-line bg-surface overflow-x-auto">
+                      <div className="lg-surface overflow-x-auto">
                         <table className="w-full text-sm">
                           <thead>
                             <tr className="border-b border-line text-left">
@@ -680,7 +680,7 @@ export default function SettingsPage() {
 
               {/* Audit log tab */}
               {tab === "audit" && (
-                <div className="rounded-xl border border-line bg-surface overflow-hidden">
+                <div className="lg-surface overflow-hidden">
                   {!isAdmin ? (
                     <div className="p-4">
                       <AdminOnlyNotice />

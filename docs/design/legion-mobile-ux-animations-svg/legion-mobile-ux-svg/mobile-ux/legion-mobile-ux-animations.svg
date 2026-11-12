@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1536" height="1024" viewBox="0 0 1536 1024">
+<defs>
+ <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#080512"/><stop offset=".55" stop-color="#10071f"/><stop offset="1" stop-color="#1b0830"/></linearGradient>
+ <linearGradient id="phone" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#211632"/><stop offset="1" stop-color="#0c0918"/></linearGradient>
+ <linearGradient id="violet" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#d17cff"/><stop offset=".5" stop-color="#9638f2"/><stop offset="1" stop-color="#6217c8"/></linearGradient>
+ <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#28163d"/><stop offset="1" stop-color="#140b24"/></linearGradient>
+ <radialGradient id="aura"><stop stop-color="#9c3eff" stop-opacity=".35"/><stop offset="1" stop-color="#651ab5" stop-opacity="0"/></radialGradient>
+ <filter id="glow"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+ <filter id="blur"><feGaussianBlur stdDeviation="28"/></filter>
+ <pattern id="dots" width="11" height="11" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1" fill="#c16bff" opacity=".65"/></pattern>
+ <style>
+ .ui{font-family:Inter,Arial,sans-serif}.white{fill:#fbf8ff}.muted{fill:#bdb1d0}.purple{fill:#ddb5ff}
+ .phone{fill:url(#phone);stroke:#a85be7;stroke-width:2}.screen{fill:#0d0918}.tiny{font-size:8px}.small{font-size:10px}
+ .body{font-size:12px}.panel{fill:url(#panel);stroke:#65408a;stroke-width:1}
+ </style>
+</defs>
+<rect width="1536" height="1024" fill="url(#bg)"/>
+<ellipse cx="770" cy="460" rx="790" ry="520" fill="url(#aura)" filter="url(#blur)"/>
+<path d="M0 300C180 260 240 120 365 0M1536 160C1390 235 1430 350 1536 420" stroke="#9e3ff0" stroke-width="2" opacity=".55" filter="url(#glow)"/>
+<!-- header -->
+<g class="ui">
+ <g transform="translate(42 22)"><path d="M27 0L54 13V42C54 65 40 81 27 89C14 81 0 65 0 42V13Z" fill="url(#violet)" stroke="#e7c3ff" stroke-width="1.5"/><path d="M27 11L41 20V43C41 57 33 68 27 73C21 68 13 57 13 43V20Z" fill="#32105e" stroke="#e7c3ff"/><path d="M27 16L20 35L27 33L19 56L36 37L29 39L35 21Z" fill="white"/></g>
+ <text x="111" y="54" class="white" font-size="25" font-weight="700" letter-spacing="4">LEGION<tspan baseline-shift="super" font-size="9">®</tspan></text>
+ <text x="112" y="76" class="muted" font-size="9" letter-spacing="2.2">CYBERSECURITY INTELLIGENCE</text>
+ <text x="768" y="48" text-anchor="middle" class="white" font-size="32" font-weight="750">Mobil UX &amp; Animations</text>
+ <text x="768" y="78" text-anchor="middle" class="muted" font-size="14">LEGION — SOC imkoniyatlari endi mobil qurilmada. Tez, intuitiv va jonli.</text>
+ <rect x="1164" y="25" width="154" height="42" rx="10" fill="#1e142c" stroke="#8e5ab7"/><text x="1241" y="42" text-anchor="middle" class="white" font-size="9">Download on the</text><text x="1241" y="57" text-anchor="middle" class="white" font-size="14" font-weight="700">App Store</text>
+ <rect x="1330" y="25" width="164" height="42" rx="10" fill="#1e142c" stroke="#8e5ab7"/><path d="M1350 36L1368 46L1350 57Z" fill="#30d17b"/><text x="1420" y="42" text-anchor="middle" class="white" font-size="9">GET IT ON</text><text x="1420" y="57" text-anchor="middle" class="white" font-size="14" font-weight="700">Google Play</text>
+</g>
+<!-- phone 1 onboarding -->
+<g class="ui">
+ <rect x="22" y="142" width="272" height="610" rx="42" fill="#a74cff" opacity=".12" filter="url(#blur)"/>
+ <rect x="22" y="142" width="272" height="610" rx="42" class="phone"/>
+ <rect x="31" y="151" width="254" height="592" rx="34" class="screen"/>
+ <rect x="119" y="158" width="88" height="18" rx="9" fill="#030207"/>
+ <text x="56" y="178" class="white small">9:41</text><text x="236" y="178" class="white tiny">▮ ▴ ▰</text>
+ <g transform="translate(111 265)" filter="url(#glow)"><path d="M45 0L90 21V66C90 104 67 129 45 142C23 129 0 104 0 66V21Z" fill="url(#violet)" stroke="#edcaff" stroke-width="2"/><path d="M45 18L70 33V68C70 91 57 108 45 118C33 108 20 91 20 68V33Z" fill="#2a0b51" stroke="#e5c2ff"/><path d="M45 24L33 52L45 49L32 85L60 55L47 58L57 34Z" fill="white"/></g>
+ <text x="158" y="449" text-anchor="middle" class="white" font-size="28" letter-spacing="6">LEGION<tspan baseline-shift="super" font-size="8">®</tspan></text>
+ <text x="158" y="476" text-anchor="middle" class="muted" font-size="10" letter-spacing="3">CYBERSECURITY</text><text x="158" y="493" text-anchor="middle" class="muted" font-size="10" letter-spacing="3">INTELLIGENCE</text>
+ <path d="M32 535Q158 475 284 535V742H32Z" fill="url(#dots)" opacity=".55"/>
+ <path d="M32 535Q158 475 284 535" stroke="#bd68ff" stroke-width="2" fill="none" filter="url(#glow)"/>
+ <text x="158" y="632" text-anchor="middle" class="white" font-size="17" font-weight="700">AI-Powered SOC</text><text x="158" y="655" text-anchor="middle" class="white" font-size="16">in Your Pocket</text>
+ <circle cx="145" cy="711" r="3" fill="#d7b4ff"/><circle cx="158" cy="711" r="3" fill="#8f42d7"/><circle cx="171" cy="711" r="3" fill="#67427d"/>
+</g>
+<!-- phone 2 login -->
+<g class="ui">
+ <rect x="307" y="143" width="272" height="610" rx="42" fill="#a74cff" opacity=".12" filter="url(#blur)"/>
+ <rect x="307" y="143" width="272" height="610" rx="42" class="phone"/>
+ <rect x="316" y="152" width="254" height="592" rx="34" class="screen"/><rect x="401" y="159" width="86" height="18" rx="9" fill="#030207"/>
+ <text x="341" y="178" class="white small">9:41</text><text x="521" y="178" class="white tiny">▮ ▴ ▰</text>
+ <g transform="translate(439 207)"><path d="M19 0L38 9V29C38 46 28 57 19 63C10 57 0 46 0 29V9Z" fill="url(#violet)" stroke="#e6c5ff"/><path d="M19 9L29 15V31C29 41 23 49 19 52C15 49 9 41 9 31V15Z" fill="#35105d"/><path d="M19 13L14 28L19 26L13 42L25 29L20 31L24 17Z" fill="white"/></g>
+ <text x="443" y="296" text-anchor="middle" class="white" font-size="19" font-weight="700">LEGION<tspan baseline-shift="super" font-size="7">®</tspan></text>
+ <text x="443" y="342" text-anchor="middle" class="white" font-size="21" font-weight="700">Kirish</text><text x="443" y="362" text-anchor="middle" class="muted" font-size="11">Hisobingizga kiring</text>
+ <rect x="335" y="392" width="216" height="43" rx="10" fill="#1c1229" stroke="#74469a"/><rect x="350" y="407" width="16" height="12" rx="2" stroke="#f0e5ff" fill="none"/><path d="M350 407L358 414L366 407" stroke="#f0e5ff" fill="none"/><text x="379" y="419" class="muted" font-size="11">email@company.uz</text>
+ <rect x="335" y="447" width="216" height="43" rx="10" fill="#1c1229" stroke="#74469a"/><rect x="351" y="462" width="14" height="13" rx="2" stroke="#f0e5ff" fill="none"/><path d="M354 462V458A4 4 0 0 1 362 458V462" stroke="#f0e5ff" fill="none"/><text x="379" y="474" class="muted" font-size="12">••••••••</text>
+ <rect x="336" y="507" width="33" height="18" rx="9" fill="url(#violet)"/><circle cx="358" cy="516" r="7" fill="white"/><text x="378" y="520" class="white" font-size="10">Meni eslab qol</text><text x="482" y="520" fill="#d39bff" font-size="9">Parolni unutingiz?</text>
+ <rect x="335" y="548" width="216" height="43" rx="11" fill="url(#violet)" stroke="#ddaaff" filter="url(#glow)"/><text x="443" y="575" text-anchor="middle" fill="white" font-size="14" font-weight="700">Kirish  →</text>
+ <path d="M424 625V615A10 10 0 0 1 444 615V625M419 625H449V646H419Z" stroke="#cba6ed" stroke-width="1.5" fill="none"/><text x="443" y="672" text-anchor="middle" class="muted" font-size="11">Face ID bilan kirish</text>
+</g>
+<!-- phone 3 dashboard -->
+<g class="ui">
+ <rect x="592" y="118" width="340" height="650" rx="48" fill="#a74cff" opacity=".15" filter="url(#blur)"/>
+ <rect x="592" y="118" width="340" height="650" rx="48" class="phone" stroke-width="2.5"/>
+ <rect x="602" y="128" width="320" height="630" rx="39" class="screen"/><rect x="714" y="135" width="95" height="20" rx="10" fill="#030207"/>
+ <text x="635" y="157" class="white small">9:41</text><text x="875" y="157" class="white tiny">▮ ▴ ▰</text>
+ <circle cx="647" cy="200" r="21" fill="url(#violet)"/><text x="647" y="204" text-anchor="middle" fill="white" font-size="11">AD</text><text x="780" y="205" text-anchor="middle" class="white" font-size="16" letter-spacing="2">LEGION</text><path d="M879 193V207M872 201A7 7 0 0 1 886 201V209L890 213H868Z" stroke="#f0e6ff" stroke-width="1.4" fill="none"/><circle cx="891" cy="189" r="4" fill="#ff5a70"/>
+ <text x="625" y="257" class="white" font-size="19" font-weight="700">Salom, Admin 👋</text><text x="625" y="279" class="muted" font-size="11">SOC holati bo‘yicha tezkor ma’lumot.</text>
+ <!-- gauge -->
+ <path d="M656 410A110 110 0 0 1 868 410" stroke="#352447" stroke-width="12" fill="none" stroke-linecap="round"/>
+ <path d="M656 410A110 110 0 0 1 868 410" stroke="url(#violet)" stroke-width="10" fill="none" stroke-linecap="round" filter="url(#glow)"/>
+ <path d="M656 410A110 110 0 0 1 759 301" stroke="#27e58c" stroke-width="10" fill="none" stroke-linecap="round" filter="url(#glow)"/>
+ <path d="M759 345L759 368M748 356H770" stroke="#4bf3a3" stroke-width="2"/><text x="759" y="388" text-anchor="middle" class="white" font-size="12">SOC Holati</text><text x="759" y="410" text-anchor="middle" fill="#70f3b3" font-size="19" font-weight="700">● Xavfsiz</text>
+ <!-- metric cards -->
+ <rect x="620" y="435" width="94" height="106" rx="13" class="panel"/><path d="M642 447L651 463H633Z" stroke="#ff637e" stroke-width="1.8" fill="none"/><text x="635" y="486" class="white" font-size="21" font-weight="700">247</text><text x="635" y="503" class="muted tiny">Ogohlantirish</text><text x="635" y="524" fill="#ff6486" font-size="10">↑ +18%</text>
+ <rect x="722" y="435" width="94" height="106" rx="13" class="panel"/><path d="M744 446L755 451V462C755 470 749 475 744 478C739 475 733 470 733 462V451Z" stroke="#d8bdff" fill="none" stroke-width="1.5"/><text x="737" y="486" class="white" font-size="21" font-weight="700">12</text><text x="737" y="503" class="muted tiny">Incident</text><text x="737" y="524" fill="#42e89a" font-size="10">↓ -25%</text>
+ <rect x="824" y="435" width="80" height="106" rx="13" class="panel"/><path d="M844 448L856 455L844 462L832 455Z M832 466L844 473L856 466" stroke="#d8bdff" fill="none" stroke-width="1.5"/><text x="840" y="486" class="white" font-size="21" font-weight="700">42</text><text x="838" y="503" class="muted tiny">Aktiv</text><text x="838" y="516" class="muted tiny">aktivlar</text>
+ <rect x="620" y="554" width="284" height="102" rx="13" class="panel"/><text x="635" y="576" class="white" font-size="11" font-weight="700">Tahdidlar dinamikasi (24 soat)</text><path d="M635 625C649 588 665 641 682 613S715 638 731 604S759 630 776 606S803 619 820 590S850 625 869 598S890 601 899 594" stroke="#c36cff" stroke-width="2" fill="none" filter="url(#glow)"/><path d="M635 625C649 588 665 641 682 613S715 638 731 604S759 630 776 606S803 619 820 590S850 625 869 598S890 601 899 594V645H635Z" fill="#8d36d4" opacity=".15"/>
+ <!-- tabbar -->
+ <rect x="608" y="669" width="308" height="72" rx="18" fill="#1a1127" stroke="#53356f"/>
+ <g font-size="9" class="muted" text-anchor="middle"><text x="653" y="704" fill="#e4c7ff">⌂</text><text x="653" y="723">Bosh sahifa</text><text x="730" y="704">♧</text><text x="730" y="723">Ogohlantirish</text><text x="806" y="704">▣</text><text x="806" y="723">Incidentlar</text><text x="878" y="704">•••</text><text x="878" y="723">Ko‘proq</text></g>
+</g>
+<!-- phone 4 alerts -->
+<g class="ui">
+ <rect x="948" y="143" width="272" height="610" rx="42" fill="#a74cff" opacity=".12" filter="url(#blur)"/>
+ <rect x="948" y="143" width="272" height="610" rx="42" class="phone"/>
+ <rect x="957" y="152" width="254" height="592" rx="34" class="screen"/><rect x="1040" y="159" width="88" height="18" rx="9" fill="#030207"/>
+ <text x="982" y="178" class="white small">9:41</text><text x="1160" y="178" class="white tiny">▮ ▴ ▰</text>
+ <text x="975" y="233" class="white" font-size="17" font-weight="700">Ogohlantirishlar</text><circle cx="1164" cy="221" r="12" stroke="#e8d9f8" stroke-width="1.5" fill="none"/><path d="M1172 229L1178 235" stroke="#e8d9f8" stroke-width="1.5"/><path d="M1190 211L1198 231H1182Z" stroke="#e8d9f8" stroke-width="1.4" fill="none"/>
+ <rect x="972" y="253" width="82" height="31" rx="15" fill="url(#violet)"/><text x="1013" y="273" text-anchor="middle" fill="white" font-size="10">Barchasi (247)</text><rect x="1060" y="253" width="69" height="31" rx="15" fill="#2a1a3d" stroke="#563875"/><text x="1094" y="273" text-anchor="middle" class="white" font-size="10">Kritik (18)</text><rect x="1135" y="253" width="64" height="31" rx="15" fill="#2a1a3d" stroke="#563875"/><text x="1167" y="273" text-anchor="middle" class="white" font-size="10">Yuqori (56)</text>
+ <g>
+  <rect x="970" y="300" width="228" height="84" rx="13" class="panel"/><circle cx="993" cy="327" r="14" fill="#51202f"/><path d="M993 316L1002 335H984Z" stroke="#ff8b9b" stroke-width="1.5" fill="none"/><text x="1014" y="324" class="white" font-size="11" font-weight="700">Gumonli outbound ulanish</text><text x="1014" y="343" class="muted tiny">wazuh-agent-02 · C2 / Data Exfiltration</text><text x="984" y="367" class="muted tiny">Bugun, 15:14</text><rect x="1137" y="350" width="49" height="22" rx="11" fill="#8c2440"/><text x="1161" y="365" text-anchor="middle" fill="white" font-size="9">Kritik</text>
+  <rect x="970" y="393" width="228" height="84" rx="13" class="panel"/><circle cx="993" cy="420" r="14" fill="#51202f"/><path d="M993 409L1002 428H984Z" stroke="#ff8b9b" stroke-width="1.5" fill="none"/><text x="1014" y="417" class="white" font-size="11" font-weight="700">Yangi jarayon (curl)</text><text x="1014" y="436" class="muted tiny">192.168.10.24 · Execution</text><text x="984" y="460" class="muted tiny">Bugun, 15:12</text><rect x="1132" y="443" width="54" height="22" rx="11" fill="#984b20"/><text x="1159" y="458" text-anchor="middle" fill="white" font-size="9">Yuqori</text>
+  <rect x="970" y="486" width="228" height="73" rx="13" class="panel"/><circle cx="993" cy="512" r="14" fill="#39205f"/><path d="M993 501L1002 512L993 523L984 512Z" stroke="#d8b5ff" stroke-width="1.5" fill="none"/><text x="1014" y="509" class="white" font-size="11" font-weight="700">Noodatiy DNS so‘rovi</text><text x="1014" y="528" class="muted tiny">wazuh-agent-01 · Discovery</text><text x="984" y="546" class="muted tiny">Bugun, 15:10</text>
+  <rect x="970" y="568" width="228" height="73" rx="13" class="panel"/><circle cx="993" cy="594" r="14" fill="#39205f"/><path d="M983 594L993 586L1003 594L993 602Z" stroke="#d8b5ff" stroke-width="1.5" fill="none"/><text x="1014" y="591" class="white" font-size="11" font-weight="700">Brute force urinishlari</text><text x="1014" y="610" class="muted tiny">10.0.5.23 · Credential Access</text><text x="984" y="628" class="muted tiny">Bugun, 14:58</text>
+ </g>
+ <rect x="966" y="663" width="236" height="70" rx="18" fill="#1a1127" stroke="#53356f"/><g class="muted" font-size="9" text-anchor="middle"><text x="1000" y="695">⌂</text><text x="1000" y="713">Bosh sahifa</text><text x="1058" y="695" fill="#d9a8ff">♧</text><text x="1058" y="713" fill="#d9a8ff">Ogohlantirish</text><text x="1126" y="695">▣</text><text x="1126" y="713">Incidentlar</text><text x="1174" y="695">•••</text><text x="1174" y="713">Ko‘proq</text></g>
+</g>
+<!-- phone 5 incident detail -->
+<g class="ui">
+ <rect x="1235" y="142" width="279" height="610" rx="42" fill="#a74cff" opacity=".12" filter="url(#blur)"/>
+ <rect x="1235" y="142" width="279" height="610" rx="42" class="phone"/>
+ <rect x="1244" y="151" width="261" height="592" rx="34" class="screen"/><rect x="1331" y="158" width="88" height="18" rx="9" fill="#030207"/>
+ <text x="1268" y="178" class="white small">9:41</text><text x="1456" y="178" class="white tiny">▮ ▴ ▰</text>
+ <path d="M1265 218L1255 228L1265 238" stroke="#eee2ff" stroke-width="2" fill="none"/><text x="1280" y="231" class="white" font-size="11" font-weight="700">Incident #INC-1024</text><text x="1472" y="231" class="muted" font-size="13">⋮</text>
+ <rect x="1260" y="250" width="62" height="22" rx="11" fill="#8b2440"/><text x="1291" y="265" text-anchor="middle" fill="white" font-size="9">⚠ Kritik</text>
+ <text x="1260" y="296" class="white" font-size="15" font-weight="700">Ma’lumotlarni tashqariga</text><text x="1260" y="317" class="white" font-size="15" font-weight="700">uzatish (Data Exfiltration)</text>
+ <rect x="1260" y="333" width="60" height="24" rx="12" fill="#174c3c"/><text x="1290" y="349" text-anchor="middle" fill="#8ff0bd" font-size="9">● Ochiq</text><rect x="1327" y="333" width="46" height="24" rx="12" fill="#39215e"/><text x="1350" y="349" text-anchor="middle" class="white" font-size="9">C2</text><rect x="1380" y="333" width="59" height="24" rx="12" fill="#39215e"/><text x="1410" y="349" text-anchor="middle" class="white" font-size="9">T1041</text>
+ <rect x="1260" y="370" width="231" height="112" rx="12" class="panel"/>
+ <g font-size="10"><text x="1271" y="393" class="muted">Manba IP</text><text x="1375" y="393" class="white">192.168.10.24</text><text x="1271" y="416" class="muted">Maqsad IP</text><text x="1375" y="416" class="white">185.199.108.153</text><text x="1271" y="439" class="muted">Agent</text><text x="1375" y="439" class="white">wazuh-agent-02</text><text x="1271" y="462" class="muted">Vaqt</text><text x="1375" y="462" class="white">15:14:36</text></g>
+ <rect x="1260" y="492" width="231" height="112" rx="12" class="panel"/><text x="1273" y="516" class="purple" font-size="11" font-weight="700">✧  Qisqa tahlil (AI)</text><text x="1273" y="539" class="muted" font-size="10">Ushbu hostdan C2 infratuzilmasiga</text><text x="1273" y="555" class="muted" font-size="10">o‘xshash IP manzilga noodatiy ulanish</text><text x="1273" y="571" class="muted" font-size="10">aniqlandi. Ma’lumotlarni tashqariga</text><text x="1273" y="587" class="muted" font-size="10">uzatish ehtimoli yuqori.</text>
+ <rect x="1260" y="615" width="231" height="93" rx="12" class="panel"/><text x="1273" y="639" class="purple" font-size="11" font-weight="700">ϟ  Tavsiya etilgan amallar</text><rect x="1272" y="653" width="207" height="39" rx="10" fill="url(#violet)" stroke="#d5a2ff"/><text x="1375" y="678" text-anchor="middle" fill="white" font-size="11" font-weight="700">Hostni izolyatsiya qilish  ›</text>
+</g>
+<!-- animation strip -->
+<g class="ui">
+ <text x="42" y="810" class="white" font-size="22" font-weight="700">✧  Asosiy UX animatsiyalar</text>
+ <!-- loading -->
+ <g><rect x="42" y="832" width="140" height="153" rx="18" class="panel"/><circle cx="112" cy="883" r="22" stroke="#563477" stroke-width="4" fill="none"/><path d="M112 861A22 22 0 0 1 133 883" stroke="#ce73ff" stroke-width="4" stroke-linecap="round" fill="none" filter="url(#glow)"/><text x="112" y="931" text-anchor="middle" class="white" font-size="12">Yuklanish</text><text x="112" y="949" text-anchor="middle" class="muted" font-size="11">(Loading)</text></g>
+ <!-- success -->
+ <g><rect x="194" y="832" width="140" height="153" rx="18" class="panel"/><circle cx="264" cy="883" r="25" stroke="#2ee68c" stroke-width="3" fill="none" filter="url(#glow)"/><path d="M251 883L260 892L278 872" stroke="#54f2a6" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/><text x="264" y="931" text-anchor="middle" class="white" font-size="12">Muvaffaqiyat</text><text x="264" y="949" text-anchor="middle" class="muted" font-size="11">(Success)</text></g>
+ <!-- error -->
+ <g><rect x="346" y="832" width="140" height="153" rx="18" class="panel"/><circle cx="416" cy="883" r="25" stroke="#ff4f6c" stroke-width="3" fill="none" filter="url(#glow)"/><path d="M406 873L426 893M426 873L406 893" stroke="#ff7188" stroke-width="3" stroke-linecap="round"/><text x="416" y="931" text-anchor="middle" class="white" font-size="12">Xatolik</text><text x="416" y="949" text-anchor="middle" class="muted" font-size="11">(Error)</text></g>
+ <!-- pulse -->
+ <g><rect x="498" y="832" width="140" height="153" rx="18" class="panel"/><circle cx="568" cy="883" r="25" fill="#55268a" opacity=".35"/><path d="M558 887V879A10 10 0 0 1 578 879V887L582 892H554Z" stroke="#d8a0ff" stroke-width="2" fill="none" filter="url(#glow)"/><circle cx="583" cy="868" r="4" fill="#ff627c"/><text x="568" y="931" text-anchor="middle" class="white" font-size="12">Yangi ogohlantirish</text><text x="568" y="949" text-anchor="middle" class="muted" font-size="11">(Pulse)</text></g>
+ <!-- live -->
+ <g><rect x="650" y="832" width="140" height="153" rx="18" class="panel"/><path d="M670 885H680L686 874L693 894L700 866L708 900L716 880L724 885H740" stroke="#c46cff" stroke-width="2.5" fill="none" filter="url(#glow)"/><text x="720" y="931" text-anchor="middle" class="white" font-size="12">Real vaqt ma’lumoti</text><text x="720" y="949" text-anchor="middle" class="muted" font-size="11">(Live data)</text></g>
+ <!-- swipe -->
+ <g><rect x="802" y="832" width="140" height="153" rx="18" class="panel"/><rect x="821" y="864" width="102" height="37" rx="9" fill="#33204b"/><rect x="840" y="864" width="83" height="37" rx="9" fill="url(#violet)"/><path d="M856 882H876M856 882L864 874M856 882L864 890" stroke="white" stroke-width="1.8" fill="none"/><text x="872" y="931" text-anchor="middle" class="white" font-size="12">Sidirib boshqarish</text><text x="872" y="949" text-anchor="middle" class="muted" font-size="11">(Swipe actions)</text></g>
+ <!-- expand -->
+ <g><rect x="954" y="832" width="140" height="153" rx="18" class="panel"/><rect x="975" y="860" width="98" height="47" rx="8" fill="#29183c" stroke="#65408a"/><rect x="975" y="860" width="98" height="25" rx="8" fill="#48216c"/><path d="M1010 895L1024 881L1038 895" stroke="#d9b3ff" stroke-width="2" fill="none"/><text x="1024" y="931" text-anchor="middle" class="white" font-size="12">Kengaytirish</text><text x="1024" y="949" text-anchor="middle" class="muted" font-size="11">(Expand / Collapse)</text></g>
+ <rect x="1120" y="832" width="374" height="153" rx="18" class="panel"/>
+ <text x="1144" y="861" class="purple" font-size="12" font-weight="700">PUSH NOTIFICATION</text>
+ <rect x="1140" y="875" width="333" height="91" rx="14" fill="#211431" stroke="#8150a8"/>
+ <g transform="translate(1154 889)"><path d="M14 0L28 7V22C28 34 21 42 14 47C7 42 0 34 0 22V7Z" fill="url(#violet)" stroke="#e3bdff"/><path d="M14 7L21 12V24C21 31 17 36 14 39C11 36 7 31 7 24V12Z" fill="#35105e"/></g>
+ <text x="1193" y="899" class="white" font-size="11" font-weight="700">LEGION · Kritik ogohlantirish</text><text x="1193" y="919" class="muted" font-size="10">Ma’lumotlarni tashqariga uzatish aniqlandi</text><text x="1193" y="937" class="muted" font-size="10">(192.168.10.24)</text><text x="1448" y="899" text-anchor="end" class="muted" font-size="9">Hozirgina</text>
+</g>
+</svg>

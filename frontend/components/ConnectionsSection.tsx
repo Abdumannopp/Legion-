@@ -37,7 +37,7 @@ const FIELDS: Record<Kind, Field[]> = {
   servicenow: [{ key: "instance", where: "config", type: "text" }, { key: "username", where: "secrets", type: "text" }, { key: "password", where: "secrets", type: "password" }, { key: "min_severity", where: "config", type: "severity" }],
   opsgenie: [{ key: "region", where: "config", type: "choice", options: ["us", "eu"] }, { key: "api_key", where: "secrets", type: "password" }, { key: "min_severity", where: "config", type: "severity" }],
 };
-const card = "rounded-xl border border-line bg-surface p-4";
+const card = "lg-surface p-4";
 const input = "w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm text-ink";
 
 /** Pull (EDR, SIEM, cloud, identity, edge) and outbound (chat, paging, tickets) connections: list, add, pause, remove. Administrators only. */

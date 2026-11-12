@@ -31,10 +31,10 @@ function ResetPasswordForm() {
   }
 
   return (
-    <main className="relative min-h-screen legion-backdrop flex flex-col items-center justify-center gap-8 p-6">
+    <main className="relative min-h-screen lg-app-bg lg-auth-bg flex flex-col items-center justify-center gap-8 p-6">
       <AuthLanguageSwitcher />
       <LegionLogo layout="stacked" size={84} tagline={false} />
-      <form onSubmit={submit} className="w-full max-w-sm rounded-xl border border-line bg-surface p-6">
+      <form onSubmit={submit} className="w-full max-w-sm lg-surface p-6">
         <h1 className="legion-title text-ink mb-5">{t.resetPassword.title}</h1>
         <label className="block text-sm text-ink-soft mb-2" htmlFor="password">{t.resetPassword.newPassword}</label>
         <input id="password" type="password" minLength={8} required value={password}
@@ -50,5 +50,5 @@ function ResetPasswordForm() {
 }
 
 export default function ResetPasswordPage() {
-  return <Suspense fallback={<main className="min-h-screen bg-canvas" />}><ResetPasswordForm /></Suspense>;
+  return <Suspense fallback={<main className="min-h-screen lg-app-bg" />}><ResetPasswordForm /></Suspense>;
 }

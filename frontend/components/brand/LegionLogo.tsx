@@ -4,7 +4,7 @@ import LegionWordmark from "./LegionWordmark";
 /**
  * The two lock-ups from the brand sheet.
  *
- *  - "stacked":    mark above, LEGION, CYBER INTELLIGENCE — sign-in, setup.
+ *  - "stacked":    emblem above, LEGION, CYBERSECURITY INTELLIGENCE — sign-in, setup.
  *  - "horizontal": mark | divider | LEGION over the tagline — headers.
  */
 export default function LegionLogo({
@@ -19,7 +19,7 @@ export default function LegionLogo({
   tagline?: boolean;
   className?: string;
 }) {
-  const markWidth = (size * 810) / 945;
+  const markWidth = (size * 320) / 360;
 
   if (layout === "stacked") {
     return (
@@ -34,10 +34,10 @@ export default function LegionLogo({
           <span
             aria-hidden
             className="font-display text-brand-bright uppercase whitespace-nowrap"
-            style={{ fontSize: size * 0.1, letterSpacing: "0.42em", marginTop: size * 0.12, marginRight: "-0.42em" }}
+            style={{ fontSize: size * 0.1, letterSpacing: "0.3em", marginTop: size * 0.12, marginRight: "-0.3em" }}
           >
             {/* i18n-ignore: logo lockup, a brand mark */}
-            Cyber Intelligence
+            Cybersecurity Intelligence
           </span>
         )}
         <span
@@ -46,7 +46,7 @@ export default function LegionLogo({
           style={{ width: size * 1.2, marginTop: size * 0.14 }}
         />
         {/* i18n-ignore: brand name */}
-      <span className="sr-only">Legion Cyber Intelligence</span>
+      <span className="sr-only">Legion Cybersecurity Intelligence</span>
       </div>
     );
   }
@@ -64,12 +64,31 @@ export default function LegionLogo({
             style={{ fontSize: Math.max(7, size * 0.17), letterSpacing: "0.3em", marginTop: size * 0.12 }}
           >
             {/* i18n-ignore: logo lockup, a brand mark */}
-            Cyber Intelligence
+            Cybersecurity Intelligence
           </span>
         )}
       </span>
       {/* i18n-ignore: brand name */}
-      <span className="sr-only">Legion Cyber Intelligence</span>
+      <span className="sr-only">Legion Cybersecurity Intelligence</span>
     </div>
+  );
+}
+
+/**
+ * The official logo file itself (emblem, LEGION, CYBERSECURITY INTELLIGENCE), for places with room for it.
+ * It keeps its proportions (1200 × 420) and a transparent background; the tagline is legible from about 360 px wide.
+ */
+export function LegionLockup({ width = 420, className = "" }: { width?: number; className?: string }) {
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src="/brand/legion-horizontal.svg"
+      // i18n-ignore: brand name
+      alt="Legion — Cybersecurity Intelligence"
+      width={width}
+      height={Math.round((width * 420) / 1200)}
+      className={`max-w-full h-auto ${className}`}
+      draggable={false}
+    />
   );
 }

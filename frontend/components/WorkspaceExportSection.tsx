@@ -35,7 +35,7 @@ export default function WorkspaceExportSection({ isAdmin }: { isAdmin: boolean }
   }
 
   return (
-    <div className="rounded-xl border border-line bg-surface p-5" data-testid="workspace-export">
+    <div className="lg-surface p-5" data-testid="workspace-export">
       <h3 className="text-ink font-medium text-sm">{d.title}</h3>
       <p className="text-ink-muted text-xs mt-1.5 leading-relaxed">{d.hint}</p>
       <button onClick={run} disabled={busy}

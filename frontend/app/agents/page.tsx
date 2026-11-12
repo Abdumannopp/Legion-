@@ -83,7 +83,7 @@ function CreateAgent({ catalogue, never, onCreated, onCancel }: {
 
   const input = "w-full bg-canvas border border-line rounded-md px-2.5 py-1.5 text-sm text-ink outline-none focus:border-brand-hover";
   return (
-    <form onSubmit={submit} className="rounded-xl border border-line bg-surface p-4 space-y-3">
+    <form onSubmit={submit} className="lg-surface p-4 space-y-3">
       <h2 className="text-ink text-sm font-semibold">{f.title}</h2>
       <div className="grid sm:grid-cols-2 gap-3">
         <label className="text-xs text-ink-muted space-y-1 block">
@@ -165,7 +165,7 @@ export default function AgentsPage() {
   const names = Object.fromEntries((agents ?? []).map((x) => [x.id, x.name]));
 
   return (
-    <div className="flex min-h-screen bg-canvas">
+    <div className="flex min-h-screen lg-app-bg">
       <Sidebar />
       <div className="flex-1 p-4 sm:p-6">
         <div className="max-w-3xl mx-auto space-y-4">
@@ -218,7 +218,7 @@ export default function AgentsPage() {
             <ul className="space-y-2">
               {agents.map((ag) => (
                 <li key={ag.id}>
-                  <Link href={`/agents/${ag.id}`} className="flex items-center gap-3 rounded-xl border border-line bg-surface px-4 py-3 hover:border-brand-hover/40" data-testid="agent-row">
+                  <Link href={`/agents/${ag.id}`} className="flex items-center gap-3 lg-surface px-4 py-3 hover:border-brand-hover/40" data-testid="agent-row">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-ink text-sm font-medium truncate">{ag.name}</span>

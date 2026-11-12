@@ -23,7 +23,7 @@ export default function SupportPage() {
       <div className="flex flex-col gap-3 max-w-md">
         <a
           href={`mailto:${SUPPORT_EMAIL}`}
-          className="group flex items-center justify-between gap-3 rounded-xl border border-line bg-surface px-4 py-3.5 hover:border-brand-hover/50 transition-colors"
+          className="group flex items-center justify-between gap-3 lg-surface px-4 py-3.5 hover:border-brand-hover/50 transition-colors"
         >
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-lg bg-canvas border border-line flex items-center justify-center shrink-0">
@@ -42,7 +42,7 @@ export default function SupportPage() {
           />
         </a>
 
-        <div className="flex items-center gap-3 rounded-xl border border-line bg-surface px-4 py-3.5">
+        <div className="flex items-center gap-3 lg-surface px-4 py-3.5">
           <div className="w-9 h-9 rounded-lg bg-canvas border border-line flex items-center justify-center shrink-0">
             <Clock size={16} color={palette.brandBright} strokeWidth={2} />
           </div>

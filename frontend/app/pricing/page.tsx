@@ -19,7 +19,7 @@ export default function PricingPage() {
   // A self-hosted installation has nothing to sell.
   if (!IS_SAAS) notFound();
   return (
-    <div className="min-h-screen legion-backdrop text-ink">
+    <div className="min-h-screen lg-app-bg lg-auth-bg text-ink">
       <SiteHeader />
       <main className="max-w-6xl mx-auto px-5 pt-16">
         <PricingPageContent />

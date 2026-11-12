@@ -15,7 +15,7 @@ export default function RefundsPage() {
   // A client page cannot export `metadata`, so the tab title is set here —
   // in the reader's language.
   useEffect(() => {
-    document.title = `${doc.title} | Legion Cyber Intelligence`; // i18n-ignore: brand suffix
+    document.title = `${doc.title} | Legion Cybersecurity Intelligence`; // i18n-ignore: brand suffix
   }, [doc.title]);
 
   // Nothing is sold on a self-hosted installation.

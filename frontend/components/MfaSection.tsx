@@ -167,7 +167,7 @@ export default function MfaSection() {
 
   if (loading) {
     return (
-      <div className="rounded-xl border border-line bg-surface p-4 flex items-center gap-2 text-ink-faint text-xs">
+      <div className="lg-surface p-4 flex items-center gap-2 text-ink-faint text-xs">
         <Loader2 size={14} className="animate-spin" /> {t.common.loading}
       </div>
     );
@@ -178,7 +178,7 @@ export default function MfaSection() {
   }
 
   return (
-    <div className="rounded-xl border border-line bg-surface p-4 flex flex-col gap-3">
+    <div className="lg-surface p-4 flex flex-col gap-3">
       <div className="flex items-center gap-2">
         {status?.enabled
           ? <ShieldCheck size={14} color={palette.success} />

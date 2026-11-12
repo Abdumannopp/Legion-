@@ -1,0 +1,184 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="1000" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#080910"/><stop offset="1" stop-color="#111020"/>
+    </linearGradient>
+    <linearGradient id="violet" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#A78BFA"/><stop offset="1" stop-color="#6D4AFF"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#171626" stop-opacity=".96"/><stop offset="1" stop-color="#10111D" stop-opacity=".96"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#8B5CF6" stop-opacity=".22"/><stop offset="1" stop-color="#5B21B6" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="16"/><feOffset dy="8"/><feComponentTransfer><feFuncA type="linear" slope=".35"/></feComponentTransfer><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <style>
+      .ui{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+      .muted{fill:#89879E}.white{fill:#F5F3FF}.sub{fill:#B7B3CA}
+      .panel{fill:url(#panel);stroke:#2B2940;stroke-width:1}
+      .label{font-size:11px;letter-spacing:1.5px;font-weight:700}
+      .small{font-size:12px}.body{font-size:14px}.title{font-size:22px;font-weight:650}
+    </style>
+  </defs>
+  <rect width="1600" height="1000" fill="url(#bg)"/>
+  <circle cx="1120" cy="130" r="390" fill="#6D28D9" opacity=".08"/>
+  <circle cx="1120" cy="130" r="260" fill="#8B5CF6" opacity=".045"/>
+  <rect x="0" y="0" width="1600" height="1000" fill="url(#glow)"/>
+
+  <!-- Sidebar -->
+  <rect x="0" y="0" width="244" height="1000" fill="#0B0B14" stroke="#242236"/>
+  <g class="ui">
+    <rect x="24" y="24" width="42" height="42" rx="13" fill="#21183C" stroke="#7652D8"/>
+    <path d="M45 32L56 37V47C56 54 51 59 45 62C39 59 34 54 34 47V37L45 32Z" stroke="#BDA7FF" stroke-width="1.8"/>
+    <path d="M39 45L44 50L52 41" stroke="#BDA7FF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="78" y="43" class="white" font-size="16" font-weight="800" letter-spacing="2">LEGION</text>
+    <text x="78" y="58" class="muted" font-size="8" letter-spacing="1.6">CYBER INTELLIGENCE</text>
+    <text x="26" y="112" class="muted label">WORKSPACE</text>
+    <rect x="14" y="130" width="216" height="42" rx="10" fill="#21183C" stroke="#49366F"/>
+    <rect x="14" y="130" width="3" height="42" rx="1.5" fill="#A78BFA"/>
+    <path d="M34 146H48M34 152H48M34 158H43" stroke="#C4B5FD" stroke-width="1.6" stroke-linecap="round"/>
+    <text x="60" y="156" fill="#E8DFFF" font-size="13" font-weight="600">AI Copilot</text>
+    <g fill="#8F8CA3" font-size="13">
+      <path d="M35 201H48V214H35Z" stroke="#8F8CA3" stroke-width="1.3"/><text x="60" y="212">Overview</text>
+      <path d="M35 246L41 240L48 246L41 253Z" stroke="#8F8CA3" stroke-width="1.3"/><text x="60" y="251">Alerts &amp; Incidents</text>
+      <circle cx="41.5" cy="286" r="6.5" stroke="#8F8CA3" stroke-width="1.3"/><path d="M41.5 280V293M35 286H48" stroke="#8F8CA3" stroke-width="1.2"/><text x="60" y="291">Threat Intelligence</text>
+      <path d="M35 326H48V339H35Z" stroke="#8F8CA3" stroke-width="1.3"/><path d="M38 330H45M38 334H45" stroke="#8F8CA3"/><text x="60" y="337">Assets &amp; Hosts</text>
+      <path d="M35 372L42 365L49 372L42 379Z" stroke="#8F8CA3" stroke-width="1.3"/><text x="60" y="377">MITRE ATT&amp;CK</text>
+    </g>
+    <line x1="24" y1="414" x2="220" y2="414" stroke="#28263A"/>
+    <text x="26" y="444" class="muted label">SYSTEM</text>
+    <g fill="#8F8CA3" font-size="13">
+      <circle cx="41" cy="475" r="7" stroke="#8F8CA3" stroke-width="1.3"/><path d="M41 465V462M41 488V485M31 475H28M54 475H51" stroke="#8F8CA3"/><text x="60" y="480">Integrations</text>
+      <path d="M35 516H48V529H35Z" stroke="#8F8CA3" stroke-width="1.3"/><text x="60" y="527">Settings</text>
+    </g>
+    <rect x="18" y="900" width="208" height="72" rx="12" fill="#141321" stroke="#302D46"/>
+    <circle cx="42" cy="926" r="13" fill="#30224E"/><text x="42" y="930" text-anchor="middle" fill="#D8CCFF" font-size="10" font-weight="700">SA</text>
+    <text x="64" y="923" class="white" font-size="12" font-weight="600">Security Analyst</text>
+    <text x="64" y="941" class="muted" font-size="10">SOC Administrator</text>
+    <circle cx="207" cy="926" r="3" fill="#34D399"/>
+  </g>
+
+  <!-- Top bar -->
+  <g class="ui">
+    <text x="278" y="42" class="muted small">Workspace /</text><text x="364" y="42" class="sub small"> AI Copilot</text>
+    <rect x="1284" y="20" width="132" height="36" rx="9" fill="#151422" stroke="#302D45"/>
+    <circle cx="1302" cy="38" r="4" fill="#34D399"/><text x="1314" y="42" class="sub small">System healthy</text>
+    <rect x="1430" y="20" width="42" height="36" rx="9" fill="#151422" stroke="#302D45"/>
+    <path d="M1444 37C1444 32 1450 30 1452 35L1458 42H1444Z" stroke="#B9B3CC" stroke-width="1.4"/>
+    <circle cx="1460" cy="29" r="3" fill="#A78BFA"/>
+    <circle cx="1500" cy="38" r="18" fill="#2B2146" stroke="#6B4BB4"/><text x="1500" y="42" text-anchor="middle" fill="#E6DCFF" font-size="11" font-weight="700">SA</text>
+  </g>
+
+  <!-- Header -->
+  <g class="ui">
+    <text x="278" y="105" class="white" font-size="29" font-weight="700">AI Copilot</text>
+    <text x="278" y="132" class="muted" font-size="13">Your intelligent security analyst. Investigate faster, respond smarter.</text>
+    <rect x="1360" y="86" width="188" height="38" rx="10" fill="#20183A" stroke="#6846B7"/>
+    <path d="M1380 105L1384 97L1388 105L1396 109L1388 113L1384 121L1380 113L1372 109Z" fill="#BDA7FF"/>
+    <text x="1402" y="110" fill="#E9DFFF" font-size="12" font-weight="600">New investigation</text>
+  </g>
+
+  <!-- Main AI panel -->
+  <rect x="270" y="160" width="900" height="770" rx="18" class="panel" filter="url(#shadow)"/>
+  <g class="ui">
+    <rect x="292" y="182" width="38" height="38" rx="12" fill="#2B1F4B" stroke="#7654C5"/>
+    <path d="M311 190L314 199L323 202L314 205L311 214L308 205L299 202L308 199Z" fill="#C4B5FD"/>
+    <text x="344" y="197" class="white" font-size="15" font-weight="650">LEGION Intelligence</text>
+    <text x="344" y="214" class="muted" font-size="10">AI SECURITY ASSISTANT</text>
+    <rect x="1032" y="187" width="116" height="26" rx="13" fill="#132A25" stroke="#245B48"/>
+    <circle cx="1047" cy="200" r="3" fill="#34D399"/><text x="1058" y="204" fill="#7CE2B5" font-size="10" font-weight="600">CONNECTED</text>
+    <line x1="292" y1="238" x2="1148" y2="238" stroke="#2A283D"/>
+
+    <text x="316" y="278" class="white" font-size="19" font-weight="650">Good evening. What are we investigating?</text>
+    <text x="316" y="303" class="muted" font-size="12">Ask about alerts, suspicious activity, hosts, or emerging threats.</text>
+
+    <!-- Suggested prompts -->
+    <rect x="316" y="330" width="250" height="76" rx="12" fill="#191729" stroke="#37314F"/>
+    <circle cx="341" cy="355" r="11" fill="#352653"/><path d="M337 355H345M341 351V359" stroke="#C4B5FD" stroke-width="1.4" stroke-linecap="round"/>
+    <text x="362" y="357" class="white" font-size="12" font-weight="600">Analyze critical alerts</text>
+    <text x="337" y="382" class="muted" font-size="10">Prioritize and explain active threats</text>
+
+    <rect x="580" y="330" width="250" height="76" rx="12" fill="#191729" stroke="#37314F"/>
+    <circle cx="605" cy="355" r="11" fill="#352653"/><path d="M601 355L604 358L610 351" stroke="#C4B5FD" stroke-width="1.4" stroke-linecap="round"/>
+    <text x="626" y="357" class="white" font-size="12" font-weight="600">Investigate a host</text>
+    <text x="601" y="382" class="muted" font-size="10">Review endpoint activity and risk</text>
+
+    <rect x="844" y="330" width="302" height="76" rx="12" fill="#191729" stroke="#37314F"/>
+    <circle cx="869" cy="355" r="11" fill="#352653"/><path d="M869 348V362M862 355H876" stroke="#C4B5FD" stroke-width="1.4" stroke-linecap="round"/>
+    <text x="890" y="357" class="white" font-size="12" font-weight="600">Map to MITRE ATT&amp;CK</text>
+    <text x="865" y="382" class="muted" font-size="10">Understand tactics and techniques</text>
+
+    <!-- Conversation -->
+    <rect x="764" y="446" width="382" height="62" rx="13" fill="#28203F" stroke="#554078"/>
+    <text x="786" y="472" fill="#EDE7FF" font-size="12">Investigate the unusual PowerShell activity</text>
+    <text x="786" y="491" fill="#B7A9D9" font-size="10">on endpoint WS-042 from the last 30 minutes.</text>
+
+    <rect x="316" y="530" width="830" height="290" rx="14" fill="#12121E" stroke="#302D45"/>
+    <circle cx="342" cy="557" r="12" fill="#30214D"/><path d="M342 549L345 556L352 559L345 562L342 569L339 562L332 559L339 556Z" fill="#C4B5FD"/>
+    <text x="364" y="561" class="white" font-size="12" font-weight="650">LEGION Intelligence</text>
+    <text x="1055" y="561" class="muted" font-size="10">JUST NOW</text>
+    <text x="340" y="596" class="sub" font-size="12">I found a suspicious PowerShell execution chain on WS-042. The activity is</text>
+    <text x="340" y="616" class="sub" font-size="12">consistent with encoded command execution and possible defense evasion.</text>
+
+    <rect x="340" y="640" width="782" height="74" rx="10" fill="#1A172A" stroke="#41345F"/>
+    <rect x="354" y="653" width="4" height="47" rx="2" fill="#F59E0B"/>
+    <text x="372" y="668" fill="#FBBF70" font-size="10" font-weight="700" letter-spacing="1">ASSESSMENT · HIGH PRIORITY</text>
+    <text x="372" y="690" class="sub" font-size="11">Encoded PowerShell launched by an Office child process. Validate parent process</text>
+    <text x="372" y="706" class="sub" font-size="11">and user context before containment.</text>
+
+    <text x="340" y="744" class="muted label">POTENTIAL MITRE ATT&amp;CK MAPPING</text>
+    <rect x="340" y="758" width="178" height="34" rx="8" fill="#211A35" stroke="#4B3B70"/>
+    <text x="354" y="779" fill="#D4C5FF" font-size="10" font-weight="600">T1059.001 · PowerShell</text>
+    <rect x="528" y="758" width="190" height="34" rx="8" fill="#211A35" stroke="#4B3B70"/>
+    <text x="542" y="779" fill="#D4C5FF" font-size="10" font-weight="600">T1027 · Obfuscated Files</text>
+    <rect x="728" y="758" width="174" height="34" rx="8" fill="#211A35" stroke="#4B3B70"/>
+    <text x="742" y="779" fill="#D4C5FF" font-size="10" font-weight="600">TA0005 · Defense Evasion</text>
+
+    <!-- Composer -->
+    <rect x="316" y="842" width="830" height="64" rx="13" fill="#171625" stroke="#51436F"/>
+    <text x="340" y="879" class="muted" font-size="12">Ask LEGION anything about your security environment...</text>
+    <circle cx="1056" cy="874" r="17" fill="url(#violet)"/>
+    <path d="M1049 874L1063 874M1057 868L1063 874L1057 880" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="318" y="922" class="muted" font-size="9">AI-generated analysis can be inaccurate. Verify findings before taking action.</text>
+  </g>
+
+  <!-- Right insight rail -->
+  <rect x="1190" y="160" width="358" height="770" rx="18" class="panel"/>
+  <g class="ui">
+    <text x="1216" y="198" class="white" font-size="15" font-weight="650">Investigation context</text>
+    <text x="1216" y="218" class="muted" font-size="11">LIVE ENVIRONMENT SIGNALS</text>
+    <line x1="1216" y1="238" x2="1522" y2="238" stroke="#2A283D"/>
+
+    <text x="1216" y="272" class="muted label">RELATED ALERTS</text>
+    <rect x="1216" y="290" width="306" height="68" rx="10" fill="#171625" stroke="#302D45"/>
+    <circle cx="1236" cy="313" r="5" fill="#F59E0B"/><text x="1250" y="317" class="white" font-size="11" font-weight="600">Suspicious PowerShell</text>
+    <text x="1230" y="340" class="muted" font-size="10">WS-042 · 2 min ago</text>
+    <rect x="1216" y="368" width="306" height="68" rx="10" fill="#171625" stroke="#302D45"/>
+    <circle cx="1236" cy="391" r="5" fill="#EF4444"/><text x="1250" y="395" class="white" font-size="11" font-weight="600">Office spawned shell</text>
+    <text x="1230" y="418" class="muted" font-size="10">WS-042 · 4 min ago</text>
+
+    <text x="1216" y="474" class="muted label">HOST RISK SNAPSHOT</text>
+    <rect x="1216" y="492" width="306" height="102" rx="11" fill="#171625" stroke="#302D45"/>
+    <text x="1232" y="518" class="sub" font-size="11">WS-042 · Windows 11</text>
+    <text x="1232" y="558" class="white" font-size="25" font-weight="700">78</text>
+    <text x="1270" y="557" fill="#FBBF70" font-size="10" font-weight="700">ELEVATED RISK</text>
+    <rect x="1232" y="570" width="270" height="5" rx="2.5" fill="#302D45"/>
+    <rect x="1232" y="570" width="210" height="5" rx="2.5" fill="#D97706"/>
+
+    <text x="1216" y="632" class="muted label">RECOMMENDED NEXT STEPS</text>
+    <circle cx="1227" cy="661" r="10" fill="#2A2142"/><text x="1227" y="665" text-anchor="middle" fill="#C4B5FD" font-size="10" font-weight="700">1</text>
+    <text x="1246" y="658" class="sub" font-size="11">Review process tree and command</text><text x="1246" y="674" class="sub" font-size="11">line with endpoint telemetry</text>
+    <circle cx="1227" cy="710" r="10" fill="#2A2142"/><text x="1227" y="714" text-anchor="middle" fill="#C4B5FD" font-size="10" font-weight="700">2</text>
+    <text x="1246" y="707" class="sub" font-size="11">Check user sign-in and related</text><text x="1246" y="723" class="sub" font-size="11">authentication events</text>
+    <circle cx="1227" cy="759" r="10" fill="#2A2142"/><text x="1227" y="763" text-anchor="middle" fill="#C4B5FD" font-size="10" font-weight="700">3</text>
+    <text x="1246" y="756" class="sub" font-size="11">Escalate for analyst approval</text><text x="1246" y="772" class="sub" font-size="11">before host isolation</text>
+
+    <rect x="1216" y="814" width="306" height="82" rx="11" fill="#201936" stroke="#60469A"/>
+    <path d="M1236 835L1240 844L1249 848L1240 852L1236 861L1232 852L1223 848L1232 844Z" fill="#BDA7FF"/>
+    <text x="1258" y="844" fill="#E7DEFF" font-size="11" font-weight="650">Human approval required</text>
+    <text x="1232" y="870" fill="#B8A9D8" font-size="10">No containment action has been executed.</text>
+  </g>
+</svg>

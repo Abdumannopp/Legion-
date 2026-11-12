@@ -15,5 +15,11 @@ export const nav = defineMessages({
     billing: "Billing",
     settings: "Settings",
     soon: "Soon",
+    workspace: "Workspace",
+    system: "System",
+    more: "More",
+    menu: "Menu",
+    close: "Close",
+    mainNav: "Main navigation",
   },
 });

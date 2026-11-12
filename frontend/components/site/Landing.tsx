@@ -4,7 +4,7 @@ import Link from "next/link";
 import {
   Activity, Bot, Boxes, KeyRound, Radar, ShieldCheck, Sparkles, Workflow,
 } from "lucide-react";
-import LegionLogo from "@/components/brand/LegionLogo";
+import { LegionLockup } from "@/components/brand/LegionLogo";
 import SiteHeader from "./SiteHeader";
 import SiteFooter from "./SiteFooter";
 import PlansGrid from "./PricingCard";
@@ -30,12 +30,12 @@ export default function Landing() {
     { n: "3", title: l.steps.act.title, text: l.steps.act.text },
   ];
   return (
-    <div className="min-h-screen legion-backdrop text-ink">
+    <div className="min-h-screen lg-app-bg lg-auth-bg text-ink">
       <SiteHeader />
 
       <section className="max-w-6xl mx-auto px-5 pt-16 pb-20 text-center">
         <div className="flex justify-center">
-          <LegionLogo layout="stacked" size={120} />
+          <LegionLockup width={560} />
         </div>
         <h1 className="mt-10 text-3xl sm:text-5xl font-semibold tracking-tight leading-tight">
           {l.heroTitle}
@@ -48,14 +48,24 @@ export default function Landing() {
           {l.heroText}
         </p>
         <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
-          <Link href="/signup" className="px-6 py-3 rounded-lg bg-brand hover:bg-brand-hover text-white font-medium shadow-glow transition-colors">
+          <Link href="/signup" className="lg-button-primary !min-h-[48px] !px-6 !text-base">
             {l.ctaTrial(TRIAL_DAYS)}
           </Link>
-          <Link href="/pricing" className="px-6 py-3 rounded-lg border border-line-strong text-ink-soft hover:text-ink hover:border-brand-hover transition-colors">
+          <Link href="/pricing" className="lg-button-secondary !min-h-[48px] !px-6 !text-base">
             {l.ctaPricing}
           </Link>
         </div>
         <p className="mt-4 text-xs text-ink-faint">{l.noCard}</p>
+        <ul className="mt-7 flex flex-wrap justify-center gap-x-6 gap-y-2.5">
+          {l.highlights.map((h) => (
+            <li key={h} className="flex items-center gap-2 text-sm text-ink-soft">
+              <span className="w-5 h-5 rounded-full bg-gradient-to-br from-brand-hover to-brand-deep flex items-center justify-center shrink-0" aria-hidden>
+                <ShieldCheck size={12} className="text-white" />
+              </span>
+              {h}
+            </li>
+          ))}
+        </ul>
       </section>
 
       <section id="features" className="max-w-6xl mx-auto px-5 scroll-mt-20">
@@ -63,8 +73,8 @@ export default function Landing() {
         <h2 className="legion-title text-center text-xl mt-3">{l.featuresTitle}</h2>
         <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {FEATURES.map(({ key, Icon }) => (
-            <div key={key} className="rounded-2xl border border-line bg-surface/70 p-6">
-              <div className="w-10 h-10 rounded-xl bg-brand/15 flex items-center justify-center">
+            <div key={key} className="lg-surface lg-interactive p-6">
+              <div className="w-11 h-11 rounded-xl bg-brand/20 border border-brand-hover/30 flex items-center justify-center">
                 <Icon size={20} className="text-brand-bright" />
               </div>
               <h3 className="mt-4 font-semibold text-ink">{l.features[key].title}</h3>
@@ -78,7 +88,7 @@ export default function Landing() {
         <p className="legion-eyebrow text-brand-bright text-center">{l.stepsEyebrow}</p>
         <div className="mt-8 grid gap-4 sm:grid-cols-3">
           {steps.map((s) => (
-            <div key={s.n} className="rounded-2xl border border-line p-6">
+            <div key={s.n} className="lg-surface-soft p-6">
               <span className="font-display text-brand-bright text-lg">{s.n}</span>
               <h3 className="mt-3 font-semibold">{s.title}</h3>
               <p className="mt-2 text-sm text-ink-muted leading-relaxed">{s.text}</p>

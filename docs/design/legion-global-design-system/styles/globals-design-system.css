@@ -1,0 +1,137 @@
+/* LEGION Global Design System — append/merge into frontend/app/globals.css.
+   Keep the project's Tailwind directives and existing global rules. */
+:root {
+  color-scheme: dark;
+  --lg-canvas: #08060F;
+  --lg-sidebar: #0B0813;
+  --lg-elevated: #100B1B;
+  --lg-surface: #151020;
+  --lg-surface-raised: #1C1429;
+  --lg-surface-hover: #241934;
+  --lg-glass: rgba(28, 20, 41, .72);
+
+  --lg-violet: #8B5CF6;
+  --lg-violet-strong: #7C3AED;
+  --lg-violet-deep: #5B21B6;
+  --lg-lavender: #C4B5FD;
+  --lg-lilac: #E9D5FF;
+
+  --lg-text: #F8F7FC;
+  --lg-text-secondary: #D5CDE2;
+  --lg-text-muted: #A99DBB;
+  --lg-text-subtle: #817591;
+  --lg-border: rgba(196,181,253,.16);
+  --lg-border-subtle: rgba(196,181,253,.10);
+
+  --lg-critical: #F87171;
+  --lg-high: #FB923C;
+  --lg-medium: #FBBF24;
+  --lg-low: #60A5FA;
+  --lg-healthy: #4ADE80;
+  --lg-info: #67C7F5;
+
+  --lg-radius-sm: 10px;
+  --lg-radius-md: 14px;
+  --lg-radius-lg: 18px;
+  --lg-radius-xl: 22px;
+  --lg-radius-2xl: 28px;
+  --lg-shadow-card: 0 12px 36px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.035);
+  --lg-shadow-float: 0 22px 70px rgba(0,0,0,.42);
+  --lg-shadow-violet: 0 0 28px rgba(139,92,246,.20);
+  --lg-motion: 220ms cubic-bezier(.2,.8,.2,1);
+}
+
+html, body {
+  background: var(--lg-canvas);
+  color: var(--lg-text);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection { background: rgba(139,92,246,.42); color: #fff; }
+:focus-visible { outline: 2px solid #A78BFA; outline-offset: 3px; box-shadow: var(--lg-shadow-focus, 0 0 0 3px rgba(167,139,250,.24)); }
+
+/* Surface primitives */
+.lg-surface {
+  background: linear-gradient(145deg, rgba(32,23,47,.96), rgba(19,14,29,.98));
+  border: 1px solid var(--lg-border);
+  border-radius: var(--lg-radius-lg);
+  box-shadow: var(--lg-shadow-card);
+}
+.lg-surface-soft {
+  background: rgba(28,20,41,.66);
+  border: 1px solid var(--lg-border-subtle);
+  border-radius: var(--lg-radius-lg);
+}
+.lg-glass {
+  background: var(--lg-glass);
+  border: 1px solid rgba(216,196,255,.14);
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
+  border-radius: var(--lg-radius-lg);
+}
+.lg-brand-glow {
+  background: radial-gradient(ellipse at 50% 0%, rgba(139,92,246,.18), transparent 62%);
+}
+.lg-interactive {
+  transition: transform var(--lg-motion), border-color var(--lg-motion), background-color var(--lg-motion), box-shadow var(--lg-motion);
+}
+.lg-interactive:hover {
+  border-color: rgba(196,181,253,.30);
+  box-shadow: var(--lg-shadow-card), 0 0 24px rgba(139,92,246,.08);
+}
+.lg-interactive:active { transform: scale(.99); }
+
+/* Buttons */
+.lg-button-primary {
+  min-height: 40px; padding: 0 16px; border-radius: 12px;
+  color: #fff; font-weight: 600;
+  background: linear-gradient(135deg, #9B6BFA, #6D35D6);
+  border: 1px solid rgba(221,203,255,.20);
+  box-shadow: 0 8px 22px rgba(109,53,214,.22), inset 0 1px 0 rgba(255,255,255,.16);
+  transition: filter var(--lg-motion), transform var(--lg-motion);
+}
+.lg-button-primary:hover { filter: brightness(1.10); }
+.lg-button-secondary {
+  min-height: 40px; padding: 0 16px; border-radius: 12px;
+  color: var(--lg-text-secondary); background: rgba(255,255,255,.035);
+  border: 1px solid var(--lg-border);
+}
+.lg-button-ghost { min-height: 36px; padding: 0 12px; border-radius: 10px; color: var(--lg-text-muted); }
+.lg-button-ghost:hover { color: var(--lg-text); background: rgba(196,181,253,.07); }
+
+/* Form controls */
+.lg-input {
+  min-height: 42px; width: 100%; border-radius: 12px;
+  color: var(--lg-text); background: rgba(8,6,15,.56);
+  border: 1px solid var(--lg-border); padding: 0 13px;
+}
+.lg-input::placeholder { color: var(--lg-text-subtle); }
+.lg-input:focus { outline: none; border-color: #A78BFA; box-shadow: 0 0 0 3px rgba(167,139,250,.16); }
+
+/* Labels and status */
+.lg-eyebrow { color: var(--lg-text-muted); font-size: 10px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; }
+.lg-status { display: inline-flex; align-items: center; gap: 7px; padding: 5px 9px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+.lg-status-critical { color: #FCA5A5; background: rgba(248,113,113,.12); border: 1px solid rgba(248,113,113,.20); }
+.lg-status-high { color: #FDBA74; background: rgba(251,146,60,.12); border: 1px solid rgba(251,146,60,.20); }
+.lg-status-medium { color: #FDE68A; background: rgba(251,191,36,.11); border: 1px solid rgba(251,191,36,.18); }
+.lg-status-low { color: #93C5FD; background: rgba(96,165,250,.11); border: 1px solid rgba(96,165,250,.18); }
+.lg-status-healthy { color: #86EFAC; background: rgba(74,222,128,.10); border: 1px solid rgba(74,222,128,.18); }
+
+/* Data table */
+.lg-table-wrap { overflow: hidden; border: 1px solid var(--lg-border-subtle); border-radius: 14px; }
+.lg-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+.lg-table thead { color: var(--lg-text-muted); background: rgba(255,255,255,.035); font-size: 10px; letter-spacing: .10em; text-transform: uppercase; }
+.lg-table th { text-align: left; font-weight: 600; padding: 11px 14px; }
+.lg-table td { padding: 13px 14px; color: var(--lg-text-secondary); border-top: 1px solid var(--lg-border-subtle); }
+.lg-table tbody tr:hover { background: rgba(196,181,253,.035); }
+
+/* Motion is subtle and respects system accessibility preferences. */
+@media (prefers-reduced-motion: no-preference) {
+  .lg-enter { animation: lg-enter 360ms cubic-bezier(.2,.8,.2,1) both; }
+  @keyframes lg-enter { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}

@@ -2,6 +2,8 @@ import { defineMessages } from "../core";
 
 export const login = defineMessages({
   en: {
+    showPassword: "Show password",
+    hidePassword: "Hide password",
     eyebrow: "Sign in to your console",
     headline: {
       line1: "Stop Chasing Alerts.",

@@ -96,7 +96,7 @@ function AcceptInviteForm() {
   }
 
   return (
-    <div className="relative min-h-screen legion-backdrop flex items-center justify-center p-4 font-sans">
+    <div className="relative min-h-screen lg-app-bg lg-auth-bg flex items-center justify-center p-4 font-sans">
       <AuthLanguageSwitcher />
       <div className="w-full max-w-sm">
         <div className="flex flex-col items-center mb-8">
@@ -108,7 +108,7 @@ function AcceptInviteForm() {
             <Loader2 size={20} className="animate-spin" />
           </div>
         ) : done ? (
-          <div className="bg-surface border border-line rounded-2xl p-6 text-center">
+          <div className="lg-glass p-6 text-center">
             <CheckCircle2 size={28} className="mx-auto mb-3" color={palette.success} />
             <h2 className="text-ink font-semibold text-lg">
               {invite?.existing_account ? t.acceptInvite.accepted : t.acceptInvite.readyTitle}
@@ -120,7 +120,7 @@ function AcceptInviteForm() {
             )}
           </div>
         ) : !invite ? (
-          <div className="bg-surface border border-line rounded-2xl p-6 text-center">
+          <div className="lg-glass p-6 text-center">
             <h2 className="text-ink font-semibold text-lg">
               {t.acceptInvite.invalidTitle}
             </h2>
@@ -138,7 +138,7 @@ function AcceptInviteForm() {
             </Link>
           </div>
         ) : invite.existing_account ? (
-          <div className="bg-surface border border-line rounded-2xl p-6 text-center space-y-3">
+          <div className="lg-glass p-6 text-center space-y-3">
             <h2 className="text-ink font-semibold text-xl tracking-tight">
               {t.acceptInvite.join(invite.tenant_name || "Legion")}
             </h2>
@@ -184,7 +184,7 @@ function AcceptInviteForm() {
 
             <form
               onSubmit={handleSubmit}
-              className="bg-surface border border-line rounded-2xl p-6 space-y-4"
+              className="lg-glass p-6 space-y-4"
             >
               <div>
                 <label className="text-ink-muted text-xs mb-1.5 block">
@@ -197,7 +197,7 @@ function AcceptInviteForm() {
                   required
                   minLength={MIN_PASSWORD}
                   autoComplete="new-password"
-                  className="w-full bg-canvas border border-line rounded-lg px-3 py-2.5 text-sm text-ink outline-none focus:border-brand-hover"
+                  className="lg-input text-sm"
                 />
                 <p className="text-ink-faint text-[11px] mt-1.5">
                   {t.auth.passwordHint(MIN_PASSWORD)}
@@ -214,7 +214,7 @@ function AcceptInviteForm() {
                   onChange={(e) => setConfirm(e.target.value)}
                   required
                   autoComplete="new-password"
-                  className="w-full bg-canvas border border-line rounded-lg px-3 py-2.5 text-sm text-ink outline-none focus:border-brand-hover"
+                  className="lg-input text-sm"
                 />
               </div>
 
@@ -244,7 +244,7 @@ export default function AcceptInvitePage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-canvas flex items-center justify-center">
+        <div className="min-h-screen lg-app-bg flex items-center justify-center">
           <Loader2 size={20} className="animate-spin text-ink-faint" />
         </div>
       }

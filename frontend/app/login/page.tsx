@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Loader2, ShieldCheck } from "lucide-react";
+import { Eye, EyeOff, Lock, Loader2, Mail, ShieldCheck } from "lucide-react";
 import { getSetupStatus, login, resendVerification, verifyMfa, ApiError, DeploymentMode } from "@/lib/api";
 import LegionLogo from "@/components/brand/LegionLogo";
 import { AuthLanguageSwitcher } from "@/components/AuthShell";
@@ -34,6 +34,7 @@ export default function LoginPage() {
   // it to exist, and it must not exist on a production install.
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -94,9 +95,9 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="relative min-h-screen legion-backdrop flex items-center justify-center p-4 font-sans">
+    <div className="relative min-h-screen lg-app-bg lg-auth-bg flex items-center justify-center p-4 font-sans">
       <AuthLanguageSwitcher />
-      <div className="w-full max-w-sm">
+      <div className="w-full max-w-md lg-enter">
         <div className="flex flex-col items-center mb-8">
           <LegionLogo layout="stacked" size={112} />
           <p className="legion-eyebrow text-ink-faint mt-4">
@@ -118,7 +119,7 @@ export default function LoginPage() {
         {mfaToken ? (
           <form
             onSubmit={handleMfaSubmit}
-            className="bg-surface border border-line rounded-2xl p-6 space-y-4"
+            className="lg-glass p-6 sm:p-7 space-y-4"
           >
             <div className="flex items-center gap-2 text-ink text-sm font-medium">
               <ShieldCheck size={16} className="text-brand-bright" />
@@ -144,7 +145,7 @@ export default function LoginPage() {
                 // i18n-ignore: code format mask, not words
                 placeholder={useRecovery ? "XXXXX-XXXXX" : "000000"}
                 maxLength={useRecovery ? 12 : 6}
-                className="w-full bg-canvas border border-line rounded-lg px-3 py-2.5 text-sm text-ink outline-none focus:border-brand-hover tracking-[0.3em] text-center font-mono"
+                className="lg-input text-sm tracking-[0.3em] text-center font-mono"
               />
             </div>
 
@@ -157,7 +158,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex items-center justify-center gap-2 bg-brand hover:bg-brand-hover shadow-glow disabled:opacity-60 text-white font-medium text-sm py-2.5 rounded-lg transition-colors"
+              className="lg-button-primary w-full !min-h-[46px]"
             >
               {loading && <Loader2 size={14} className="animate-spin" />}
               {t.login.mfa.verify}
@@ -183,29 +184,46 @@ export default function LoginPage() {
         ) : (
           <form
             onSubmit={handleSubmit}
-            className="bg-surface border border-line rounded-2xl p-6 space-y-4"
+            className="lg-glass p-6 sm:p-7 space-y-4"
           >
             <div>
-              <label className="text-ink-muted text-xs mb-1.5 block">{t.common.email}</label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                autoComplete="username"
-                className="w-full bg-canvas border border-line rounded-lg px-3 py-2.5 text-sm text-ink outline-none focus:border-brand-hover"
-              />
+              <label htmlFor="login-email" className="text-ink-muted text-xs mb-1.5 block">{t.common.email}</label>
+              <div className="relative">
+                <Mail size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-faint pointer-events-none" aria-hidden />
+                <input
+                  id="login-email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  autoComplete="username"
+                  className="lg-input !pl-10 text-sm"
+                />
+              </div>
             </div>
             <div>
-              <label className="text-ink-muted text-xs mb-1.5 block">{t.common.password}</label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                autoComplete="current-password"
-                className="w-full bg-canvas border border-line rounded-lg px-3 py-2.5 text-sm text-ink outline-none focus:border-brand-hover"
-              />
+              <label htmlFor="login-password" className="text-ink-muted text-xs mb-1.5 block">{t.common.password}</label>
+              <div className="relative">
+                <Lock size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-faint pointer-events-none" aria-hidden />
+                <input
+                  id="login-password"
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  autoComplete="current-password"
+                  className="lg-input !pl-10 !pr-11 text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  aria-label={showPassword ? t.login.hidePassword : t.login.showPassword}
+                  aria-pressed={showPassword}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 w-9 h-9 flex items-center justify-center rounded-lg text-ink-faint hover:text-ink"
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
             </div>
 
             {error && (
@@ -232,7 +250,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading || !captcha.ready}
-              className="w-full flex items-center justify-center gap-2 bg-brand hover:bg-brand-hover shadow-glow disabled:opacity-60 text-white font-medium text-sm py-2.5 rounded-lg transition-colors"
+              className="lg-button-primary w-full !min-h-[46px]"
             >
               {loading && <Loader2 size={14} className="animate-spin" />}
               {t.common.signIn}

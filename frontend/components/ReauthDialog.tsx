@@ -54,7 +54,7 @@ export default function ReauthDialog() {
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-labelledby="reauth-title">
-      <form onSubmit={submit} className="w-full max-w-sm rounded-xl border border-line bg-surface p-5 space-y-3">
+      <form onSubmit={submit} className="w-full max-w-sm lg-surface p-5 space-y-3">
         <h2 id="reauth-title" className="flex items-center gap-2 text-sm font-semibold text-ink"><ShieldCheck size={16} /> {t.reauth.title}</h2>
         <p className="text-xs text-ink-muted">{t.reauth.intro}</p>
         <label className="block text-xs text-ink-muted">

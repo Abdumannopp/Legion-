@@ -37,9 +37,9 @@ import { sourceLabel } from "@/lib/sources";
 
 const SEVERITY_COLOR: Record<Alert["severity"], string> = {
   critical: palette.critical,
-  high: palette.warning,
-  medium: palette.info,
-  low: palette.inkFaint,
+  high: palette.high,
+  medium: palette.warning,
+  low: palette.low,
 };
 
 // Labels come from t.common.status.
@@ -134,7 +134,7 @@ export default function IncidentDetailsPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen bg-canvas">
+      <div className="flex min-h-screen lg-app-bg">
         <Sidebar />
         <div className="flex-1 flex items-center justify-center">
           <Loader2 size={20} className="animate-spin text-ink-faint" />
@@ -145,7 +145,7 @@ export default function IncidentDetailsPage() {
 
   if (error != null && !alert) {
     return (
-      <div className="flex min-h-screen bg-canvas">
+      <div className="flex min-h-screen lg-app-bg">
         <Sidebar />
         <div className="flex-1 flex flex-col items-center justify-center gap-3">
           <div className="max-w-md w-full px-4"><ErrorNotice error={error} /></div>
@@ -172,7 +172,7 @@ export default function IncidentDetailsPage() {
     alert.ai_explanation_locale !== locale;
 
   return (
-    <div className="flex min-h-screen bg-canvas">
+    <div className="flex min-h-screen lg-app-bg">
       <Sidebar />
       <div className="flex-1 p-4 sm:p-6">
         <div className="max-w-4xl mx-auto">
@@ -233,7 +233,7 @@ export default function IncidentDetailsPage() {
 
           <div className="grid md:grid-cols-2 gap-4">
             {/* Left: technical details */}
-            <div className="rounded-xl border border-line bg-surface px-4">
+            <div className="lg-surface px-4">
               <DetailRow
                 Icon={Clock}
                 label={t.incident.detail.detected}
@@ -264,7 +264,7 @@ export default function IncidentDetailsPage() {
             </div>
 
             {/* Right: AI explanation */}
-            <div className="rounded-xl border border-line bg-surface p-4">
+            <div className="lg-surface p-4">
               <div className="flex items-center gap-2 mb-3">
                 <Sparkles size={14} color={palette.brandBright} />
                 <h2 className="text-ink text-sm font-medium">{t.incident.aiExplanation}</h2>
@@ -320,7 +320,7 @@ export default function IncidentDetailsPage() {
           </div>
 
           {/* Suggested Actions */}
-          <div className="mt-4 rounded-xl border border-line bg-surface p-4">
+          <div className="mt-4 lg-surface p-4">
             <div className="flex items-center gap-2 mb-3">
               <Target size={14} color={palette.warning} />
               <h2 className="text-ink text-sm font-medium">{t.incident.suggestedActions}</h2>

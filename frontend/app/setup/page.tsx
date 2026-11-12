@@ -18,7 +18,7 @@ import { useLanguage } from "@/lib/i18n/LanguageContext";
 import { useTurnstile } from "@/components/Turnstile";
 
 const input =
-  "w-full bg-canvas border border-line rounded-lg px-3 py-2.5 text-sm text-ink outline-none focus:border-brand-hover";
+  "lg-input text-sm";
 
 export default function SetupPage() {
   const router = useRouter();
@@ -60,14 +60,14 @@ export default function SetupPage() {
 
   if (checking) {
     return (
-      <div className="min-h-screen bg-canvas flex items-center justify-center">
+      <div className="min-h-screen lg-app-bg flex items-center justify-center">
         <Loader2 size={18} className="animate-spin text-ink-faint" />
       </div>
     );
   }
 
   return (
-    <div className="relative min-h-screen legion-backdrop flex items-center justify-center p-4 font-sans">
+    <div className="relative min-h-screen lg-app-bg lg-auth-bg flex items-center justify-center p-4 font-sans">
       <AuthLanguageSwitcher />
       <div className="w-full max-w-sm">
         <div className="flex flex-col items-center mb-8">
@@ -79,7 +79,7 @@ export default function SetupPage() {
 
         <form
           onSubmit={handleSubmit}
-          className="bg-surface border border-line rounded-2xl p-6 space-y-4"
+          className="lg-glass p-6 space-y-4"
         >
           <div className="flex items-center gap-2 text-ink text-sm font-medium">
             <KeyRound size={16} className="text-brand-bright" />

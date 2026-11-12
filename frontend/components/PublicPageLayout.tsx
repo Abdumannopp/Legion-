@@ -20,7 +20,7 @@ export default function PublicPageLayout({
   // Hosted service: legal and support pages are part of the public website.
   if (IS_SAAS) {
     return (
-      <div className="min-h-screen legion-backdrop">
+      <div className="min-h-screen lg-app-bg lg-auth-bg">
         <SiteHeader />
         <main className="max-w-3xl mx-auto px-6 py-12">{children}</main>
         <SiteFooter />
@@ -29,7 +29,7 @@ export default function PublicPageLayout({
   }
 
   return (
-    <div className="min-h-screen legion-backdrop">
+    <div className="min-h-screen lg-app-bg lg-auth-bg">
       <header className="border-b border-line">
         <div className="max-w-3xl mx-auto px-6 py-4 flex items-center justify-between">
           {/* i18n-ignore: brand name */}

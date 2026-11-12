@@ -42,7 +42,7 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: m.title,
     description: m.description,
-    applicationName: "Legion Cyber Intelligence", // i18n-ignore: product name
+    applicationName: "Legion Cybersecurity Intelligence", // i18n-ignore: product name
   };
 }
 
