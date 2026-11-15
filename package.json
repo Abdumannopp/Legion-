@@ -18,7 +18,7 @@
     "postinstall": "npm run build:agents"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "concurrently": "^10.0.7"
   },
   "engines": {
     "node": ">=20.9.0"
